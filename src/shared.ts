@@ -55,6 +55,24 @@ export interface PreparedVideoFile {
   filePath: string;
 }
 
+export interface AppSettings {
+  captureShortcut: string;
+  launchAtStartup: boolean;
+}
+
+export interface AppSettingsUpdate {
+  captureShortcut?: string;
+  launchAtStartup?: boolean;
+}
+
+export type SettingsKeybindEvent =
+  | { type: "cancelled" }
+  | { message: string; type: "error" }
+  | { shortcut: string; type: "preview" }
+  | { settings: AppSettings; type: "saved" };
+
+export type SettingsKeybindEventHandler = (event: SettingsKeybindEvent) => void;
+
 export type StopRecordingRequestHandler = () => void;
 
 export interface SoftshotApi {
@@ -77,4 +95,11 @@ export interface SoftshotApi {
   onStopRecordingRequest(handler: StopRecordingRequestHandler): () => void;
   closeOverlay(): Promise<void>;
   showError(message: string): Promise<void>;
+  closeSettings(): Promise<void>;
+  beginSettingsKeybindRecording(): Promise<void>;
+  endSettingsKeybindRecording(): Promise<void>;
+  getSettings(): Promise<AppSettings>;
+  onSettingsKeybindEvent(handler: SettingsKeybindEventHandler): () => void;
+  settingsReadyToShow(): Promise<void>;
+  updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
 }

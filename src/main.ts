@@ -24,22 +24,26 @@ import {
   webContents as electronWebContents
 } from "electron";
 
+import { loadAppSettings, saveAppSettings, validateCaptureShortcut } from "./app-settings";
 import { startUpdateChecks } from "./app-updater";
 import type {
+  AppSettings,
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
+  SettingsKeybindEvent,
   VideoFps
 } from "./shared";
 import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 
 const appName = "Softshot";
 const appId = "com.akinsoft.softshot";
-const primaryShortcut = "PrintScreen";
-const backupShortcuts = ["Control+Shift+PrintScreen", "Control+Alt+S"] as const;
+const captureShortcutRetryDelayMs = 1000;
+const captureShortcutRetryLimit = 12;
+const keySeparator = "+";
 const overlayReadyTimeoutMs = 3000;
 const captureOnReadyDelayMs = 300;
 const timestampPartWidth = 2;
@@ -53,8 +57,11 @@ const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 560;
 const editorWindowMinWidthPx = 720;
 const editorWindowMinHeightPx = 460;
+const settingsWindowWidthPx = 380;
+const settingsWindowHeightPx = 196;
 const appIconRelativePath = path.join("src", "assets", "app-logo.ico");
 const appLogoRelativePath = path.join("src", "assets", "app-logo.png");
+const preloadScriptRelativePath = path.join("dist", "preload.js");
 const trayIconLogicalSizePx = 16;
 const trayIconScaleFactor2x = 2;
 const trayIconScaleFactor3x = 3;
@@ -63,11 +70,113 @@ const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1
 const minimumRecordingByteLength = 1;
 const webmScanChunkSizeBytes = 65_536;
 const webmSignatureCarryByteLength = webmClusterSignatureLength - 1;
+const noKeyValue = "Unidentified";
+const settingsKeybindEventChannel = "settings:keybind-event";
+const settingsKeybindShortcutRearmDelayMs = 250;
+const maxCaptureShortcutKeyCount = 3;
+const firstFunctionKey = 1;
+const lastFunctionKey = 24;
+const maxShortcutModifierKeyCount = maxCaptureShortcutKeyCount - 1;
+
+const modifierShortcutKeys = ["Control", "Alt", "Shift", "Meta"] as const;
+const modifierKeys = new Set<string>(modifierShortcutKeys);
+const namedKeys = new Map([
+  [" ", "Space"],
+  ["AudioVolumeDown", "VolumeDown"],
+  ["AudioVolumeMute", "VolumeMute"],
+  ["AudioVolumeUp", "VolumeUp"],
+  ["ArrowDown", "Down"],
+  ["ArrowLeft", "Left"],
+  ["ArrowRight", "Right"],
+  ["ArrowUp", "Up"],
+  ["Esc", "Escape"],
+  ["MediaTrackNext", "MediaNextTrack"],
+  ["MediaTrackPrevious", "MediaPreviousTrack"],
+  ["PageDown", "PageDown"],
+  ["PageUp", "PageUp"],
+  ["PrintScreen", "PrintScreen"]
+]);
+const globalShortcutBaseKeys = [
+  "Backspace",
+  "Delete",
+  "Down",
+  "End",
+  "Enter",
+  "Escape",
+  "Home",
+  "Insert",
+  "Left",
+  "MediaNextTrack",
+  "MediaPlayPause",
+  "MediaPreviousTrack",
+  "MediaStop",
+  "PageDown",
+  "PageUp",
+  "PrintScreen",
+  "Right",
+  "Space",
+  "Tab",
+  "Up",
+  "VolumeDown",
+  "VolumeMute",
+  "VolumeUp"
+] as const;
+const numpadKeys = new Map([
+  ["Numpad0", "num0"],
+  ["Numpad1", "num1"],
+  ["Numpad2", "num2"],
+  ["Numpad3", "num3"],
+  ["Numpad4", "num4"],
+  ["Numpad5", "num5"],
+  ["Numpad6", "num6"],
+  ["Numpad7", "num7"],
+  ["Numpad8", "num8"],
+  ["Numpad9", "num9"],
+  ["NumpadAdd", "numadd"],
+  ["NumpadDecimal", "numdec"],
+  ["NumpadDivide", "numdiv"],
+  ["NumpadMultiply", "nummult"],
+  ["NumpadSubtract", "numsub"]
+]);
+const punctuationKeys = new Map([
+  ["`", "`"],
+  [",", "Comma"],
+  ["-", "Minus"],
+  [".", "Period"],
+  ["/", "Slash"],
+  [";", "Semicolon"],
+  ["=", "Plus"],
+  ["+", "Plus"]
+]);
+const globalShortcutNumpadKeys = [
+  "num0",
+  "num1",
+  "num2",
+  "num3",
+  "num4",
+  "num5",
+  "num6",
+  "num7",
+  "num8",
+  "num9",
+  "numadd",
+  "numdec",
+  "numdiv",
+  "nummult",
+  "numsub"
+] as const;
+const globalShortcutPunctuationKeys = [
+  "Comma",
+  "Minus",
+  "Period",
+  "Plus",
+  "Semicolon",
+  "Slash"
+] as const;
+const globalShortcutSingleCharacterKeys = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("");
 
 type CaptureFolder = "pictures" | "videos";
 type CaptureExtension = "png" | "webm";
-type RegisterShortcutResult = "registered" | "unavailable";
-
 interface PendingOverlayBootstrap {
   promise: Promise<OverlayBootstrap>;
   reject(error: Error): void;
@@ -77,6 +186,10 @@ interface PendingOverlayBootstrap {
 interface RecordingTemporaryFile {
   byteLength: number;
   filePath: string;
+}
+
+interface SettingsUpdateOptions {
+  captureShortcutRegistrationDelayMs?: number;
 }
 
 class SoftshotApp {
@@ -90,9 +203,19 @@ class SoftshotApp {
 
   private readonly editorTempFilesByWebContents = new Map<number, Set<string>>();
 
+  private settings: AppSettings | null = null;
+
+  private settingsKeybindRecordingWebContentsId: number | null = null;
+
+  private isSettingsKeybindSaving = false;
+
+  private readonly settingsKeybindRecorderShortcuts = new Set<string>();
+
+  private settingsWindow: BrowserWindow | null = null;
+
   private readonly displayMediaDisplayIdsByWebContents = new Map<number, number>();
 
-  private isPrintScreenUnavailable = false;
+  private isCaptureShortcutUnavailable = false;
 
   private isQuitting = false;
 
@@ -105,6 +228,10 @@ class SoftshotApp {
   private readonly pendingOverlayBootstrapsByWebContents = new Map<number, PendingOverlayBootstrap>();
 
   private preparedOverlay: BrowserWindow | null = null;
+
+  private captureShortcutRetryAttempts = 0;
+
+  private captureShortcutRetryTimeout: ReturnType<typeof setTimeout> | null = null;
 
   private readonly recordingTempFilesById = new Map<string, RecordingTemporaryFile>();
 
@@ -239,7 +366,7 @@ class SoftshotApp {
       hasShadow: false,
       transparent: true,
       webPreferences: {
-        preload: path.join(app.getAppPath(), "dist", "preload.js"),
+        preload: this.preloadScriptPath(),
         backgroundThrottling: false,
         contextIsolation: true,
         nodeIntegration: false,
@@ -261,7 +388,29 @@ class SoftshotApp {
       icon: this.appIconPath(),
       title: appName,
       webPreferences: {
-        preload: path.join(app.getAppPath(), "dist", "preload.js"),
+        preload: this.preloadScriptPath(),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false
+      }
+    });
+  }
+
+  private createSettingsWindow(): BrowserWindow {
+    return new BrowserWindow({
+      width: settingsWindowWidthPx,
+      height: settingsWindowHeightPx,
+      frame: false,
+      resizable: false,
+      maximizable: false,
+      minimizable: false,
+      show: false,
+      autoHideMenuBar: true,
+      backgroundColor: "#15171a",
+      icon: this.appIconPath(),
+      title: appName,
+      webPreferences: {
+        preload: this.preloadScriptPath(),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false
@@ -304,6 +453,34 @@ class SoftshotApp {
 
   private appIconPath(): string {
     return path.join(app.getAppPath(), appIconRelativePath);
+  }
+
+  private preloadScriptPath(): string {
+    return path.join(app.getAppPath(), preloadScriptRelativePath);
+  }
+
+  private currentCaptureShortcut(): string {
+    return this.currentSettings().captureShortcut;
+  }
+
+  private currentSettings(): AppSettings {
+    if (!this.settings) {
+      throw new Error("Softshot settings have not loaded.");
+    }
+
+    return this.settings;
+  }
+
+  private applyLaunchAtStartup(isEnabled: boolean): void {
+    app.setLoginItemSettings({
+      openAtLogin: isEnabled,
+      path: app.getPath("exe")
+    });
+
+    const loginItemSettings = app.getLoginItemSettings();
+    if (loginItemSettings.openAtLogin !== isEnabled) {
+      throw new Error("Could not update launch at startup.");
+    }
   }
 
   private debugLog(message: string): void {
@@ -471,11 +648,12 @@ class SoftshotApp {
       await app.whenReady();
       app.setName(appName);
       app.setAppUserModelId(appId);
+      this.settings = await loadAppSettings(app.getPath("userData"), app.getLoginItemSettings().openAtLogin);
+      this.applyLaunchAtStartup(this.settings.launchAtStartup);
       this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
       this.registerCaptureShortcuts();
       this.tray = this.createTray();
-      await this.showShortcutWarningIfNeeded();
       this.prepareNextOverlay();
       this.startUpdater();
 
@@ -513,6 +691,33 @@ class SoftshotApp {
     this.debugLog("forwarding capture request to live overlay");
     overlay.webContents.send("overlay:stop-recording");
     return true;
+  }
+
+  private scheduleCaptureShortcutRetry(): void {
+    if (this.captureShortcutRetryTimeout !== null) {
+      return;
+    }
+
+    if (this.captureShortcutRetryAttempts >= captureShortcutRetryLimit) {
+      void this.showShortcutWarningIfNeeded();
+      return;
+    }
+
+    this.captureShortcutRetryAttempts += 1;
+    this.captureShortcutRetryTimeout = setTimeout((): void => {
+      this.captureShortcutRetryTimeout = null;
+      this.retryCaptureShortcut();
+    }, captureShortcutRetryDelayMs);
+  }
+
+  private retryCaptureShortcut(): void {
+    this.debugLog(`retrying ${this.currentCaptureShortcut()} shortcut registration`);
+
+    if (this.registerCurrentCaptureShortcut()) {
+      return;
+    }
+
+    this.scheduleCaptureShortcutRetry();
   }
 
   private setLiveCaptureMouseMode(overlay: BrowserWindow, isPassthrough: boolean): void {
@@ -737,6 +942,328 @@ class SoftshotApp {
     editor.focus();
   }
 
+  private showSettingsWindow(settingsWindow: BrowserWindow): void {
+    if (settingsWindow.isDestroyed()) {
+      return;
+    }
+
+    if (!settingsWindow.isVisible()) {
+      settingsWindow.show();
+    }
+
+    settingsWindow.focus();
+  }
+
+  private getSenderSettingsWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow {
+    const settingsWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!settingsWindow || settingsWindow.isDestroyed()) {
+      throw new Error("Missing settings window.");
+    }
+
+    if (this.settingsWindow !== settingsWindow) {
+      throw new Error("Only the active settings window can change settings.");
+    }
+
+    return settingsWindow;
+  }
+
+  private async openSettingsWindow(): Promise<void> {
+    if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
+      this.showSettingsWindow(this.settingsWindow);
+      return;
+    }
+
+    const settingsWindow = this.createSettingsWindow();
+    const settingsWebContentsId = settingsWindow.webContents.id;
+    this.settingsWindow = settingsWindow;
+    settingsWindow.webContents.on("before-input-event", (event, input): void => {
+      this.handleSettingsKeybindInput(settingsWindow, event, input);
+    });
+
+    settingsWindow.once("ready-to-show", (): void => {
+      this.showSettingsWindow(settingsWindow);
+    });
+
+    settingsWindow.on("closed", (): void => {
+      if (this.settingsKeybindRecordingWebContentsId === settingsWebContentsId) {
+        this.stopSettingsKeybindRecording();
+      }
+
+      if (this.settingsWindow === settingsWindow) {
+        this.settingsWindow = null;
+      }
+    });
+
+    try {
+      await settingsWindow.loadFile(path.join(app.getAppPath(), "src", "settings.html"));
+      this.showSettingsWindow(settingsWindow);
+    } catch (error) {
+      if (!settingsWindow.isDestroyed()) {
+        settingsWindow.close();
+      }
+
+      throw error;
+    }
+  }
+
+  private emitSettingsKeybindEvent(settingsWindow: BrowserWindow, data: SettingsKeybindEvent): void {
+    if (settingsWindow.isDestroyed() || settingsWindow.webContents.isDestroyed()) {
+      return;
+    }
+
+    settingsWindow.webContents.send(settingsKeybindEventChannel, data);
+  }
+
+  private handleSettingsKeybindInput(settingsWindow: BrowserWindow, event: Electron.Event, input: Electron.Input): void {
+    if (this.settingsKeybindRecordingWebContentsId !== settingsWindow.webContents.id) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (input.type !== "keyDown" || input.isAutoRepeat) {
+      return;
+    }
+
+    const shortcut = shortcutFromInput(input);
+    if (!shortcut) {
+      this.emitSettingsKeybindEvent(settingsWindow, {
+        message: "Unsupported key",
+        type: "error"
+      });
+      return;
+    }
+
+    if (shortcut === "Escape") {
+      this.stopSettingsKeybindRecording();
+      this.emitSettingsKeybindEvent(settingsWindow, { type: "cancelled" });
+      return;
+    }
+
+    if (shortcutKeyCount(shortcut) > maxCaptureShortcutKeyCount) {
+      this.emitSettingsKeybindEvent(settingsWindow, {
+        message: "Use up to 3 keys",
+        type: "error"
+      });
+      return;
+    }
+
+    if (isModifierOnlyShortcut(shortcut)) {
+      this.emitSettingsKeybindEvent(settingsWindow, {
+        shortcut,
+        type: "preview"
+      });
+      return;
+    }
+
+    void this.saveSettingsKeybind(settingsWindow, shortcut);
+  }
+
+  private async saveSettingsKeybind(settingsWindow: BrowserWindow, shortcut: string): Promise<void> {
+    if (this.isSettingsKeybindSaving) {
+      return;
+    }
+
+    this.isSettingsKeybindSaving = true;
+    try {
+      this.releaseSettingsKeybindRecorderShortcut(shortcut);
+      const settings = await this.applySettingsUpdate(
+        { captureShortcut: shortcut },
+        { captureShortcutRegistrationDelayMs: settingsKeybindShortcutRearmDelayMs }
+      );
+      this.stopSettingsKeybindRecording();
+      this.emitSettingsKeybindEvent(settingsWindow, {
+        settings,
+        type: "saved"
+      });
+    } catch (error) {
+      this.emitSettingsKeybindEvent(settingsWindow, {
+        message: errorMessage(error),
+        type: "error"
+      });
+      this.registerSettingsKeybindRecorderShortcut(shortcut);
+    } finally {
+      this.isSettingsKeybindSaving = false;
+    }
+  }
+
+  private saveSettingsKeybindFromShortcut(shortcut: string): void {
+    const { settingsWindow } = this;
+    if (!settingsWindow || settingsWindow.isDestroyed()) {
+      return;
+    }
+
+    if (this.settingsKeybindRecordingWebContentsId !== settingsWindow.webContents.id) {
+      return;
+    }
+
+    void this.saveSettingsKeybind(settingsWindow, shortcut);
+  }
+
+  private startSettingsKeybindRecording(event: Electron.IpcMainInvokeEvent): void {
+    this.getSenderSettingsWindow(event);
+    this.settingsKeybindRecordingWebContentsId = event.sender.id;
+    this.clearCaptureShortcutRetry();
+    this.unregisterRegisteredCaptureShortcuts();
+    this.registerSettingsKeybindRecorderShortcuts();
+    this.isCaptureShortcutUnavailable = false;
+    this.refreshTrayMenu();
+  }
+
+  private stopSettingsKeybindRecording(event?: Electron.IpcMainInvokeEvent): void {
+    if (event) {
+      this.getSenderSettingsWindow(event);
+      if (this.settingsKeybindRecordingWebContentsId !== event.sender.id) {
+        return;
+      }
+    }
+
+    if (this.settingsKeybindRecordingWebContentsId === null) {
+      return;
+    }
+
+    this.settingsKeybindRecordingWebContentsId = null;
+    this.unregisterSettingsKeybindRecorderShortcuts();
+    this.captureShortcutRetryAttempts = 0;
+
+    if (!this.registerCurrentCaptureShortcut()) {
+      this.scheduleCaptureShortcutRetry();
+    }
+  }
+
+  private registerSettingsKeybindRecorderShortcut(shortcut: string): void {
+    if (this.settingsKeybindRecorderShortcuts.has(shortcut)) {
+      return;
+    }
+
+    try {
+      if (!globalShortcut.register(shortcut, (): void => {
+        this.saveSettingsKeybindFromShortcut(shortcut);
+      })) {
+        return;
+      }
+
+      this.settingsKeybindRecorderShortcuts.add(shortcut);
+    } catch (error) {
+      this.debugLog(`could not register keybind recorder shortcut ${shortcut}: ${errorMessage(error)}`);
+    }
+  }
+
+  private registerSettingsKeybindRecorderShortcuts(): void {
+    for (const shortcut of settingsKeybindRecorderShortcuts()) {
+      this.registerSettingsKeybindRecorderShortcut(shortcut);
+    }
+  }
+
+  private releaseSettingsKeybindRecorderShortcut(shortcut: string): void {
+    if (!this.settingsKeybindRecorderShortcuts.has(shortcut)) {
+      return;
+    }
+
+    globalShortcut.unregister(shortcut);
+    this.settingsKeybindRecorderShortcuts.delete(shortcut);
+  }
+
+  private unregisterSettingsKeybindRecorderShortcuts(): void {
+    for (const shortcut of this.settingsKeybindRecorderShortcuts) {
+      globalShortcut.unregister(shortcut);
+    }
+
+    this.settingsKeybindRecorderShortcuts.clear();
+  }
+
+  private settingsSnapshot(): AppSettings {
+    return { ...this.currentSettings() };
+  }
+
+  private settingsWithUpdate(update: unknown): AppSettings {
+    if (typeof update !== "object" || update === null || Array.isArray(update)) {
+      throw new TypeError("Settings update must be an object.");
+    }
+
+    const currentSettings = this.currentSettings();
+    const nextSettings: AppSettings = { ...currentSettings };
+
+    if ("captureShortcut" in update) {
+      if (typeof update.captureShortcut !== "string") {
+        throw new TypeError("Capture shortcut must be a string.");
+      }
+
+      nextSettings.captureShortcut = validateCaptureShortcut(update.captureShortcut);
+    }
+
+    if ("launchAtStartup" in update) {
+      if (typeof update.launchAtStartup !== "boolean") {
+        throw new TypeError("Launch at startup must be a boolean.");
+      }
+
+      nextSettings.launchAtStartup = update.launchAtStartup;
+    }
+
+    return nextSettings;
+  }
+
+  private async applySettingsUpdate(update: unknown, options: SettingsUpdateOptions = {}): Promise<AppSettings> {
+    const { captureShortcutRegistrationDelayMs = 0 } = options;
+    const previousSettings = this.settingsSnapshot();
+    const nextSettings = this.settingsWithUpdate(update);
+
+    try {
+      this.settings = nextSettings;
+      if (captureShortcutRegistrationDelayMs > 0) {
+        await delay(captureShortcutRegistrationDelayMs);
+      }
+
+      this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
+      this.applyLaunchAtStartup(nextSettings.launchAtStartup);
+      await saveAppSettings(app.getPath("userData"), nextSettings);
+      return this.settingsSnapshot();
+    } catch (error) {
+      this.settings = previousSettings;
+      if (!this.tryUpdateRegisteredCaptureShortcut(nextSettings.captureShortcut, previousSettings.captureShortcut)) {
+        this.debugLog(`could not restore ${previousSettings.captureShortcut} after settings update failed`);
+      }
+
+      try {
+        this.applyLaunchAtStartup(previousSettings.launchAtStartup);
+      } catch (restoreError) {
+        this.debugLog(`could not restore launch at startup: ${errorMessage(restoreError)}`);
+      }
+
+      throw error;
+    }
+  }
+
+  private async updateSettings(event: Electron.IpcMainInvokeEvent, update: unknown): Promise<AppSettings> {
+    this.getSenderSettingsWindow(event);
+    return await this.applySettingsUpdate(update);
+  }
+
+  private updateRegisteredCaptureShortcut(previousShortcut: string, nextShortcut: string): void {
+    if (this.tryUpdateRegisteredCaptureShortcut(previousShortcut, nextShortcut)) {
+      return;
+    }
+
+    throw new Error(`Could not register ${nextShortcut}.`);
+  }
+
+  private tryUpdateRegisteredCaptureShortcut(previousShortcut: string, nextShortcut: string): boolean {
+    if (previousShortcut === nextShortcut && this.registeredShortcuts.includes(nextShortcut)) {
+      return true;
+    }
+
+    this.clearCaptureShortcutRetry();
+    this.unregisterRegisteredCaptureShortcuts();
+    this.captureShortcutRetryAttempts = 0;
+
+    const isRegistered = this.registerCaptureShortcutValue(nextShortcut);
+    if (!isRegistered) {
+      this.scheduleCaptureShortcutRetry();
+    }
+
+    return isRegistered;
+  }
+
   private async openVideoEditor(
     event: Electron.IpcMainInvokeEvent,
     recordingId: string,
@@ -811,29 +1338,67 @@ class SoftshotApp {
     return Buffer.from(dataUrl.slice(pngDataUrlPrefix.length), "base64");
   }
 
-  private registerCaptureShortcut(shortcut: string): RegisterShortcutResult {
+  private clearCaptureShortcutRetry(): void {
+    if (this.captureShortcutRetryTimeout === null) {
+      return;
+    }
+
+    clearTimeout(this.captureShortcutRetryTimeout);
+    this.captureShortcutRetryTimeout = null;
+  }
+
+  private refreshTrayMenu(): void {
+    if (!this.tray) {
+      return;
+    }
+
+    this.tray.setContextMenu(Menu.buildFromTemplate(this.trayMenuTemplate()));
+  }
+
+  private registerCaptureShortcut(shortcut: string): boolean {
+    if (this.registeredShortcuts.includes(shortcut)) {
+      return true;
+    }
+
     const didRegisterShortcut = globalShortcut.register(shortcut, (): void => {
       this.capture();
     });
 
-    return didRegisterShortcut ? "registered" : "unavailable";
+    return didRegisterShortcut;
+  }
+
+  private unregisterRegisteredCaptureShortcuts(): void {
+    for (const shortcut of this.registeredShortcuts) {
+      globalShortcut.unregister(shortcut);
+    }
+
+    this.registeredShortcuts = [];
+  }
+
+  private registerCaptureShortcutValue(shortcut: string): boolean {
+    if (this.registerCaptureShortcut(shortcut)) {
+      this.clearCaptureShortcutRetry();
+      this.isCaptureShortcutUnavailable = false;
+      this.captureShortcutRetryAttempts = 0;
+      this.registeredShortcuts = [shortcut];
+      this.refreshTrayMenu();
+      return true;
+    }
+
+    this.isCaptureShortcutUnavailable = true;
+    this.registeredShortcuts = [];
+    this.refreshTrayMenu();
+    return false;
+  }
+
+  private registerCurrentCaptureShortcut(): boolean {
+    return this.registerCaptureShortcutValue(this.currentCaptureShortcut());
   }
 
   private registerCaptureShortcuts(): void {
-    if (this.registerCaptureShortcut(primaryShortcut) === "registered") {
-      this.registeredShortcuts = [primaryShortcut];
-      return;
+    if (!this.registerCurrentCaptureShortcut()) {
+      this.scheduleCaptureShortcutRetry();
     }
-
-    this.isPrintScreenUnavailable = true;
-    const shortcuts: string[] = [];
-    for (const shortcut of backupShortcuts) {
-      if (this.registerCaptureShortcut(shortcut) === "registered") {
-        shortcuts.push(shortcut);
-      }
-    }
-
-    this.registeredShortcuts = shortcuts;
   }
 
   private registerDisplayMediaRequestHandler(): void {
@@ -961,6 +1526,35 @@ class SoftshotApp {
     ipcMain.handle("editor:close", (event): void => {
       this.closeSenderWindow(event);
     });
+
+    this.registerSettingsIpcHandlers();
+  }
+
+  private registerSettingsIpcHandlers(): void {
+    ipcMain.handle("settings:get", (event): AppSettings => {
+      this.getSenderSettingsWindow(event);
+      return this.settingsSnapshot();
+    });
+
+    ipcMain.handle("settings:update", async (event, settings: unknown): Promise<AppSettings> => {
+      return await this.updateSettings(event, settings);
+    });
+
+    ipcMain.handle("settings:ready-to-show", (event): void => {
+      this.showSettingsWindow(this.getSenderSettingsWindow(event));
+    });
+
+    ipcMain.handle("settings:close", (event): void => {
+      this.closeSenderWindow(event);
+    });
+
+    ipcMain.handle("settings:begin-keybind-recording", (event): void => {
+      this.startSettingsKeybindRecording(event);
+    });
+
+    ipcMain.handle("settings:end-keybind-recording", (event): void => {
+      this.stopSettingsKeybindRecording(event);
+    });
   }
 
   private async showError(message: string, error?: unknown): Promise<void> {
@@ -978,19 +1572,16 @@ class SoftshotApp {
   }
 
   private async showShortcutWarningIfNeeded(): Promise<void> {
-    if (!this.isPrintScreenUnavailable || process.env.SOFTSHOT_SKIP_SHORTCUT_WARNING === "1") {
+    if (!this.isCaptureShortcutUnavailable || process.env.SOFTSHOT_SKIP_SHORTCUT_WARNING === "1") {
       return;
     }
 
-    const fallbackText = this.registeredShortcuts.length > 0
-      ? `Softshot is still running. Use ${this.registeredShortcuts.join(" or ")} for now, or use Capture from the tray menu.`
-      : "Softshot is still running, but no keyboard shortcut could be registered. Use Capture from the tray menu.";
-
+    const shortcut = this.currentCaptureShortcut();
     const result = await dialog.showMessageBox({
       type: "warning",
       title: appName,
-      message: `${appName} could not register the ${primaryShortcut} key.`,
-      detail: `${fallbackText}\n\nTo let Softshot use PrintScreen, turn off Windows Settings > Accessibility > Keyboard > Use the Print screen key to open screen capture, close other screenshot apps, then restart Softshot.`,
+      message: `${appName} could not register ${shortcut}.`,
+      detail: "Softshot is still running. Use Capture from the tray menu for now.\n\nTo let Softshot use PrintScreen, turn off Windows Settings > Accessibility > Keyboard > Use the Print screen key to open screen capture, close other screenshot apps, then restart Softshot.",
       buttons: ["Open settings", "OK"],
       defaultId: 1,
       cancelId: 1
@@ -1023,10 +1614,10 @@ class SoftshotApp {
       }
     ];
 
-    if (this.isPrintScreenUnavailable) {
+    if (this.isCaptureShortcutUnavailable) {
       template.push(
         {
-          label: `${primaryShortcut} unavailable`,
+          label: `${this.currentCaptureShortcut()} unavailable`,
           enabled: false
         },
         {
@@ -1040,6 +1631,12 @@ class SoftshotApp {
 
     template.push(
       { type: "separator" },
+      {
+        label: "Settings",
+        click: (): void => {
+          void this.openSettingsWindow();
+        }
+      },
       {
         label: "Quit",
         click: (): void => {
@@ -1134,6 +1731,7 @@ class SoftshotApp {
 
     app.on("will-quit", (): void => {
       this.isQuitting = true;
+      this.clearCaptureShortcutRetry();
       globalShortcut.unregisterAll();
     });
 
@@ -1154,6 +1752,121 @@ function joinedBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
   bytes.set(left);
   bytes.set(right, left.byteLength);
   return bytes;
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve): void => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function isModifierOnlyShortcut(shortcut: string): boolean {
+  return shortcut.split(keySeparator).every((key) => modifierKeys.has(key));
+}
+
+function keyFromInput(input: Electron.Input): string | null {
+  if (modifierKeys.has(input.key)) {
+    return input.key;
+  }
+
+  const namedKey = namedKeys.get(input.key);
+  if (namedKey) {
+    return namedKey;
+  }
+
+  const punctuationKey = punctuationKeys.get(input.key);
+  if (punctuationKey) {
+    return punctuationKey;
+  }
+
+  const numpadKey = numpadKeys.get(input.code);
+  if (numpadKey) {
+    return numpadKey;
+  }
+
+  if (input.code.startsWith("Key")) {
+    return input.code.slice("Key".length);
+  }
+
+  if (input.code.startsWith("Digit")) {
+    return input.code.slice("Digit".length);
+  }
+
+  if (input.key !== noKeyValue && !input.key.includes(keySeparator)) {
+    return input.key;
+  }
+
+  return input.code && input.code !== noKeyValue ? input.code : null;
+}
+
+function pushModifierKey(keys: string[], key: string, isPressed: boolean): void {
+  if (isPressed) {
+    keys.push(key);
+  }
+}
+
+function shortcutFromInput(input: Electron.Input): string | null {
+  const keys: string[] = [];
+  pushModifierKey(keys, "Control", input.control);
+  pushModifierKey(keys, "Alt", input.alt);
+  pushModifierKey(keys, "Shift", input.shift);
+  pushModifierKey(keys, "Meta", input.meta);
+
+  const key = keyFromInput(input);
+  if (key && !modifierKeys.has(key)) {
+    keys.push(key);
+  }
+
+  return keys.length > 0 ? keys.join(keySeparator) : null;
+}
+
+function shortcutKeyCount(shortcut: string): number {
+  return shortcut.split(keySeparator).length;
+}
+
+function settingsKeybindBaseKeys(): string[] {
+  return [
+    ...globalShortcutSingleCharacterKeys,
+    ...functionShortcutKeys(),
+    ...globalShortcutBaseKeys,
+    ...globalShortcutNumpadKeys,
+    ...globalShortcutPunctuationKeys
+  ];
+}
+
+function functionShortcutKeys(): string[] {
+  const keys: string[] = [];
+  for (let keyNumber = firstFunctionKey; keyNumber <= lastFunctionKey; keyNumber += 1) {
+    keys.push(`F${String(keyNumber)}`);
+  }
+
+  return keys;
+}
+
+function settingsKeybindModifierCombinations(): string[][] {
+  const combinations: string[][] = [[]];
+
+  for (const modifier of modifierShortcutKeys) {
+    const additions = combinations
+      .filter((combination) => combination.length < maxShortcutModifierKeyCount)
+      .map((combination) => [...combination, modifier]);
+    combinations.push(...additions);
+  }
+
+  return combinations;
+}
+
+function settingsKeybindRecorderShortcuts(): string[] {
+  const shortcuts: string[] = [];
+  const modifierCombinations = settingsKeybindModifierCombinations();
+
+  for (const key of settingsKeybindBaseKeys()) {
+    for (const modifiers of modifierCombinations) {
+      shortcuts.push([...modifiers, key].join(keySeparator));
+    }
+  }
+
+  return shortcuts;
 }
 
 function trailingBytes(bytes: Uint8Array, maxByteLength: number): Uint8Array {

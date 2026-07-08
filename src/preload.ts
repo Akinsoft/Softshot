@@ -1,18 +1,23 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type {
+  AppSettings,
+  AppSettingsUpdate,
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
+  SettingsKeybindEvent,
+  SettingsKeybindEventHandler,
   SoftshotApi,
   StopRecordingRequestHandler,
   VideoFps
 } from "./shared";
 
 const stopRecordingRequestChannel = "overlay:stop-recording";
+const settingsKeybindEventChannel = "settings:keybind-event";
 
 const api: SoftshotApi = {
   appendRecordingFileChunk: async (recordingId: string, bytes: Uint8Array) =>
@@ -49,7 +54,25 @@ const api: SoftshotApi = {
     };
   },
   closeOverlay: async () => ipcRenderer.invoke("overlay:close") as Promise<void>,
-  showError: async (message: string) => ipcRenderer.invoke("overlay:show-error", message) as Promise<void>
+  showError: async (message: string) => ipcRenderer.invoke("overlay:show-error", message) as Promise<void>,
+  closeSettings: async () => ipcRenderer.invoke("settings:close") as Promise<void>,
+  beginSettingsKeybindRecording: async () => ipcRenderer.invoke("settings:begin-keybind-recording") as Promise<void>,
+  endSettingsKeybindRecording: async () => ipcRenderer.invoke("settings:end-keybind-recording") as Promise<void>,
+  getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
+  onSettingsKeybindEvent: (handler: SettingsKeybindEventHandler) => {
+    const listener = (...listenerArguments: [Electron.IpcRendererEvent, SettingsKeybindEvent]): void => {
+      const data = listenerArguments[1];
+      handler(data);
+    };
+
+    ipcRenderer.on(settingsKeybindEventChannel, listener);
+    return (): void => {
+      ipcRenderer.removeListener(settingsKeybindEventChannel, listener);
+    };
+  },
+  settingsReadyToShow: async () => ipcRenderer.invoke("settings:ready-to-show") as Promise<void>,
+  updateSettings: async (settings: AppSettingsUpdate) =>
+    ipcRenderer.invoke("settings:update", settings) as Promise<AppSettings>
 };
 
 contextBridge.exposeInMainWorld("softshot", api);

@@ -32,6 +32,8 @@
       "src/editor.html",
       "src/editor.css",
       "src/overlay.html",
+      "src/settings.html",
+      "src/settings.css",
       "src/styles.css",
       "package.json"
     ],

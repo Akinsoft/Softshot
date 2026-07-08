@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Softshot</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <header class="settings-titlebar">
+      <div class="settings-title-group">
+        <img class="settings-logo" src="./assets/app-logo.png" alt="Softshot" draggable="false" />
+        <span class="settings-title">Settings</span>
+      </div>
+
+      <button id="settings-close-button" class="icon-button close-button" type="button" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6 18 18" />
+          <path d="M18 6 6 18" />
+        </svg>
+      </button>
+    </header>
+
+    <main class="settings-content">
+      <section class="settings-row keybind-row">
+        <div class="settings-label-group">
+          <span class="settings-label">Keybind</span>
+          <span id="settings-status" class="settings-status" aria-live="polite"></span>
+        </div>
+
+        <button id="keybind-button" class="keybind-button" type="button"></button>
+      </section>
+
+      <label class="settings-row startup-row" for="startup-checkbox">
+        <span class="settings-label">Launch at startup</span>
+        <span class="toggle">
+          <input id="startup-checkbox" type="checkbox" />
+          <span class="toggle-track" aria-hidden="true">
+            <span class="toggle-thumb"></span>
+          </span>
+        </span>
+      </label>
+    </main>
+
+    <script type="module" src="../dist/settings.js"></script>
+  </body>
+</html>

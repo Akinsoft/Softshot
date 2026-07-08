@@ -5,6 +5,7 @@
   },
   "include": [
     "src/app-updater.ts",
+    "src/app-settings.ts",
     "src/global.d.ts",
     "src/main.ts",
     "src/preload.ts",

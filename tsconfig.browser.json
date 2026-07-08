@@ -11,6 +11,7 @@
     "src/overlay.ts",
     "src/overlay-*.ts",
     "src/recording-*.ts",
+    "src/settings.ts",
     "src/shared.ts",
     "src/softshot-api.ts",
     "src/webm.ts"
