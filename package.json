@@ -21,6 +21,7 @@
     },
     "files": [
       "dist/**/*",
+      "src/assets/**/*",
       "src/editor.html",
       "src/editor.css",
       "src/overlay.html",

@@ -51,6 +51,11 @@ const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 560;
 const editorWindowMinWidthPx = 720;
 const editorWindowMinHeightPx = 460;
+const appLogoRelativePath = path.join("src", "assets", "app-logo.png");
+const trayIconLogicalSizePx = 16;
+const trayIconScaleFactor2x = 2;
+const trayIconScaleFactor3x = 3;
+const trayIconScaleFactors = [1, trayIconScaleFactor2x, trayIconScaleFactor3x] as const;
 const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
 const minimumRecordingByteLength = 1;
 const webmScanChunkSizeBytes = 65_536;
@@ -248,6 +253,7 @@ class SoftshotApp {
       show: false,
       autoHideMenuBar: true,
       backgroundColor: "#15171a",
+      icon: this.appLogoPath(),
       title: "Softshot Editor",
       webPreferences: {
         preload: path.join(app.getAppPath(), "dist", "preload.js"),
@@ -266,18 +272,29 @@ class SoftshotApp {
   }
 
   private createTrayImage(): Electron.NativeImage {
-    const svg = encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-        <rect x="4" y="7" width="24" height="18" rx="5" fill="#111827"/>
-        <path d="M11 7l2-3h6l2 3" fill="#111827"/>
-        <rect x="8" y="11" width="16" height="10" rx="3" fill="#38bdf8"/>
-        <circle cx="16" cy="16" r="4" fill="#0f172a"/>
-      </svg>
-    `);
+    const logoPath = this.appLogoPath();
+    const sourceImage = nativeImage.createFromPath(logoPath);
+    if (sourceImage.isEmpty()) {
+      throw new Error(`Could not load app logo from ${logoPath}.`);
+    }
 
-    const image = nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${svg}`);
-    image.setTemplateImage(false);
-    return image;
+    const trayImage = nativeImage.createEmpty();
+    for (const scaleFactor of trayIconScaleFactors) {
+      const size = trayIconLogicalSizePx * scaleFactor;
+      const representation = sourceImage.resize({ height: size, quality: "best", width: size });
+      trayImage.addRepresentation({ dataURL: representation.toDataURL(), scaleFactor });
+    }
+
+    if (trayImage.isEmpty()) {
+      throw new Error(`Could not create tray icon from ${logoPath}.`);
+    }
+
+    trayImage.setTemplateImage(false);
+    return trayImage;
+  }
+
+  private appLogoPath(): string {
+    return path.join(app.getAppPath(), appLogoRelativePath);
   }
 
   private currentShortcutLabel(): string {

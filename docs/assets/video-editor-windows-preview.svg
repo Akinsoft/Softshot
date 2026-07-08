@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Softshot video editor Windows preview</title>
+  <desc id="desc">A polished Windows-style Softshot video editor with a dark preview, trim timeline, and native window controls.</desc>
+  <defs>
+    <linearGradient id="desktop-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0f3b5e" />
+      <stop offset="0.5" stop-color="#154f70" />
+      <stop offset="1" stop-color="#0b1f30" />
+    </linearGradient>
+    <linearGradient id="preview-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#182232" />
+      <stop offset="1" stop-color="#0f172a" />
+    </linearGradient>
+    <filter id="window-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="30" flood-color="#020617" flood-opacity="0.48" />
+    </filter>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#desktop-bg)" />
+  <path d="M0 510 C158 465 307 493 466 449 C673 391 816 403 1015 443 C1123 465 1198 447 1280 416 V720 H0 Z" fill="#071827" opacity="0.24" />
+  <rect y="672" width="1280" height="48" fill="#101722" opacity="0.96" />
+  <line x1="0" y1="672" x2="1280" y2="672" stroke="#1f2937" />
+
+  <g filter="url(#window-shadow)">
+    <rect x="190" y="70" width="900" height="570" rx="10" fill="#202224" stroke="#3a4048" />
+    <rect x="190" y="70" width="900" height="48" rx="10" fill="#111418" />
+    <line x1="190" y1="118" x2="1090" y2="118" stroke="#30343a" />
+
+    <g transform="translate(600 77)">
+      <rect width="36" height="34" rx="7" fill="#191d22" />
+      <rect x="13" y="12" width="14" height="16" rx="2" fill="none" stroke="#f4f7fb" stroke-width="1.8" />
+      <path d="M10 24 H9 Q6 24 6 21 V8 Q6 5 9 5 H22 Q25 5 25 8 V10" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </g>
+    <g transform="translate(644 77)">
+      <rect width="36" height="34" rx="7" fill="#191d22" />
+      <path d="M8 6 H25 L28 9 V28 H8 Z" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linejoin="round" />
+      <path d="M12 6 V15 H23 V6 M12 24 H23" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </g>
+
+    <path d="M984 94 H1000" stroke="#cbd5e1" stroke-width="1.5" stroke-linecap="round" />
+    <rect x="1023" y="87" width="14" height="14" fill="none" stroke="#cbd5e1" stroke-width="1.4" />
+    <rect x="1053" y="70" width="37" height="48" rx="0" fill="#3d1518" opacity="0.92" />
+    <path d="M1064 87 L1078 101 M1078 87 L1064 101" stroke="#fecaca" stroke-width="1.7" stroke-linecap="round" />
+
+    <rect x="280" y="146" width="720" height="404" fill="#111315" stroke="#30343a" />
+    <rect x="280" y="146" width="720" height="404" fill="url(#preview-bg)" />
+    <rect x="328" y="190" width="624" height="316" rx="14" fill="#0e1319" stroke="#27313d" />
+    <rect x="365" y="231" width="248" height="28" rx="8" fill="#38bdf8" opacity="0.88" />
+    <rect x="365" y="298" width="514" height="14" rx="7" fill="#dbeafe" opacity="0.22" />
+    <rect x="365" y="330" width="404" height="14" rx="7" fill="#dbeafe" opacity="0.14" />
+    <rect x="365" y="390" width="136" height="82" rx="12" fill="#1d2530" />
+    <rect x="529" y="390" width="136" height="82" rx="12" fill="#1d2530" />
+    <rect x="693" y="390" width="136" height="82" rx="12" fill="#1d2530" />
+    <path d="M385 447 L424 411 L462 431 L492 400" fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M550 449 L586 417 L628 432 L656 402" fill="none" stroke="#22c55e" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M714 449 L751 415 L793 432 L820 400" fill="none" stroke="#f43f5e" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+
+    <text x="595" y="584" fill="#ffffff" font-family="Segoe UI, system-ui, sans-serif" font-size="18" text-anchor="end">00:08.42</text>
+    <text x="611" y="584" fill="#8b949e" font-family="Segoe UI, system-ui, sans-serif" font-size="18">/</text>
+    <text x="638" y="584" fill="#ffffff" font-family="Segoe UI, system-ui, sans-serif" font-size="18">00:22.18</text>
+
+    <rect x="220" y="604" width="840" height="54" rx="8" fill="#111418" opacity="0.76" stroke="#30343a" />
+    <rect x="234" y="615" width="32" height="32" rx="7" fill="#1f2937" />
+    <path d="M246 624 V638 L258 631 Z" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linejoin="round" />
+    <rect x="294" y="628" width="736" height="6" rx="3" fill="#3a424d" />
+    <rect x="382" y="628" width="515" height="6" rx="3" fill="#38bdf8" />
+    <line x1="574" y1="619" x2="574" y2="643" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+    <rect x="378" y="620" width="8" height="21" rx="4" fill="#4fc3ff" />
+    <rect x="893" y="620" width="8" height="21" rx="4" fill="#4fc3ff" />
+  </g>
+</svg>
