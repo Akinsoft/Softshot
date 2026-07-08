@@ -22,10 +22,6 @@ body {
   user-select: none;
 }
 
-body {
-  cursor: crosshair;
-}
-
 #screen-image,
 #annotation-canvas {
   position: fixed;
@@ -101,6 +97,13 @@ body {
 @keyframes recording-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes menu-slide-up {
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
   }
 }
 
@@ -237,6 +240,11 @@ body {
   border-radius: 8px;
   background: rgba(16, 18, 21, 0.98);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.42);
+}
+
+.menu.closing {
+  pointer-events: none;
+  animation: menu-slide-up 140ms ease forwards;
 }
 
 .menu[hidden] {

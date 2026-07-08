@@ -8,6 +8,7 @@ const recordingTimesliceMs = 500;
 const standardQualityBitrate = 5_000_000;
 const highFpsBitrateMultiplier = 1.5;
 const minimumVideoDimensionPx = 2;
+const millisecondsPerSecond = 1000;
 const supportedMimeTypes = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"] as const;
 
 export interface RecordingSessionConfig {
@@ -16,6 +17,23 @@ export interface RecordingSessionConfig {
   fps: VideoFps;
   quality: VideoQuality;
   sourceId: string;
+}
+
+export interface RecordingResult {
+  bytes: Uint8Array;
+  durationSeconds: number;
+  mimeType: string;
+}
+
+interface DesktopCaptureMandatoryConstraints {
+  chromeMediaSource: "desktop";
+  chromeMediaSourceId: string;
+  maxFrameRate: VideoFps;
+}
+
+interface DesktopCaptureVideoConstraints extends MediaTrackConstraints {
+  cursor: "never";
+  mandatory: DesktopCaptureMandatoryConstraints;
 }
 
 export class RecordingSession {
@@ -33,8 +51,9 @@ export class RecordingSession {
     }
 
     const outputStream = outputCanvas.captureStream(config.fps);
+    const mimeType = supportedVideoMimeType();
     const recorder = new MediaRecorder(outputStream, {
-      mimeType: supportedVideoMimeType(),
+      mimeType,
       videoBitsPerSecond: videoBitrate(config.quality, config.fps)
     });
     const session = new RecordingSession({
@@ -42,6 +61,7 @@ export class RecordingSession {
       outputCanvas,
       outputContext,
       outputStream,
+      mimeType,
       recorder,
       sourceStream,
       sourceVideo
@@ -56,7 +76,9 @@ export class RecordingSession {
   private readonly outputCanvas: HTMLCanvasElement;
   private readonly outputContext: CanvasRenderingContext2D;
   private readonly outputStream: MediaStream;
+  private readonly mimeType: string;
   private readonly recorder: MediaRecorder;
+  private recordingStartedAtMs: number | null = null;
   private readonly sourceStream: MediaStream;
   private readonly sourceVideo: HTMLVideoElement;
 
@@ -65,6 +87,7 @@ export class RecordingSession {
     outputCanvas: HTMLCanvasElement;
     outputContext: CanvasRenderingContext2D;
     outputStream: MediaStream;
+    mimeType: string;
     recorder: MediaRecorder;
     sourceStream: MediaStream;
     sourceVideo: HTMLVideoElement;
@@ -73,6 +96,7 @@ export class RecordingSession {
     this.outputCanvas = config.outputCanvas;
     this.outputContext = config.outputContext;
     this.outputStream = config.outputStream;
+    this.mimeType = config.mimeType;
     this.recorder = config.recorder;
     this.sourceStream = config.sourceStream;
     this.sourceVideo = config.sourceVideo;
@@ -123,15 +147,28 @@ export class RecordingSession {
   }
 
   private async recordedBytes(): Promise<Uint8Array> {
-    const blob = new Blob(this.chunks, { type: supportedVideoMimeType() });
+    const blob = new Blob(this.chunks, { type: this.mimeType });
     return new Uint8Array(await blob.arrayBuffer());
   }
 
-  async stop(): Promise<Uint8Array> {
-    if (this.recorder.state === "inactive") {
-      return new Uint8Array();
+  private recordingDurationSeconds(stoppedAtMs: number): number {
+    if (this.recordingStartedAtMs === null) {
+      return 0;
     }
 
+    return Math.max(0, (stoppedAtMs - this.recordingStartedAtMs) / millisecondsPerSecond);
+  }
+
+  async stop(): Promise<RecordingResult> {
+    if (this.recorder.state === "inactive") {
+      return {
+        bytes: new Uint8Array(),
+        durationSeconds: 0,
+        mimeType: this.mimeType
+      };
+    }
+
+    const durationSeconds = this.recordingDurationSeconds(performance.now());
     const stopped = new Promise<Uint8Array>((resolve) => {
       this.recorder.addEventListener(
         "stop",
@@ -142,10 +179,15 @@ export class RecordingSession {
       );
     });
     this.recorder.stop();
-    return await stopped;
+    return {
+      bytes: await stopped,
+      durationSeconds,
+      mimeType: this.mimeType
+    };
   }
 
   start(): void {
+    this.recordingStartedAtMs = performance.now();
     this.drawFrame();
     this.recorder.start(recordingTimesliceMs);
   }
@@ -172,15 +214,18 @@ async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoEl
 }
 
 async function getDesktopStream(sourceId: string, fps: VideoFps): Promise<MediaStream> {
+  const videoConstraints: DesktopCaptureVideoConstraints = {
+    cursor: "never",
+    mandatory: {
+      chromeMediaSource: "desktop",
+      chromeMediaSourceId: sourceId,
+      maxFrameRate: fps
+    }
+  };
+
   return await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: {
-      mandatory: {
-        chromeMediaSource: "desktop",
-        chromeMediaSourceId: sourceId,
-        maxFrameRate: fps
-      }
-    } as MediaTrackConstraints
+    video: videoConstraints
   });
 }
 

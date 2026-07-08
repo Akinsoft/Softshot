@@ -5,9 +5,12 @@
   },
   "include": [
     "src/global.d.ts",
+    "src/editor.ts",
+    "src/editor-*.ts",
     "src/overlay.ts",
     "src/overlay-*.ts",
     "src/recording-*.ts",
-    "src/shared.ts"
+    "src/shared.ts",
+    "src/webm.ts"
   ]
 }

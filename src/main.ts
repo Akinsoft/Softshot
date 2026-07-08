@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -18,7 +20,7 @@ import {
   Tray
 } from "electron";
 
-import type { OverlayBootstrap, SaveResult } from "./shared";
+import type { EditorBootstrap, OverlayBootstrap, SaveDialogResult, SaveResult, VideoFps } from "./shared";
 
 const appName = "Softshot";
 const primaryShortcut = "PrintScreen";
@@ -27,6 +29,13 @@ const overlayReadyTimeoutMs = 3000;
 const captureOnReadyDelayMs = 300;
 const timestampPartWidth = 2;
 const pngDataUrlPrefix = "data:image/png;base64,";
+const clipboardFileEnvironmentName = "SOFTSHOT_CLIPBOARD_FILE";
+const clipboardFolderName = "clipboard";
+const editorWindowWidthPx = 860;
+const editorWindowHeightPx = 560;
+const editorWindowMinWidthPx = 720;
+const editorWindowMinHeightPx = 460;
+const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
 
 type CaptureFolder = "pictures" | "videos";
 type CaptureExtension = "png" | "webm";
@@ -34,6 +43,8 @@ type RegisterShortcutResult = "registered" | "unavailable";
 
 class SoftshotApp {
   private activeOverlay: BrowserWindow | null = null;
+
+  private readonly editorDataByWebContents = new Map<number, EditorBootstrap>();
 
   private isPrintScreenUnavailable = false;
 
@@ -74,6 +85,26 @@ class SoftshotApp {
       skipTaskbar: true,
       show: false,
       backgroundColor: "#050506",
+      webPreferences: {
+        preload: path.join(app.getAppPath(), "dist", "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false
+      }
+    });
+  }
+
+  private createEditorWindow(): BrowserWindow {
+    return new BrowserWindow({
+      width: editorWindowWidthPx,
+      height: editorWindowHeightPx,
+      minWidth: editorWindowMinWidthPx,
+      minHeight: editorWindowMinHeightPx,
+      frame: false,
+      show: false,
+      autoHideMenuBar: true,
+      backgroundColor: "#15171a",
+      title: "Softshot Editor",
       webPreferences: {
         preload: path.join(app.getAppPath(), "dist", "preload.js"),
         contextIsolation: true,
@@ -272,6 +303,48 @@ class SoftshotApp {
     }
   }
 
+  private async openVideoEditor(
+    event: Electron.IpcMainInvokeEvent,
+    bytes: Uint8Array,
+    fps: VideoFps,
+    durationSeconds: number,
+    mimeType: string
+  ): Promise<void> {
+    if (bytes.byteLength === 0) {
+      this.closeSenderWindow(event);
+      return;
+    }
+
+    const overlay = BrowserWindow.fromWebContents(event.sender);
+    const editor = this.createEditorWindow();
+    const editorWebContentsId = editor.webContents.id;
+    this.editorDataByWebContents.set(editorWebContentsId, {
+      bytes,
+      durationSeconds,
+      fps,
+      mimeType
+    });
+
+    editor.once("ready-to-show", (): void => {
+      if (editor.isDestroyed()) {
+        return;
+      }
+
+      editor.show();
+      editor.focus();
+    });
+
+    editor.on("closed", (): void => {
+      this.editorDataByWebContents.delete(editorWebContentsId);
+    });
+
+    await editor.loadFile(path.join(app.getAppPath(), "src", "editor.html"));
+
+    if (overlay && !overlay.isDestroyed()) {
+      overlay.close();
+    }
+  }
+
   private pngBufferFromDataUrl(dataUrl: string): Buffer {
     if (!dataUrl.startsWith(pngDataUrlPrefix)) {
       throw new Error("Screenshots must be PNG data URLs.");
@@ -356,15 +429,67 @@ class SoftshotApp {
       this.closeSenderWindow(event);
     });
 
-    ipcMain.handle("capture:save-video", async (event, bytes: Uint8Array): Promise<SaveResult> => {
-      if (bytes.byteLength === 0) {
-        throw new Error("Cannot save an empty recording.");
+    ipcMain.handle(
+      "recording:open-editor",
+      async (event, bytes: Uint8Array, fps: VideoFps, durationSeconds: number, mimeType: string): Promise<void> => {
+        await this.openVideoEditor(event, bytes, fps, durationSeconds, mimeType);
+      }
+    );
+
+    ipcMain.handle("editor:get-bootstrap", (event): EditorBootstrap => {
+      const data = this.editorDataByWebContents.get(event.sender.id);
+      if (!data) {
+        throw new Error("Missing editor recording data.");
       }
 
-      const filePath = await this.writeCaptureFile("videos", "webm", Buffer.from(bytes));
-      this.notifySaved("Recording saved", filePath);
+      return data;
+    });
+
+    ipcMain.handle("editor:save-video", async (event, bytes: Uint8Array): Promise<SaveDialogResult> => {
+      if (bytes.byteLength === 0) {
+        return { filePath: null };
+      }
+
+      const targetDirectory = path.join(app.getPath("videos"), appName);
+      await mkdir(targetDirectory, { recursive: true });
+      const parentWindow = BrowserWindow.fromWebContents(event.sender);
+      const options: Electron.SaveDialogOptions = {
+        defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.webm`),
+        filters: [
+          {
+            name: "WebM video",
+            extensions: ["webm"]
+          }
+        ],
+        title: "Save recording"
+      };
+      const result = parentWindow && !parentWindow.isDestroyed()
+        ? await dialog.showSaveDialog(parentWindow, options)
+        : await dialog.showSaveDialog(options);
+
+      if (result.canceled || !result.filePath) {
+        return { filePath: null };
+      }
+
+      await writeFile(result.filePath, Buffer.from(bytes));
+      this.notifySaved("Recording saved", result.filePath);
+      return { filePath: result.filePath };
+    });
+
+    ipcMain.handle("editor:copy-video", async (event, bytes: Uint8Array): Promise<void> => {
+      if (bytes.byteLength === 0) {
+        return;
+      }
+
+      await this.copyVideoFileToClipboard(bytes);
+      const editor = BrowserWindow.fromWebContents(event.sender);
+      if (editor && !editor.isDestroyed()) {
+        editor.focus();
+      }
+    });
+
+    ipcMain.handle("editor:close", (event): void => {
       this.closeSenderWindow(event);
-      return { filePath };
     });
   }
 
@@ -496,6 +621,20 @@ class SoftshotApp {
     return filePath;
   }
 
+  private async writeClipboardVideoFile(data: Buffer): Promise<string> {
+    const targetDirectory = path.join(app.getPath("temp"), appName, clipboardFolderName);
+    await mkdir(targetDirectory, { recursive: true });
+
+    const filePath = path.join(targetDirectory, `${appName} ${this.timestamp()} ${randomUUID()}.webm`);
+    await writeFile(filePath, data);
+    return filePath;
+  }
+
+  private async copyVideoFileToClipboard(bytes: Uint8Array): Promise<void> {
+    const filePath = await this.writeClipboardVideoFile(Buffer.from(bytes));
+    await writeFileDropListToClipboard(filePath);
+  }
+
   start(): void {
     if (!app.requestSingleInstanceLock()) {
       app.quit();
@@ -520,6 +659,62 @@ class SoftshotApp {
 
 function padDatePart(part: number): string {
   return part.toString().padStart(timestampPartWidth, "0");
+}
+
+async function writeFileDropListToClipboard(filePath: string): Promise<void> {
+  if (process.platform !== "win32") {
+    throw new Error("Copying a recording as a file is only supported on Windows.");
+  }
+
+  await runPowershellClipboardScript(filePath);
+}
+
+async function runPowershellClipboardScript(filePath: string): Promise<void> {
+  const script = `
+Add-Type -AssemblyName System.Windows.Forms
+$file = [Environment]::GetEnvironmentVariable("${clipboardFileEnvironmentName}")
+if ([string]::IsNullOrWhiteSpace($file)) {
+  throw "Missing ${clipboardFileEnvironmentName}."
+}
+$files = New-Object System.Collections.Specialized.StringCollection
+[void] $files.Add($file)
+[System.Windows.Forms.Clipboard]::SetFileDropList($files)
+`;
+
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      powershellExecutable,
+      powershellClipboardArguments(script),
+      {
+        env: {
+          ...process.env,
+          [clipboardFileEnvironmentName]: filePath
+        },
+        windowsHide: true
+      },
+      (error, standardOutput, standardError): void => {
+        if (error) {
+          reject(new Error(powershellClipboardErrorMessage(error, standardOutput, standardError)));
+          return;
+        }
+
+        resolve();
+      }
+    );
+  });
+}
+
+function powershellClipboardArguments(script: string): string[] {
+  return ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script];
+}
+
+function powershellClipboardErrorMessage(error: Error, standardOutput: string, standardError: string): string {
+  const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
+  if (!output) {
+    return `Could not put the recording file on the clipboard.\n${error.message}`;
+  }
+
+  return `Could not put the recording file on the clipboard.\n${output}`;
 }
 
 const softshotApp = new SoftshotApp();

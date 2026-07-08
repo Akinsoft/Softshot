@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Softshot Editor</title>
+    <link rel="stylesheet" href="./editor.css" />
+  </head>
+  <body>
+    <header class="editor-titlebar">
+      <button id="editor-close-button" class="icon-button close-button" type="button" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6 18 18" />
+          <path d="M18 6 6 18" />
+        </svg>
+      </button>
+
+      <span class="editor-title">Editor</span>
+      <span id="editor-status" class="editor-status" aria-live="polite"></span>
+
+      <div class="editor-actions">
+        <button id="editor-copy-button" class="icon-button" type="button" title="Copy" aria-label="Copy">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="8" y="8" width="10" height="12" rx="2" />
+            <path d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+          </svg>
+        </button>
+
+        <button id="editor-save-button" class="icon-button" type="button" title="Save as" aria-label="Save as">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 4h12l2 2v14H5Z" />
+            <path d="M8 4v6h8V4" />
+            <path d="M8 17h8" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="editor-content">
+      <section class="preview-area">
+        <video id="editor-video" class="editor-video" playsinline></video>
+      </section>
+
+      <div class="time-row">
+        <span id="current-time">00:00.00</span>
+        <span class="time-separator">/</span>
+        <span id="total-time">00:00.00</span>
+      </div>
+
+      <section class="transport">
+        <button id="play-button" class="play-button" type="button" title="Play" aria-label="Play" data-state="play">
+          <span class="play-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M8 5.5v13l10-6.5Z" />
+            </svg>
+          </span>
+          <span class="pause-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M8 6v12" />
+              <path d="M16 6v12" />
+            </svg>
+          </span>
+        </button>
+
+        <div id="timeline" class="timeline" style="--trim-start: 0%; --trim-end: 100%">
+          <div class="timeline-base"></div>
+          <div class="timeline-selection"></div>
+          <input id="trim-start" class="trim-range trim-start" type="range" min="0" value="0" aria-label="Trim start" />
+          <input id="trim-end" class="trim-range trim-end" type="range" min="0" value="0" aria-label="Trim end" />
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="../dist/editor.js"></script>
+  </body>
+</html>

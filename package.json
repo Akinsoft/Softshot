@@ -20,6 +20,8 @@
     },
     "files": [
       "dist/**/*",
+      "src/editor.html",
+      "src/editor.css",
       "src/overlay.html",
       "src/styles.css",
       "package.json"

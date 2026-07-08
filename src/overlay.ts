@@ -22,9 +22,10 @@ import {
   normalizeRect
 } from "./overlay-model.js";
 import { RecordingHudController } from "./recording-hud.js";
-import { RecordingSession } from "./recording-session.js";
+import { type RecordingResult, RecordingSession } from "./recording-session.js";
 import type { CaptureMode, OverlayBootstrap, Rect, SoftshotApi, VideoFps, VideoQuality } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
+import { hasWebmCluster } from "./webm.js";
 
 const canvasContextError = "Could not create the overlay drawing context.";
 const copyShortcutKey = "c";
@@ -45,6 +46,7 @@ const countdownCompleteValue = 0;
 const countdownValues = [countdownFirstValue, countdownSecondValue, countdownThirdValue, countdownCompleteValue] as const;
 const countdownStepMs = 1000;
 const countdownZeroHoldMs = 500;
+const minimumRecordingByteLength = 1;
 const runIdIncrement = 1;
 const videoButtonPopKeyframes = [
   { transform: "scale(1)" },
@@ -142,6 +144,7 @@ class OverlayApp {
       }
 
       this.selectedColor = button.dataset.color ?? this.selectedColor;
+      this.hideMenu(this.colorMenu);
       this.syncToolbar();
       this.requestRender();
     });
@@ -195,12 +198,10 @@ class OverlayApp {
       this.selectTool("arrow");
     });
     this.colorButton.addEventListener("click", (): void => {
-      this.settingsMenu.hidden = true;
-      this.colorMenu.hidden = !this.colorMenu.hidden;
+      this.toggleMenu(this.colorMenu, this.settingsMenu);
     });
     this.settingsButton.addEventListener("click", (): void => {
-      this.colorMenu.hidden = true;
-      this.settingsMenu.hidden = !this.settingsMenu.hidden;
+      this.toggleMenu(this.settingsMenu, this.colorMenu);
     });
     this.closeButton.addEventListener("click", (): void => {
       this.runAsync(this.closeOverlay(), "Could not close the overlay.");
@@ -221,8 +222,45 @@ class OverlayApp {
   }
 
   private closeMenus(): void {
-    this.colorMenu.hidden = true;
-    this.settingsMenu.hidden = true;
+    this.hideMenu(this.colorMenu);
+    this.hideMenu(this.settingsMenu);
+  }
+
+  private hideMenu(menu: HTMLDivElement): void {
+    if (menu.hidden || menu.classList.contains("closing")) {
+      return;
+    }
+
+    menu.classList.add("closing");
+    menu.addEventListener(
+      "animationend",
+      (): void => {
+        if (!menu.classList.contains("closing")) {
+          return;
+        }
+
+        menu.hidden = true;
+        menu.classList.remove("closing");
+      },
+      { once: true }
+    );
+  }
+
+  private showMenu(menu: HTMLDivElement): void {
+    menu.classList.remove("closing");
+    menu.hidden = false;
+  }
+
+  private toggleMenu(menu: HTMLDivElement, otherMenu: HTMLDivElement): void {
+    const shouldShowMenu = menu.hidden || menu.classList.contains("closing");
+    this.hideMenu(otherMenu);
+
+    if (shouldShowMenu) {
+      this.showMenu(menu);
+      return;
+    }
+
+    this.hideMenu(menu);
   }
 
   private async closeOverlay(): Promise<void> {
@@ -266,13 +304,19 @@ class OverlayApp {
     this.syncToolbar();
   }
 
-  private async finishRecording(bytes: Uint8Array): Promise<void> {
+  private async finishRecording(result: RecordingResult): Promise<void> {
     this.recordingSession?.stopTracks();
     this.recordingSession = null;
     this.isRecording = false;
     this.recordingHud.stopRecording();
     this.syncToolbar();
-    await getSoftshotApi().saveVideo(bytes);
+
+    if (result.bytes.byteLength < minimumRecordingByteLength || !hasWebmCluster(result.bytes)) {
+      await getSoftshotApi().closeOverlay();
+      return;
+    }
+
+    await getSoftshotApi().openVideoEditor(result.bytes, this.fps, result.durationSeconds, result.mimeType);
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -588,8 +632,8 @@ class OverlayApp {
     }
 
     const session = this.recordingSession;
-    const bytes = await session.stop();
-    await this.finishRecording(bytes);
+    const result = await session.stop();
+    await this.finishRecording(result);
   }
 
   private syncToolbar(): void {

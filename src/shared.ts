@@ -32,15 +32,30 @@ export interface OverlayBootstrap {
   scaleFactor: number;
 }
 
+export interface EditorBootstrap {
+  bytes: Uint8Array;
+  durationSeconds: number;
+  fps: VideoFps;
+  mimeType: string;
+}
+
 export interface SaveResult {
   filePath: string;
+}
+
+export interface SaveDialogResult {
+  filePath: string | null;
 }
 
 export interface SoftshotApi {
   getBootstrap(): Promise<OverlayBootstrap>;
   saveScreenshot(dataUrl: string): Promise<SaveResult>;
   copyScreenshot(dataUrl: string): Promise<void>;
-  saveVideo(bytes: Uint8Array): Promise<SaveResult>;
+  openVideoEditor(bytes: Uint8Array, fps: VideoFps, durationSeconds: number, mimeType: string): Promise<void>;
+  getEditorBootstrap(): Promise<EditorBootstrap>;
+  saveEditorVideo(bytes: Uint8Array): Promise<SaveDialogResult>;
+  copyEditorVideo(bytes: Uint8Array): Promise<void>;
+  closeEditor(): Promise<void>;
   readyToShow(): Promise<void>;
   closeOverlay(): Promise<void>;
   showError(message: string): Promise<void>;
