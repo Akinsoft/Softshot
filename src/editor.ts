@@ -9,6 +9,7 @@ const prepareDebounceMs = 350;
 const rangeStepSeconds = 0.01;
 const secondsPerMinute = 60;
 const secondsTextLength = 5;
+const spaceKey = " ";
 const timePartLength = 2;
 const timePrecisionDigits = 2;
 const trimKeyPrecisionDigits = 3;
@@ -68,6 +69,7 @@ class VideoEditorApp {
   private trimStartSeconds = zeroSeconds;
 
   private bindEvents(): void {
+    this.bindKeyboardEvents();
     this.closeButton.addEventListener("click", (): void => {
       this.runAsync(this.closeEditor(), "Could not close the editor.");
     });
@@ -109,6 +111,28 @@ class VideoEditorApp {
       this.startPlaybackFrameSync();
       this.syncPlayButton();
     });
+  }
+
+  private bindKeyboardEvents(): void {
+    addEventListener("keydown", (event): void => {
+      if (event.key !== spaceKey) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      this.blurFocusedElement();
+
+      if (!event.repeat) {
+        this.runAsync(this.togglePlayback(), "Could not preview the recording.");
+      }
+    }, { capture: true });
+  }
+
+  private blurFocusedElement(): void {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
   }
 
   private async reportAsyncError(task: Promise<void>, message: string): Promise<void> {

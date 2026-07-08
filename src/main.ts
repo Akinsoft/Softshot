@@ -46,6 +46,12 @@ type CaptureFolder = "pictures" | "videos";
 type CaptureExtension = "png" | "webm";
 type RegisterShortcutResult = "registered" | "unavailable";
 
+interface PendingOverlayBootstrap {
+  promise: Promise<OverlayBootstrap>;
+  reject(error: Error): void;
+  resolve(data: OverlayBootstrap): void;
+}
+
 class SoftshotApp {
   private activeOverlay: BrowserWindow | null = null;
 
@@ -59,9 +65,17 @@ class SoftshotApp {
 
   private isPrintScreenUnavailable = false;
 
+  private isQuitting = false;
+
   private liveCaptureOverlayWebContentsId: number | null = null;
 
   private readonly overlayDataByWebContents = new Map<number, OverlayBootstrap>();
+
+  private readonly overlayLoadPromisesByWebContents = new Map<number, Promise<void>>();
+
+  private readonly pendingOverlayBootstrapsByWebContents = new Map<number, PendingOverlayBootstrap>();
+
+  private preparedOverlay: BrowserWindow | null = null;
 
   private registeredShortcuts: string[] = [];
 
@@ -203,8 +217,8 @@ class SoftshotApp {
       types: ["screen"],
       fetchWindowIcons: false,
       thumbnailSize: {
-        width: 0,
-        height: 0
+        height: 0,
+        width: 0
       }
     });
 
@@ -271,13 +285,13 @@ class SoftshotApp {
     }
   }
 
-  private getOverlayData(event: Electron.IpcMainInvokeEvent): OverlayBootstrap {
+  private getOverlayData(event: Electron.IpcMainInvokeEvent): OverlayBootstrap | Promise<OverlayBootstrap> {
     const data = this.overlayDataByWebContents.get(event.sender.id);
-    if (!data) {
-      throw new Error("Missing overlay bootstrap data.");
+    if (data) {
+      return data;
     }
 
-    return data;
+    return this.waitForOverlayBootstrap(event.sender.id);
   }
 
   private getSenderOverlay(event: Electron.IpcMainInvokeEvent): BrowserWindow {
@@ -303,6 +317,51 @@ class SoftshotApp {
     void this.showError("Could not open the capture overlay.", new Error("The overlay did not become ready in time."));
   }
 
+  private loadOverlayWindow(overlay: BrowserWindow): void {
+    const overlayWebContentsId = overlay.webContents.id;
+    const loadPromise = this.loadOverlayWindowFile(overlay);
+    this.overlayLoadPromisesByWebContents.set(overlayWebContentsId, loadPromise);
+    void loadPromise.catch((error: unknown): void => {
+      this.debugLog(`prepared overlay load failed: ${errorMessage(error)}`);
+      if (this.preparedOverlay === overlay) {
+        this.preparedOverlay = null;
+      }
+
+      if (!overlay.isDestroyed()) {
+        overlay.close();
+      }
+    });
+  }
+
+  private async loadOverlayWindowFile(overlay: BrowserWindow): Promise<void> {
+    await overlay.loadFile(path.join(app.getAppPath(), "src", "overlay.html"));
+    this.debugLog("overlay html loaded");
+  }
+
+  private prepareNextOverlay(): void {
+    if (this.isQuitting || this.activeOverlay || this.preparedOverlay) {
+      return;
+    }
+
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const overlay = this.createOverlayWindow(display);
+    this.preparedOverlay = overlay;
+    this.trackOverlayWindow(overlay);
+    this.wireOverlayDiagnostics(overlay);
+    this.loadOverlayWindow(overlay);
+  }
+
+  private provideOverlayBootstrap(webContentsId: number, data: OverlayBootstrap): void {
+    this.overlayDataByWebContents.set(webContentsId, data);
+    const pendingBootstrap = this.pendingOverlayBootstrapsByWebContents.get(webContentsId);
+    if (!pendingBootstrap) {
+      return;
+    }
+
+    this.pendingOverlayBootstrapsByWebContents.delete(webContentsId);
+    pendingBootstrap.resolve(data);
+  }
+
   private async initializeWhenReady(): Promise<void> {
     try {
       await app.whenReady();
@@ -312,6 +371,7 @@ class SoftshotApp {
       this.registerCaptureShortcuts();
       this.tray = this.createTray();
       await this.showShortcutWarningIfNeeded();
+      this.prepareNextOverlay();
 
       if (process.env.SOFTSHOT_CAPTURE_ON_READY === "1") {
         setTimeout((): void => {
@@ -390,6 +450,76 @@ class SoftshotApp {
     }
   }
 
+  private preparedOverlayForCapture(display: Display): BrowserWindow {
+    if (!this.preparedOverlay || this.preparedOverlay.isDestroyed()) {
+      this.prepareNextOverlay();
+    }
+
+    const overlay = this.preparedOverlay;
+    if (!overlay || overlay.isDestroyed()) {
+      throw new Error("Could not prepare the capture overlay.");
+    }
+
+    overlay.setFullScreen(false);
+    overlay.setBounds(display.bounds);
+    this.preparedOverlay = null;
+    return overlay;
+  }
+
+  private rejectOverlayBootstrap(webContentsId: number, error: Error): void {
+    const pendingBootstrap = this.pendingOverlayBootstrapsByWebContents.get(webContentsId);
+    if (!pendingBootstrap) {
+      return;
+    }
+
+    this.pendingOverlayBootstrapsByWebContents.delete(webContentsId);
+    pendingBootstrap.reject(error);
+  }
+
+  private trackOverlayWindow(overlay: BrowserWindow): void {
+    const overlayWebContentsId = overlay.webContents.id;
+    overlay.on("closed", (): void => {
+      this.debugLog("overlay closed");
+      this.overlayDataByWebContents.delete(overlayWebContentsId);
+      this.displayMediaDisplayIdsByWebContents.delete(overlayWebContentsId);
+      this.overlayLoadPromisesByWebContents.delete(overlayWebContentsId);
+      this.rejectOverlayBootstrap(overlayWebContentsId, new Error("The overlay closed before capture started."));
+
+      if (this.liveCaptureOverlayWebContentsId === overlayWebContentsId) {
+        this.liveCaptureOverlayWebContentsId = null;
+      }
+
+      if (this.activeOverlay === overlay) {
+        this.activeOverlay = null;
+      }
+
+      if (this.preparedOverlay === overlay) {
+        this.preparedOverlay = null;
+      }
+
+      this.prepareNextOverlay();
+    });
+  }
+
+  private async waitForOverlayBootstrap(webContentsId: number): Promise<OverlayBootstrap> {
+    const pendingBootstrap = this.pendingOverlayBootstrapsByWebContents.get(webContentsId);
+    if (pendingBootstrap) {
+      return await pendingBootstrap.promise;
+    }
+
+    const {
+      promise,
+      reject: rejectBootstrap,
+      resolve: resolveBootstrap
+    } = Promise.withResolvers<OverlayBootstrap>();
+    this.pendingOverlayBootstrapsByWebContents.set(webContentsId, {
+      promise,
+      reject: rejectBootstrap,
+      resolve: resolveBootstrap
+    });
+    return await promise;
+  }
+
   private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
     const targetDirectory = path.join(app.getPath("videos"), appName);
     await mkdir(targetDirectory, { recursive: true });
@@ -435,15 +565,12 @@ class SoftshotApp {
     this.debugLog("creating overlay");
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
-    await this.getDesktopSourceForDisplay(display.id);
     const imageDataUrl = await this.captureFrozenScreenDataUrl();
-
-    const overlay = this.createOverlayWindow(display);
+    const overlay = this.preparedOverlayForCapture(display);
     overlay.setFullScreen(true);
     overlay.setAlwaysOnTop(true, "screen-saver");
     overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     overlay.setContentProtection(true);
-    this.wireOverlayDiagnostics(overlay);
 
     this.activeOverlay = overlay;
     const overlayWebContentsId = overlay.webContents.id;
@@ -454,8 +581,11 @@ class SoftshotApp {
     overlay.once("show", (): void => {
       clearTimeout(readinessTimeout);
     });
+    overlay.once("closed", (): void => {
+      clearTimeout(readinessTimeout);
+    });
 
-    this.overlayDataByWebContents.set(overlayWebContentsId, {
+    this.provideOverlayBootstrap(overlayWebContentsId, {
       imageDataUrl,
       displayBounds: {
         x: display.bounds.x,
@@ -466,23 +596,6 @@ class SoftshotApp {
       scaleFactor: display.scaleFactor
     });
     this.displayMediaDisplayIdsByWebContents.set(overlayWebContentsId, display.id);
-
-    overlay.on("closed", (): void => {
-      clearTimeout(readinessTimeout);
-      this.debugLog("overlay closed");
-      this.overlayDataByWebContents.delete(overlayWebContentsId);
-      this.displayMediaDisplayIdsByWebContents.delete(overlayWebContentsId);
-      if (this.liveCaptureOverlayWebContentsId === overlayWebContentsId) {
-        this.liveCaptureOverlayWebContentsId = null;
-      }
-
-      if (this.activeOverlay === overlay) {
-        this.activeOverlay = null;
-      }
-    });
-
-    await overlay.loadFile(path.join(app.getAppPath(), "src", "overlay.html"));
-    this.debugLog("overlay html loaded");
   }
 
   private async openOverlayWithErrorHandling(): Promise<void> {
@@ -579,7 +692,7 @@ class SoftshotApp {
   }
 
   private registerIpcHandlers(): void {
-    ipcMain.handle("overlay:get-bootstrap", (event): OverlayBootstrap => this.getOverlayData(event));
+    ipcMain.handle("overlay:get-bootstrap", (event): OverlayBootstrap | Promise<OverlayBootstrap> => this.getOverlayData(event));
 
     ipcMain.handle("overlay:close", (event): void => {
       this.closeSenderWindow(event);
@@ -850,6 +963,7 @@ class SoftshotApp {
     });
 
     app.on("will-quit", (): void => {
+      this.isQuitting = true;
       globalShortcut.unregisterAll();
     });
 
@@ -918,7 +1032,7 @@ try {
   await new Promise<void>((resolve, reject) => {
     execFile(
       powershellExecutable,
-      powershellClipboardArguments(script),
+      powershellArguments(script),
       {
         env: {
           ...process.env,
@@ -953,7 +1067,7 @@ $files = New-Object System.Collections.Specialized.StringCollection
   await new Promise<void>((resolve, reject) => {
     execFile(
       powershellExecutable,
-      powershellClipboardArguments(script),
+      powershellArguments(script),
       {
         env: {
           ...process.env,
@@ -973,7 +1087,7 @@ $files = New-Object System.Collections.Specialized.StringCollection
   });
 }
 
-function powershellClipboardArguments(script: string): string[] {
+function powershellArguments(script: string): string[] {
   return ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script];
 }
 
