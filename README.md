@@ -5,7 +5,7 @@ Softshot is a lightweight Windows screenshot and screen recording tool built for
 Hit a shortcut, drag the exact region you want, mark it up, and save or copy it without falling into a full editing suite.
 
 <p align="center">
-  <img src="docs/assets/capture-overlay.svg" alt="Softshot capture overlay with a selected region and annotation tools" width="100%">
+  <img src="docs/assets/capture-overlay-windows-preview.svg" alt="Softshot capture overlay with a selected region and annotation tools" width="100%">
 </p>
 
 ## Why Softshot
@@ -22,7 +22,7 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 
 | Capture and annotate | Trim recordings |
 | --- | --- |
-| <img src="docs/assets/capture-overlay.svg" alt="Softshot capture overlay" width="100%"> | <img src="docs/assets/video-editor.svg" alt="Softshot video trim editor" width="100%"> |
+| <img src="docs/assets/capture-overlay-windows-preview.svg" alt="Softshot capture overlay" width="100%"> | <img src="docs/assets/video-editor-windows-preview.svg" alt="Softshot video trim editor" width="100%"> |
 
 ## How It Works
 
