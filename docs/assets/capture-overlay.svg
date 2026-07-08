@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Softshot capture overlay</title>
+  <desc id="desc">A dark desktop capture overlay with a selected region, annotation tools, and a compact toolbar.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#17212f" />
+      <stop offset="0.52" stop-color="#101216" />
+      <stop offset="1" stop-color="#0d1117" />
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#252a31" />
+      <stop offset="1" stop-color="#171a1f" />
+    </linearGradient>
+    <filter id="drop-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.38" />
+    </filter>
+    <mask id="selection-mask">
+      <rect width="1280" height="720" fill="#ffffff" />
+      <rect x="160" y="150" width="640" height="360" fill="#000000" />
+    </mask>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#background)" />
+  <circle cx="1110" cy="120" r="210" fill="#38bdf8" opacity="0.08" />
+  <circle cx="160" cy="610" r="260" fill="#22c55e" opacity="0.06" />
+
+  <g filter="url(#drop-shadow)">
+    <rect x="92" y="78" width="760" height="460" rx="14" fill="url(#panel)" />
+    <rect x="92" y="78" width="760" height="46" rx="14" fill="#111418" />
+    <circle cx="122" cy="101" r="6" fill="#f87171" />
+    <circle cx="144" cy="101" r="6" fill="#facc15" />
+    <circle cx="166" cy="101" r="6" fill="#22c55e" />
+    <rect x="126" y="156" width="278" height="28" rx="6" fill="#38bdf8" opacity="0.85" />
+    <rect x="126" y="210" width="646" height="14" rx="7" fill="#e5edf8" opacity="0.26" />
+    <rect x="126" y="242" width="560" height="14" rx="7" fill="#e5edf8" opacity="0.17" />
+    <rect x="126" y="304" width="176" height="108" rx="10" fill="#222831" stroke="#ffffff" stroke-opacity="0.08" />
+    <rect x="326" y="304" width="176" height="108" rx="10" fill="#222831" stroke="#ffffff" stroke-opacity="0.08" />
+    <rect x="526" y="304" width="176" height="108" rx="10" fill="#222831" stroke="#ffffff" stroke-opacity="0.08" />
+    <path d="M148 378 L198 334 L238 360 L282 322" fill="none" stroke="#38bdf8" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M348 386 L390 352 L434 370 L482 330" fill="none" stroke="#22c55e" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M548 384 L596 338 L638 356 L682 318" fill="none" stroke="#f43f5e" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <g filter="url(#drop-shadow)">
+    <rect x="910" y="156" width="250" height="338" rx="18" fill="#181b20" stroke="#ffffff" stroke-opacity="0.08" />
+    <rect x="942" y="194" width="132" height="18" rx="9" fill="#e5edf8" opacity="0.24" />
+    <rect x="942" y="242" width="186" height="64" rx="12" fill="#20262e" />
+    <rect x="942" y="326" width="186" height="64" rx="12" fill="#20262e" />
+    <rect x="942" y="410" width="102" height="26" rx="13" fill="#38bdf8" opacity="0.85" />
+  </g>
+
+  <rect width="1280" height="720" fill="#000000" opacity="0.44" mask="url(#selection-mask)" />
+
+  <rect x="160" y="150" width="640" height="360" fill="none" stroke="#ffffff" stroke-width="1.5" />
+  <rect x="160" y="150" width="640" height="360" fill="none" stroke="#38bdf8" stroke-width="3" />
+  <circle cx="160" cy="150" r="7" fill="#ffffff" stroke="#38bdf8" stroke-width="3" />
+  <circle cx="800" cy="510" r="7" fill="#ffffff" stroke="#38bdf8" stroke-width="3" />
+  <path d="M232 401 C304 344 363 360 442 310" fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M567 248 L700 355" fill="none" stroke="#f43f5e" stroke-width="8" stroke-linecap="round" />
+  <path d="M700 355 L668 348 M700 355 L687 325" fill="none" stroke="#f43f5e" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+
+  <g filter="url(#drop-shadow)">
+    <rect x="472" y="12" width="336" height="54" rx="8" fill="rgba(13,14,16,0.94)" stroke="rgba(255,255,255,0.22)" />
+    <rect x="478" y="18" width="42" height="42" rx="7" fill="rgba(56,189,248,0.18)" stroke="rgba(56,189,248,0.35)" />
+    <path d="M491 34 L493 30 H505 L507 34 H513 Q516 34 516 38 V50 Q516 54 512 54 H486 Q482 54 482 50 V38 Q482 34 486 34 Z" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linejoin="round" />
+    <circle cx="499" cy="44" r="6" fill="none" stroke="#f4f7fb" stroke-width="1.8" />
+
+    <rect x="525" y="18" width="42" height="42" rx="7" fill="transparent" />
+    <rect x="535" y="34" width="17" height="14" rx="3" fill="none" stroke="#f4f7fb" stroke-width="1.8" />
+    <path d="M553 38 L561 34 V50 L553 46 Z" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linejoin="round" />
+
+    <rect x="572" y="18" width="42" height="42" rx="7" fill="rgba(56,189,248,0.18)" stroke="rgba(56,189,248,0.35)" />
+    <path d="M584 50 L589 49 L603 35 L599 31 L586 44 Z" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linejoin="round" />
+    <path d="M597 33 L601 37" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" />
+    <rect x="596" y="51" width="16" height="3" rx="1.5" fill="#38bdf8" />
+
+    <rect x="619" y="18" width="42" height="42" rx="7" fill="transparent" />
+    <path d="M630 50 L651 29" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" />
+    <path d="M638 29 H651 V42" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    <rect x="643" y="51" width="16" height="3" rx="1.5" fill="#38bdf8" />
+
+    <rect x="666" y="18" width="42" height="42" rx="7" fill="transparent" />
+    <circle cx="687" cy="39" r="11" fill="#38bdf8" stroke="#ffffff" stroke-width="3" />
+
+    <rect x="713" y="18" width="42" height="42" rx="7" fill="transparent" />
+    <circle cx="734" cy="39" r="4" fill="none" stroke="#f4f7fb" stroke-width="1.8" />
+    <path d="M734 27 V31 M734 47 V51 M722 39 H726 M742 39 H746 M725 30 L728 33 M740 45 L743 48 M743 30 L740 33 M728 45 L725 48" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" />
+
+    <rect x="760" y="18" width="42" height="42" rx="7" fill="transparent" />
+    <path d="M773 31 L790 48 M790 31 L773 48" fill="none" stroke="#f4f7fb" stroke-width="1.8" stroke-linecap="round" />
+  </g>
+</svg>
