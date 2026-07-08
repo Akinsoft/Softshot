@@ -2,6 +2,7 @@ type CaptureMode = "screenshot" | "video";
 type DrawingTool = "select" | "pen" | "arrow";
 type VideoQuality = "720p" | "1080p";
 type VideoFps = 30 | 60;
+type VideoButtonState = "video" | "start" | "stop";
 
 interface Rect {
   x: number;
@@ -56,6 +57,24 @@ const settingsMenu = element<HTMLDivElement>("settings-menu");
 const recordingHud = new RecordingHudController();
 
 const context = canvasContext(canvas, "Could not create the overlay drawing context.");
+const videoButtonIcons: Record<VideoButtonState, string> = {
+  video: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="6" width="12" height="12" rx="2.5"></rect>
+      <path d="m15.5 10 5-3v10l-5-3Z"></path>
+    </svg>
+  `,
+  start: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 5.5v13l10-6.5Z"></path>
+    </svg>
+  `,
+  stop: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="1.8"></rect>
+    </svg>
+  `
+};
 
 let bootstrap: OverlayBootstrap | null = null;
 let captureMode: CaptureMode = "screenshot";
@@ -143,9 +162,11 @@ function bindEvents(): void {
 
   videoButton.addEventListener("click", () => {
     closeMenus();
-    captureMode = "video";
-    activeTool = "select";
-    syncToolbar();
+    if (captureMode !== "video") {
+      enterVideoMode();
+      return;
+    }
+
     void toggleRecording();
   });
 
@@ -379,8 +400,7 @@ function renderSelectionDataUrl(): string | null {
 }
 
 async function toggleRecording(): Promise<void> {
-  captureMode = "video";
-  activeTool = "select";
+  enterVideoMode();
 
   if (isRecording) {
     await stopRecording();
@@ -399,6 +419,12 @@ async function toggleRecording(): Promise<void> {
   }
 
   await startRecordingCountdown();
+}
+
+function enterVideoMode(): void {
+  captureMode = "video";
+  activeTool = "select";
+  syncToolbar();
 }
 
 async function startRecordingCountdown(): Promise<void> {
@@ -731,10 +757,17 @@ function drawArrow(targetContext: CanvasRenderingContext2D, annotation: ArrowAnn
 }
 
 function syncToolbar(): void {
+  const videoState = videoButtonState();
   screenshotButton.classList.toggle("active", captureMode === "screenshot");
   videoButton.classList.toggle("active", captureMode === "video");
   videoButton.classList.toggle("recording", isRecording || isCountingDown);
-  videoButton.title = isRecording ? "Stop recording" : isCountingDown ? "Cancel countdown" : "Record video";
+  videoButton.title = videoButtonTitle(videoState);
+  videoButton.setAttribute("aria-label", videoButton.title);
+  videoButton.dataset.state = videoState;
+  if (videoButton.dataset.renderedState !== videoState) {
+    videoButton.innerHTML = videoButtonIcons[videoState];
+    videoButton.dataset.renderedState = videoState;
+  }
   penButton.classList.toggle("active", activeTool === "pen");
   arrowButton.classList.toggle("active", activeTool === "arrow");
 
@@ -751,6 +784,30 @@ function syncToolbar(): void {
   for (const button of settingsMenu.querySelectorAll<HTMLButtonElement>("[data-fps]")) {
     button.classList.toggle("selected", Number(button.dataset.fps) === fps);
   }
+}
+
+function videoButtonState(): VideoButtonState {
+  if (isRecording || isCountingDown) {
+    return "stop";
+  }
+
+  if (captureMode === "video" && selection) {
+    return "start";
+  }
+
+  return "video";
+}
+
+function videoButtonTitle(state: VideoButtonState): string {
+  if (state === "stop") {
+    return isCountingDown ? "Cancel countdown" : "Stop recording";
+  }
+
+  if (state === "start") {
+    return "Start recording";
+  }
+
+  return "Video";
 }
 
 function resizeCanvas(): void {
