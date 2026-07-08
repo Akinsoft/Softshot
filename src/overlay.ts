@@ -59,6 +59,10 @@ type SoftshotGlobal = typeof globalThis & {
   softshot: SoftshotApi;
 };
 
+type RecordingSessionPreparation =
+  | { kind: "failed"; error: unknown }
+  | { kind: "ready"; session: RecordingSession };
+
 class OverlayApp {
   private readonly arrowButton = getRequiredElement("arrow-button", HTMLButtonElement);
   private readonly canvas = getRequiredElement("annotation-canvas", HTMLCanvasElement);
@@ -321,6 +325,7 @@ class OverlayApp {
   }
 
   private enterVideoMode(): void {
+    this.closeMenus();
     this.captureMode = "video";
     this.activeTool = "select";
     this.syncToolbar();
@@ -603,6 +608,27 @@ class OverlayApp {
     await getSoftshotApi().saveScreenshot(dataUrl);
   }
 
+  private async prepareRecordingSession(): Promise<RecordingSessionPreparation> {
+    if (!this.bootstrap || !this.selection) {
+      return {
+        error: new Error("A selected screen region is required before recording."),
+        kind: "failed"
+      };
+    }
+
+    try {
+      const session = await RecordingSession.create({
+        annotations: [...this.annotations],
+        crop: this.selection,
+        fps: this.fps,
+        quality: this.quality
+      });
+      return { kind: "ready", session };
+    } catch (error) {
+      return { error, kind: "failed" };
+    }
+  }
+
   private selectTool(tool: "arrow" | "pen"): void {
     this.closeMenus();
     this.activeTool = tool;
@@ -648,28 +674,31 @@ class OverlayApp {
     this.requestRender();
   }
 
-  private async startRecording(): Promise<void> {
+  private async discardPreparedRecordingSession(sessionPromise: Promise<RecordingSessionPreparation>): Promise<void> {
+    const preparation = await sessionPromise;
+    if (preparation.kind === "ready") {
+      preparation.session.stopTracks();
+    }
+  }
+
+  private async startRecording(session: RecordingSession): Promise<void> {
     if (!this.bootstrap || !this.selection || this.isRecording) {
+      session.stopTracks();
       return;
     }
 
     try {
       this.captureMode = "video";
       this.isRecording = true;
+      this.recordingSession = session;
       this.syncToolbar();
       this.recordingHud.showRecordingPending();
       this.requestRender();
-      this.recordingSession = await RecordingSession.create({
-        annotations: this.annotations,
-        crop: this.selection,
-        fps: this.fps,
-        quality: this.quality
-      });
-      this.recordingSession.start();
+      session.start();
       this.recordingHud.startRecordingTimer();
     } catch (error) {
       this.isRecording = false;
-      this.recordingSession?.stopTracks();
+      session.stopTracks();
       this.recordingSession = null;
       this.recordingHud.stopRecording();
       this.syncToolbar();
@@ -695,9 +724,14 @@ class OverlayApp {
       this.syncToolbar();
       throw error;
     }
+    const sessionPromise = this.prepareRecordingSession();
 
     for (const value of countdownValues) {
       if (this.shouldStopCountdown(runId)) {
+        this.runAsync(
+          this.discardPreparedRecordingSession(sessionPromise),
+          "Could not discard the prepared recording."
+        );
         return;
       }
 
@@ -707,12 +741,40 @@ class OverlayApp {
     }
 
     if (this.shouldStopCountdown(runId)) {
+      this.runAsync(
+        this.discardPreparedRecordingSession(sessionPromise),
+        "Could not discard the prepared recording."
+      );
       return;
     }
 
-    this.isCountingDown = false;
-    this.recordingHud.clearCountdown();
-    await this.startRecording();
+    try {
+      this.recordingHud.clearCountdown();
+      this.recordingHud.showRecordingPending();
+      this.requestRender();
+      const preparation = await sessionPromise;
+      if (this.shouldStopCountdown(runId)) {
+        if (preparation.kind === "ready") {
+          preparation.session.stopTracks();
+        }
+
+        return;
+      }
+
+      if (preparation.kind === "failed") {
+        throw preparation.error;
+      }
+
+      this.isCountingDown = false;
+      await this.startRecording(preparation.session);
+    } catch (error) {
+      this.isCountingDown = false;
+      this.recordingHud.clearCountdown();
+      this.recordingHud.stopRecording();
+      this.syncToolbar();
+      await this.exitLiveCapture();
+      await this.reportError("Could not start the recording.", error);
+    }
   }
 
   private startSelectionDrag(point: Point, pointerId: number): void {
@@ -733,6 +795,7 @@ class OverlayApp {
 
   private syncToolbar(): void {
     const videoState = this.videoButtonState();
+    this.toolbar.classList.toggle("video-mode", this.captureMode === "video");
     this.screenshotButton.classList.toggle("active", this.captureMode === "screenshot");
     this.videoButton.classList.toggle("active", this.captureMode === "video");
     this.videoButton.classList.toggle("recording", this.isRecording || this.isCountingDown);

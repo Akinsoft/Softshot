@@ -32,13 +32,19 @@ body {
 
 .editor-titlebar {
   display: grid;
-  grid-template-columns: 44px auto 1fr auto;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(17, 18, 20, 0.98);
   -webkit-app-region: drag;
+}
+
+.editor-title-group {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
 
 .editor-title {
@@ -49,14 +55,19 @@ body {
 
 .editor-status {
   min-width: 80px;
+  margin-left: 12px;
   color: rgba(245, 247, 251, 0.72);
   font-size: 12px;
-  text-align: right;
 }
 
 .editor-actions {
   display: flex;
   gap: 6px;
+  justify-self: center;
+}
+
+.close-button {
+  justify-self: end;
 }
 
 .icon-button,
@@ -196,6 +207,7 @@ body {
   right: var(--timeline-gutter);
   left: var(--timeline-gutter);
   height: 34px;
+  cursor: pointer;
 }
 
 .timeline-base,

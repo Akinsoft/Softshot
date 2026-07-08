@@ -8,15 +8,10 @@
   </head>
   <body>
     <header class="editor-titlebar">
-      <button id="editor-close-button" class="icon-button close-button" type="button" title="Close" aria-label="Close">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M6 6 18 18" />
-          <path d="M18 6 6 18" />
-        </svg>
-      </button>
-
-      <span class="editor-title">Editor</span>
-      <span id="editor-status" class="editor-status" aria-live="polite"></span>
+      <div class="editor-title-group">
+        <span class="editor-title">Editor</span>
+        <span id="editor-status" class="editor-status" aria-live="polite"></span>
+      </div>
 
       <div class="editor-actions">
         <button id="editor-copy-button" class="icon-button" type="button" title="Copy" aria-label="Copy">
@@ -34,6 +29,13 @@
           </svg>
         </button>
       </div>
+
+      <button id="editor-close-button" class="icon-button close-button" type="button" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6 18 18" />
+          <path d="M18 6 6 18" />
+        </svg>
+      </button>
     </header>
 
     <main class="editor-content">
@@ -63,7 +65,7 @@
         </button>
 
         <div id="timeline" class="timeline" style="--playhead: 0%; --trim-start: 0%; --trim-end: 100%">
-          <div class="timeline-track" aria-hidden="true">
+          <div id="timeline-track" class="timeline-track" aria-hidden="true">
             <div class="timeline-base"></div>
             <div class="timeline-selection"></div>
             <div class="timeline-playhead"></div>

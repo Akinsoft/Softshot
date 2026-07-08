@@ -139,6 +139,10 @@ html.live-capture #annotation-canvas {
   cursor: default;
 }
 
+.toolbar.video-mode .screenshot-tool {
+  display: none;
+}
+
 .tool-button {
   position: relative;
   display: grid;

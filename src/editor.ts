@@ -16,6 +16,7 @@ const timelinePercent = 100;
 const trimToleranceSeconds = 0.04;
 const transientStatusDurationMs = 1400;
 const zeroSeconds = 0;
+const noPointerId = -1;
 
 type SoftshotGlobal = typeof globalThis & {
   softshot: SoftshotApi;
@@ -46,8 +47,10 @@ class VideoEditorApp {
   private readonly startRange = getRequiredElement("trim-start", HTMLInputElement);
   private readonly statusText = getRequiredElement("editor-status", HTMLSpanElement);
   private readonly timeline = getRequiredElement("timeline", HTMLDivElement);
+  private readonly timelineTrack = getRequiredElement("timeline-track", HTMLDivElement);
   private readonly totalTimeText = getRequiredElement("total-time", HTMLSpanElement);
   private readonly video = getRequiredElement("editor-video", HTMLVideoElement);
+  private activeTimelinePointerId = noPointerId;
   private bytes = new Uint8Array();
   private durationSeconds = zeroSeconds;
   private fps: VideoFps = videoFpsOptions.high;
@@ -83,6 +86,18 @@ class VideoEditorApp {
     this.endRange.addEventListener("input", (): void => {
       this.updateTrimEnd(Number(this.endRange.value));
     });
+    this.timelineTrack.addEventListener("pointerdown", (event): void => {
+      this.beginTimelineScrub(event);
+    });
+    this.timelineTrack.addEventListener("pointermove", (event): void => {
+      this.updateTimelineScrub(event);
+    });
+    this.timelineTrack.addEventListener("pointerup", (event): void => {
+      this.endTimelineScrub(event);
+    });
+    this.timelineTrack.addEventListener("pointercancel", (event): void => {
+      this.endTimelineScrub(event);
+    });
     this.video.addEventListener("timeupdate", (): void => {
       this.syncPlaybackTime();
     });
@@ -115,6 +130,17 @@ class VideoEditorApp {
     await getSoftshotApi().closeEditor();
   }
 
+  private beginTimelineScrub(event: PointerEvent): void {
+    if (this.isBusy) {
+      return;
+    }
+
+    this.activeTimelinePointerId = event.pointerId;
+    this.timelineTrack.setPointerCapture(event.pointerId);
+    this.seekToTimelinePoint(event.clientX);
+    event.preventDefault();
+  }
+
   private clearPreparationTimer(): void {
     if (this.preparationHandle === null) {
       return;
@@ -128,6 +154,10 @@ class VideoEditorApp {
     if (this.pendingPreparation?.promise === promise) {
       this.pendingPreparation = null;
     }
+  }
+
+  private clampedPlaybackTime(value: number): number {
+    return clamp(value, this.trimStartSeconds, this.trimEndSeconds);
   }
 
   private async copyVideo(): Promise<void> {
@@ -144,6 +174,17 @@ class VideoEditorApp {
 
     const preparedFile = await getSoftshotApi().prepareEditorVideoFile(outputBytes);
     return preparedVideoFromFile(key, preparedFile);
+  }
+
+  private endTimelineScrub(event: PointerEvent): void {
+    if (this.activeTimelinePointerId !== event.pointerId) {
+      return;
+    }
+
+    this.activeTimelinePointerId = noPointerId;
+    if (this.timelineTrack.hasPointerCapture(event.pointerId)) {
+      this.timelineTrack.releasePointerCapture(event.pointerId);
+    }
   }
 
   private async exportVideoForTrimRange(trimRange: TrimRange): Promise<Uint8Array> {
@@ -234,6 +275,17 @@ class VideoEditorApp {
     this.showStatus("Saved");
   }
 
+  private seekTo(value: number): void {
+    this.video.currentTime = this.clampedPlaybackTime(value);
+    this.syncPlaybackTime();
+  }
+
+  private seekToTimelinePoint(clientX: number): void {
+    const rect = this.timelineTrack.getBoundingClientRect();
+    const progress = clamp((clientX - rect.left) / rect.width, zeroSeconds, 1);
+    this.seekTo(progress * this.durationSeconds);
+  }
+
   private schedulePreparedVideoRefresh(): void {
     this.clearPreparationTimer();
     this.preparationHandle = setTimeout((): void => {
@@ -271,13 +323,17 @@ class VideoEditorApp {
   }
 
   private syncPlaybackTime(): void {
-    if (this.video.currentTime >= this.trimEndSeconds) {
-      this.video.pause();
-      this.video.currentTime = this.trimEndSeconds;
+    const currentTime = this.clampedPlaybackTime(this.video.currentTime);
+    if (currentTime !== this.video.currentTime) {
+      this.video.currentTime = currentTime;
     }
 
-    this.currentTimeText.textContent = formatTime(this.video.currentTime);
-    this.timeline.style.setProperty("--playhead", `${String(percentOf(this.video.currentTime, this.durationSeconds))}%`);
+    if (!this.video.paused && currentTime >= this.trimEndSeconds) {
+      this.video.pause();
+    }
+
+    this.currentTimeText.textContent = formatTime(currentTime);
+    this.timeline.style.setProperty("--playhead", `${String(percentOf(currentTime, this.durationSeconds))}%`);
     this.syncPlayButton();
   }
 
@@ -348,6 +404,14 @@ class VideoEditorApp {
     await this.video.play();
   }
 
+  private updateTimelineScrub(event: PointerEvent): void {
+    if (this.activeTimelinePointerId !== event.pointerId) {
+      return;
+    }
+
+    this.seekToTimelinePoint(event.clientX);
+  }
+
   private isFullTrimRange(trimRange: TrimRange): boolean {
     return trimRange.start <= trimToleranceSeconds
       && Math.abs(trimRange.end - this.durationSeconds) <= trimToleranceSeconds;
@@ -368,12 +432,8 @@ class VideoEditorApp {
     const minimumDuration = Math.min(minimumTrimDurationSeconds, this.durationSeconds);
     this.trimEndSeconds = clamp(value, this.trimStartSeconds + minimumDuration, this.durationSeconds);
 
-    if (this.video.currentTime > this.trimEndSeconds) {
-      this.video.currentTime = this.trimEndSeconds;
-    }
-
     this.syncTimeline();
-    this.syncPlaybackTime();
+    this.seekTo(this.video.currentTime);
     this.schedulePreparedVideoRefresh();
   }
 
@@ -381,12 +441,8 @@ class VideoEditorApp {
     const minimumDuration = Math.min(minimumTrimDurationSeconds, this.durationSeconds);
     this.trimStartSeconds = clamp(value, zeroSeconds, this.trimEndSeconds - minimumDuration);
 
-    if (this.video.currentTime < this.trimStartSeconds) {
-      this.video.currentTime = this.trimStartSeconds;
-    }
-
     this.syncTimeline();
-    this.syncPlaybackTime();
+    this.seekTo(this.video.currentTime);
     this.schedulePreparedVideoRefresh();
   }
 
