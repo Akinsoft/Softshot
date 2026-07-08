@@ -1,5 +1,12 @@
 import { getCanvasContext, getRequiredElement, loadImage } from "./overlay-dom.js";
 import { drawAnnotations, drawArrow, drawSelectionFrame } from "./overlay-drawing.js";
+import type {
+  Annotation,
+  DragState,
+  PenAnnotation,
+  Point,
+  VideoButtonState
+} from "./overlay-model.js";
 import {
   clampPointToRect,
   defaultCaptureMode,
@@ -16,16 +23,8 @@ import {
 } from "./overlay-model.js";
 import { RecordingHudController } from "./recording-hud.js";
 import { RecordingSession } from "./recording-session.js";
+import type { CaptureMode, OverlayBootstrap, Rect, SoftshotApi, VideoFps, VideoQuality } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
-import type {
-  Annotation,
-  ArrowAnnotation,
-  DragState,
-  PenAnnotation,
-  Point,
-  VideoButtonState
-} from "./overlay-model.js";
-import type { CaptureMode, OverlayBootstrap, Rect, VideoFps, VideoQuality } from "./shared.js";
 
 const canvasContextError = "Could not create the overlay drawing context.";
 const copyShortcutKey = "c";
@@ -39,7 +38,11 @@ const spaceKey = " ";
 const toolbarPulseDurationMs = 160;
 const videoButtonAnimationDurationMs = 220;
 const zeroPoint = { x: 0, y: 0 };
-const countdownValues = [3, 2, 1, 0] as const;
+const countdownFirstValue = 3;
+const countdownSecondValue = 2;
+const countdownThirdValue = 1;
+const countdownCompleteValue = 0;
+const countdownValues = [countdownFirstValue, countdownSecondValue, countdownThirdValue, countdownCompleteValue] as const;
 const countdownStepMs = 1000;
 const countdownZeroHoldMs = 500;
 const runIdIncrement = 1;
@@ -48,6 +51,10 @@ const videoButtonPopKeyframes = [
   { transform: "scale(1.08)" },
   { transform: "scale(1)" }
 ] satisfies Keyframe[];
+
+type SoftshotGlobal = typeof globalThis & {
+  softshot: SoftshotApi;
+};
 
 class OverlayApp {
   private readonly arrowButton = getRequiredElement("arrow-button", HTMLButtonElement);
@@ -78,19 +85,16 @@ class OverlayApp {
   private selectedColor = defaultPenColor;
   private selection: Rect | null = null;
 
-  async initialize(): Promise<void> {
+  private async reportAsyncError(task: Promise<void>, message: string): Promise<void> {
     try {
-      this.bootstrap = await window.softshot.getBootstrap();
-      await loadImage(this.screenImage, this.bootstrap.imageDataUrl, "Timed out loading the frozen screen image.");
-      this.resizeCanvas();
-      this.bindEvents();
-      this.syncToolbar();
-      await this.renderOnce();
-      await window.softshot.readyToShow();
+      await task;
     } catch (error) {
-      await this.reportError("Could not prepare the capture overlay.", error);
-      await this.closeOverlay();
+      await this.reportError(message, error);
     }
+  }
+
+  private runAsync(task: Promise<void>, message: string): void {
+    void this.reportAsyncError(task, message);
   }
 
   private bindEvents(): void {
@@ -108,24 +112,24 @@ class OverlayApp {
   private bindKeyboardEvents(): void {
     addEventListener("keydown", (event): void => {
       if (event.key === escapeKey) {
-        this.closeOverlay().catch((error: unknown): Promise<void> => this.reportError("Could not close the overlay.", error));
+        this.runAsync(this.closeOverlay(), "Could not close the overlay.");
         return;
       }
 
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === copyShortcutKey) {
         event.preventDefault();
-        this.copyScreenshot().catch((error: unknown): Promise<void> => this.reportError("Could not copy the screenshot.", error));
+        this.runAsync(this.copyScreenshot(), "Could not copy the screenshot.");
         return;
       }
 
       if (event.key === enterKey && this.captureMode === "screenshot") {
-        this.saveScreenshot().catch((error: unknown): Promise<void> => this.reportError("Could not save the screenshot.", error));
+        this.runAsync(this.saveScreenshot(), "Could not save the screenshot.");
         return;
       }
 
       if (event.key === spaceKey && this.captureMode === "video") {
         event.preventDefault();
-        this.toggleRecording().catch((error: unknown): Promise<void> => this.reportError("Could not toggle recording.", error));
+        this.runAsync(this.toggleRecording(), "Could not toggle recording.");
       }
     });
   }
@@ -199,7 +203,7 @@ class OverlayApp {
       this.settingsMenu.hidden = !this.settingsMenu.hidden;
     });
     this.closeButton.addEventListener("click", (): void => {
-      this.closeOverlay().catch((error: unknown): Promise<void> => this.reportError("Could not close the overlay.", error));
+      this.runAsync(this.closeOverlay(), "Could not close the overlay.");
     });
   }
 
@@ -231,7 +235,7 @@ class OverlayApp {
       return;
     }
 
-    await window.softshot.closeOverlay();
+    await getSoftshotApi().closeOverlay();
   }
 
   private async copyScreenshot(): Promise<void> {
@@ -240,7 +244,7 @@ class OverlayApp {
       return;
     }
 
-    await window.softshot.copyScreenshot(dataUrl);
+    await getSoftshotApi().copyScreenshot(dataUrl);
   }
 
   private drawCurrentArrow(): void {
@@ -268,7 +272,7 @@ class OverlayApp {
     this.isRecording = false;
     this.recordingHud.stopRecording();
     this.syncToolbar();
-    await window.softshot.saveVideo(bytes);
+    await getSoftshotApi().saveVideo(bytes);
   }
 
   private onPointerDown(event: PointerEvent): void {
@@ -329,7 +333,7 @@ class OverlayApp {
     this.syncToolbar();
 
     if (this.selection) {
-      this.saveScreenshot().catch((error: unknown): Promise<void> => this.reportError("Could not save the screenshot.", error));
+      this.runAsync(this.saveScreenshot(), "Could not save the screenshot.");
     }
   }
 
@@ -340,7 +344,7 @@ class OverlayApp {
       return;
     }
 
-    this.toggleRecording().catch((error: unknown): Promise<void> => this.reportError("Could not toggle recording.", error));
+    this.runAsync(this.toggleRecording(), "Could not toggle recording.");
   }
 
   private pulseToolbar(): void {
@@ -377,7 +381,7 @@ class OverlayApp {
     this.recordingHud.refresh();
   }
 
-  private renderOnce(): Promise<void> {
+  private async renderOnce(): Promise<void> {
     return new Promise((resolve) => {
       requestAnimationFrame((): void => {
         this.render();
@@ -433,9 +437,9 @@ class OverlayApp {
     return output.toDataURL("image/png");
   }
 
-  private reportError(message: string, error: unknown): Promise<void> {
+  private async reportError(message: string, error: unknown): Promise<void> {
     const detail = error instanceof Error ? `${message}\n\n${error.message}` : message;
-    return window.softshot.showError(detail);
+    await getSoftshotApi().showError(detail);
   }
 
   private requestRender(): void {
@@ -451,11 +455,11 @@ class OverlayApp {
   }
 
   private resizeCanvas(): void {
-    const ratio = window.devicePixelRatio || defaultDevicePixelRatio;
-    this.canvas.width = Math.round(window.innerWidth * ratio);
-    this.canvas.height = Math.round(window.innerHeight * ratio);
-    this.canvas.style.width = `${String(window.innerWidth)}px`;
-    this.canvas.style.height = `${String(window.innerHeight)}px`;
+    const ratio = devicePixelRatio === 0 ? defaultDevicePixelRatio : devicePixelRatio;
+    this.canvas.width = Math.round(innerWidth * ratio);
+    this.canvas.height = Math.round(innerHeight * ratio);
+    this.canvas.style.width = `${String(innerWidth)}px`;
+    this.canvas.style.height = `${String(innerHeight)}px`;
     this.context.setTransform(ratio, zeroPoint.x, zeroPoint.y, ratio, zeroPoint.x, zeroPoint.y);
   }
 
@@ -465,7 +469,7 @@ class OverlayApp {
       return;
     }
 
-    await window.softshot.saveScreenshot(dataUrl);
+    await getSoftshotApi().saveScreenshot(dataUrl);
   }
 
   private selectTool(tool: "arrow" | "pen"): void {
@@ -491,11 +495,9 @@ class OverlayApp {
   }
 
   private shouldIgnorePointerDown(event: PointerEvent): boolean {
-    return Boolean(
-      (event.target as HTMLElement).closest(".toolbar")
-      || this.isCountingDown
-      || (this.isRecording && this.activeTool === "select")
-    );
+    const isToolbarTarget = Boolean((event.target as HTMLElement).closest(".toolbar"));
+    const isRecordingSelectionLocked = this.isRecording && this.activeTool === "select";
+    return isToolbarTarget || this.isCountingDown || isRecordingSelectionLocked;
   }
 
   private startAnnotationDrag(point: Point, pointerId: number): void {
@@ -713,12 +715,31 @@ class OverlayApp {
   private shouldStopCountdown(runId: number): boolean {
     return !this.isCountingDown || runId !== this.countdownRunId;
   }
+
+  async initialize(): Promise<void> {
+    try {
+      this.bootstrap = await getSoftshotApi().getBootstrap();
+      await loadImage(this.screenImage, this.bootstrap.imageDataUrl, "Timed out loading the frozen screen image.");
+      this.resizeCanvas();
+      this.bindEvents();
+      this.syncToolbar();
+      await this.renderOnce();
+      await getSoftshotApi().readyToShow();
+    } catch (error) {
+      await this.reportError("Could not prepare the capture overlay.", error);
+      await this.closeOverlay();
+    }
+  }
 }
 
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function getSoftshotApi(): SoftshotApi {
+  return (globalThis as SoftshotGlobal).softshot;
 }
 
 const overlayApp = new OverlayApp();

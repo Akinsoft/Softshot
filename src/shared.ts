@@ -1,11 +1,16 @@
+const standardVideoFps = 30;
+const highVideoFps = 60;
+const lowVideoHeight = 720;
+const highVideoHeight = 1080;
+
 export const videoFpsOptions = {
-  standard: 30,
-  high: 60
+  standard: standardVideoFps,
+  high: highVideoFps
 } as const;
 
 export const videoQualityHeights = {
-  low: 720,
-  high: 1080
+  low: lowVideoHeight,
+  high: highVideoHeight
 } as const;
 
 export type CaptureMode = "screenshot" | "video";

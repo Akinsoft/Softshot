@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+
 import type { OverlayBootstrap, SaveResult, SoftshotApi } from "./shared";
 
 const api: SoftshotApi = {

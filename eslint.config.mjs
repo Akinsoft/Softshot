@@ -3,7 +3,6 @@ import js from "@eslint/js";
 import n from "eslint-plugin-n";
 import promise from "eslint-plugin-promise";
 import regexp from "eslint-plugin-regexp";
-import security from "eslint-plugin-security";
 import simpleImportSort from "eslint-plugin-simple-import-sort";
 import sonarjs from "eslint-plugin-sonarjs";
 import unicorn from "eslint-plugin-unicorn";
@@ -39,7 +38,6 @@ const pluginRules = strictRules(
   comments.configs.recommended,
   promise.configs["flat/recommended"],
   regexp.configs["flat/recommended"],
-  security.configs.recommended,
   sonarjs.configs.recommended,
   unicorn.configs["flat/recommended"],
 );
@@ -81,7 +79,6 @@ export default tseslint.config(
       n,
       promise,
       regexp,
-      security,
       "simple-import-sort": simpleImportSort,
       sonarjs,
       unicorn,
@@ -109,7 +106,7 @@ export default tseslint.config(
         {
           detectObjects: true,
           enforceConst: true,
-          ignore: [-1, 0, 1, 2],
+          ignore: [-1, 0, 1],
           ignoreArrayIndexes: true,
           ignoreDefaultValues: false,
           ignoreEnums: false,

@@ -1,11 +1,12 @@
+import type { Annotation, ArrowAnnotation, PenAnnotation, Point } from "./overlay-model.js";
 import type { Rect } from "./shared.js";
-import type { Annotation, ArrowAnnotation, Point, PenAnnotation } from "./overlay-model.js";
 
 const arrowHeadLengthPx = 16;
 const arrowHeadWidthPx = 10;
 const arrowLineWidthPx = 4;
 const halfTurnDivisor = 2;
 const penLineWidthPx = 4;
+const minimumPenPointCount = 2;
 const selectionDashGapPx = 7;
 const selectionDashLengthPx = 8;
 const selectionLineInsetPx = 1;
@@ -64,7 +65,7 @@ export function drawArrow(targetContext: CanvasRenderingContext2D, annotation: A
   targetContext.lineCap = "round";
   targetContext.lineJoin = "round";
   targetContext.stroke(shaftPath);
-  targetContext.fill(headPath);
+  fillCanvasPath(targetContext, headPath);
   targetContext.restore();
 }
 
@@ -109,7 +110,7 @@ function arrowHeadSide(base: Point, angle: number): Point {
 }
 
 function drawPen(targetContext: CanvasRenderingContext2D, annotation: PenAnnotation): void {
-  if (annotation.points.length < penLineWidthPx / arrowLineWidthPx + 1) {
+  if (annotation.points.length < minimumPenPointCount) {
     return;
   }
 
@@ -127,4 +128,8 @@ function drawPen(targetContext: CanvasRenderingContext2D, annotation: PenAnnotat
   targetContext.lineJoin = "round";
   targetContext.stroke(path);
   targetContext.restore();
+}
+
+function fillCanvasPath(targetContext: CanvasRenderingContext2D, path: Path2D): void {
+  targetContext.fill(path, "nonzero");
 }

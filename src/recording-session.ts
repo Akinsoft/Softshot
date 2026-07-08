@@ -1,7 +1,7 @@
 import { drawAnnotations } from "./overlay-drawing.js";
-import { videoFpsOptions, videoQualityHeights } from "./shared.js";
 import type { Annotation } from "./overlay-model.js";
 import type { Rect, VideoFps, VideoQuality } from "./shared.js";
+import { videoFpsOptions, videoQualityHeights } from "./shared.js";
 
 const highQualityBitrate = 10_000_000;
 const recordingTimesliceMs = 500;
@@ -19,34 +19,6 @@ export interface RecordingSessionConfig {
 }
 
 export class RecordingSession {
-  private animationHandle: number | null = null;
-  private readonly chunks: Blob[] = [];
-  private readonly crop: Rect;
-  private readonly outputCanvas: HTMLCanvasElement;
-  private readonly outputContext: CanvasRenderingContext2D;
-  private readonly outputStream: MediaStream;
-  private readonly recorder: MediaRecorder;
-  private readonly sourceStream: MediaStream;
-  private readonly sourceVideo: HTMLVideoElement;
-
-  private constructor(config: {
-    crop: Rect;
-    outputCanvas: HTMLCanvasElement;
-    outputContext: CanvasRenderingContext2D;
-    outputStream: MediaStream;
-    recorder: MediaRecorder;
-    sourceStream: MediaStream;
-    sourceVideo: HTMLVideoElement;
-  }) {
-    this.crop = config.crop;
-    this.outputCanvas = config.outputCanvas;
-    this.outputContext = config.outputContext;
-    this.outputStream = config.outputStream;
-    this.recorder = config.recorder;
-    this.sourceStream = config.sourceStream;
-    this.sourceVideo = config.sourceVideo;
-  }
-
   static async create(config: RecordingSessionConfig): Promise<RecordingSession> {
     const sourceStream = await getDesktopStream(config.sourceId, config.fps);
     const sourceVideo = await createSourceVideo(sourceStream);
@@ -78,37 +50,32 @@ export class RecordingSession {
     return session;
   }
 
-  async stop(): Promise<Uint8Array> {
-    if (this.recorder.state === "inactive") {
-      return new Uint8Array();
-    }
+  private animationHandle: number | null = null;
+  private readonly chunks: Blob[] = [];
+  private readonly crop: Rect;
+  private readonly outputCanvas: HTMLCanvasElement;
+  private readonly outputContext: CanvasRenderingContext2D;
+  private readonly outputStream: MediaStream;
+  private readonly recorder: MediaRecorder;
+  private readonly sourceStream: MediaStream;
+  private readonly sourceVideo: HTMLVideoElement;
 
-    const stopped = new Promise<Uint8Array>((resolve) => {
-      this.recorder.addEventListener(
-        "stop",
-        () => {
-          resolve(this.recordedBytes());
-        },
-        { once: true }
-      );
-    });
-    this.recorder.stop();
-    return await stopped;
-  }
-
-  start(): void {
-    this.drawFrame();
-    this.recorder.start(recordingTimesliceMs);
-  }
-
-  stopTracks(): void {
-    if (this.animationHandle !== null) {
-      cancelAnimationFrame(this.animationHandle);
-      this.animationHandle = null;
-    }
-
-    stopTracks(this.sourceStream);
-    stopTracks(this.outputStream);
+  private constructor(config: {
+    crop: Rect;
+    outputCanvas: HTMLCanvasElement;
+    outputContext: CanvasRenderingContext2D;
+    outputStream: MediaStream;
+    recorder: MediaRecorder;
+    sourceStream: MediaStream;
+    sourceVideo: HTMLVideoElement;
+  }) {
+    this.crop = config.crop;
+    this.outputCanvas = config.outputCanvas;
+    this.outputContext = config.outputContext;
+    this.outputStream = config.outputStream;
+    this.recorder = config.recorder;
+    this.sourceStream = config.sourceStream;
+    this.sourceVideo = config.sourceVideo;
   }
 
   private connectRecorder(annotations: Annotation[]): void {
@@ -158,6 +125,39 @@ export class RecordingSession {
   private async recordedBytes(): Promise<Uint8Array> {
     const blob = new Blob(this.chunks, { type: supportedVideoMimeType() });
     return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  async stop(): Promise<Uint8Array> {
+    if (this.recorder.state === "inactive") {
+      return new Uint8Array();
+    }
+
+    const stopped = new Promise<Uint8Array>((resolve) => {
+      this.recorder.addEventListener(
+        "stop",
+        () => {
+          resolve(this.recordedBytes());
+        },
+        { once: true }
+      );
+    });
+    this.recorder.stop();
+    return await stopped;
+  }
+
+  start(): void {
+    this.drawFrame();
+    this.recorder.start(recordingTimesliceMs);
+  }
+
+  stopTracks(): void {
+    if (this.animationHandle !== null) {
+      cancelAnimationFrame(this.animationHandle);
+      this.animationHandle = null;
+    }
+
+    stopTracks(this.sourceStream);
+    stopTracks(this.outputStream);
   }
 }
 
