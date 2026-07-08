@@ -23,11 +23,23 @@
         </svg>
       </button>
 
-      <button id="video-button" class="tool-button" type="button" title="Video" aria-label="Video">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="3" y="6" width="12" height="12" rx="2.5" />
-          <path d="m15.5 10 5-3v10l-5-3Z" />
-        </svg>
+      <button id="video-button" class="tool-button video-button" type="button" title="Video" aria-label="Video" data-state="video">
+        <span class="video-icon active" data-video-icon="video" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="3" y="6" width="12" height="12" rx="2.5" />
+            <path d="m15.5 10 5-3v10l-5-3Z" />
+          </svg>
+        </span>
+        <span class="video-icon" data-video-icon="start" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M8 5.5v13l10-6.5Z" />
+          </svg>
+        </span>
+        <span class="video-icon" data-video-icon="stop" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="7" y="7" width="10" height="10" rx="1.8" />
+          </svg>
+        </span>
       </button>
 
       <button id="pen-button" class="tool-button with-swatch" type="button" title="Pen" aria-label="Pen">

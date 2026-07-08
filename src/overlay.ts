@@ -57,24 +57,6 @@ const settingsMenu = element<HTMLDivElement>("settings-menu");
 const recordingHud = new RecordingHudController();
 
 const context = canvasContext(canvas, "Could not create the overlay drawing context.");
-const videoButtonIcons: Record<VideoButtonState, string> = {
-  video: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="3" y="6" width="12" height="12" rx="2.5"></rect>
-      <path d="m15.5 10 5-3v10l-5-3Z"></path>
-    </svg>
-  `,
-  start: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 5.5v13l10-6.5Z"></path>
-    </svg>
-  `,
-  stop: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="7" y="7" width="10" height="10" rx="1.8"></rect>
-    </svg>
-  `
-};
 
 let bootstrap: OverlayBootstrap | null = null;
 let captureMode: CaptureMode = "screenshot";
@@ -763,11 +745,7 @@ function syncToolbar(): void {
   videoButton.classList.toggle("recording", isRecording || isCountingDown);
   videoButton.title = videoButtonTitle(videoState);
   videoButton.setAttribute("aria-label", videoButton.title);
-  videoButton.dataset.state = videoState;
-  if (videoButton.dataset.renderedState !== videoState) {
-    videoButton.innerHTML = videoButtonIcons[videoState];
-    videoButton.dataset.renderedState = videoState;
-  }
+  setVideoButtonState(videoState);
   penButton.classList.toggle("active", activeTool === "pen");
   arrowButton.classList.toggle("active", activeTool === "arrow");
 
@@ -783,6 +761,21 @@ function syncToolbar(): void {
 
   for (const button of settingsMenu.querySelectorAll<HTMLButtonElement>("[data-fps]")) {
     button.classList.toggle("selected", Number(button.dataset.fps) === fps);
+  }
+}
+
+function setVideoButtonState(state: VideoButtonState): void {
+  const previousState = videoButton.dataset.state;
+  videoButton.dataset.state = state;
+
+  for (const icon of videoButton.querySelectorAll<HTMLElement>("[data-video-icon]")) {
+    icon.classList.toggle("active", icon.dataset.videoIcon === state);
+  }
+
+  if (previousState && previousState !== state) {
+    videoButton.classList.remove("state-changing");
+    void videoButton.offsetWidth;
+    videoButton.classList.add("state-changing");
   }
 }
 
