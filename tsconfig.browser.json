@@ -5,6 +5,7 @@
   },
   "include": [
     "src/global.d.ts",
+    "src/desktop-capture.ts",
     "src/editor.ts",
     "src/editor-*.ts",
     "src/overlay.ts",

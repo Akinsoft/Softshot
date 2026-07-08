@@ -1,15 +1,17 @@
 import { exportTrimmedVideo, type TrimRange } from "./editor-export.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { EditorBootstrap, SoftshotApi, VideoFps } from "./shared.js";
+import type { EditorBootstrap, PreparedVideoFile, SoftshotApi, VideoFps } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
 
 const defaultMimeType = "video/webm";
 const minimumTrimDurationSeconds = 0.05;
+const prepareDebounceMs = 350;
 const rangeStepSeconds = 0.01;
 const secondsPerMinute = 60;
 const secondsTextLength = 5;
 const timePartLength = 2;
 const timePrecisionDigits = 2;
+const trimKeyPrecisionDigits = 3;
 const timelinePercent = 100;
 const trimToleranceSeconds = 0.04;
 const transientStatusDurationMs = 1400;
@@ -18,6 +20,21 @@ const zeroSeconds = 0;
 type SoftshotGlobal = typeof globalThis & {
   softshot: SoftshotApi;
 };
+
+interface PreparedVideo {
+  filePath: string;
+  key: string;
+}
+
+interface PendingPreparation {
+  key: string;
+  promise: Promise<PreparedVideo>;
+}
+
+interface PreparationFailure {
+  error: unknown;
+  key: string;
+}
 
 class VideoEditorApp {
   private readonly closeButton = getRequiredElement("editor-close-button", HTMLButtonElement);
@@ -37,6 +54,12 @@ class VideoEditorApp {
   private isBusy = false;
   private mimeType = defaultMimeType;
   private objectUrl: string | null = null;
+  private pendingPreparation: PendingPreparation | null = null;
+  private playbackFrameHandle: number | null = null;
+  private preparationFailure: PreparationFailure | null = null;
+  private preparationHandle: ReturnType<typeof setTimeout> | null = null;
+  private preparationRunId = 0;
+  private preparedVideo: PreparedVideo | null = null;
   private statusHandle: ReturnType<typeof setTimeout> | null = null;
   private trimEndSeconds = zeroSeconds;
   private trimStartSeconds = zeroSeconds;
@@ -64,9 +87,11 @@ class VideoEditorApp {
       this.syncPlaybackTime();
     });
     this.video.addEventListener("pause", (): void => {
+      this.stopPlaybackFrameSync();
       this.syncPlayButton();
     });
     this.video.addEventListener("play", (): void => {
+      this.startPlaybackFrameSync();
       this.syncPlayButton();
     });
   }
@@ -84,31 +109,49 @@ class VideoEditorApp {
   }
 
   private async closeEditor(): Promise<void> {
+    this.clearPreparationTimer();
+    this.stopPlaybackFrameSync();
     this.releaseObjectUrl();
     await getSoftshotApi().closeEditor();
   }
 
-  private async copyVideo(): Promise<void> {
-    const outputBytes = await this.exportCurrentVideo();
-    if (outputBytes.byteLength === 0) {
+  private clearPreparationTimer(): void {
+    if (this.preparationHandle === null) {
       return;
     }
 
-    await getSoftshotApi().copyEditorVideo(outputBytes);
+    clearTimeout(this.preparationHandle);
+    this.preparationHandle = null;
+  }
+
+  private clearPendingPreparation(promise: Promise<PreparedVideo>): void {
+    if (this.pendingPreparation?.promise === promise) {
+      this.pendingPreparation = null;
+    }
+  }
+
+  private async copyVideo(): Promise<void> {
+    const preparedVideo = await this.preparedVideoForCurrentTrim(true);
+    await getSoftshotApi().copyPreparedEditorVideo(preparedVideo.filePath);
     this.showStatus("Copied");
   }
 
-  private async exportCurrentVideo(): Promise<Uint8Array> {
-    if (this.isFullTrimRange()) {
+  private async createPreparedVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
+    const outputBytes = await this.exportVideoForTrimRange(trimRange);
+    if (outputBytes.byteLength === 0) {
+      throw new Error("Cannot prepare an empty recording.");
+    }
+
+    const preparedFile = await getSoftshotApi().prepareEditorVideoFile(outputBytes);
+    return preparedVideoFromFile(key, preparedFile);
+  }
+
+  private async exportVideoForTrimRange(trimRange: TrimRange): Promise<Uint8Array> {
+    if (this.isFullTrimRange(trimRange)) {
       return this.bytes;
     }
 
-    this.setBusy(true);
-    try {
-      return await exportTrimmedVideo(this.bytes, this.mimeType, this.fps, this.durationSeconds, this.trimRange());
-    } finally {
-      this.setBusy(false);
-    }
+    return await exportTrimmedVideo(this.bytes, this.mimeType, this.fps, this.durationSeconds, trimRange);
   }
 
   private loadRecording(bootstrap: EditorBootstrap): void {
@@ -129,21 +172,74 @@ class VideoEditorApp {
     this.objectUrl = null;
   }
 
+  private async prepareVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
+    this.preparationFailure = null;
+    const runId = this.preparationRunId + 1;
+    this.preparationRunId = runId;
+    const promise = this.createPreparedVideo(key, trimRange);
+    this.pendingPreparation = { key, promise };
+
+    try {
+      const preparedVideo = await promise;
+      if (runId === this.preparationRunId && key === this.trimKey()) {
+        this.preparedVideo = preparedVideo;
+      }
+
+      return preparedVideo;
+    } finally {
+      this.clearPendingPreparation(promise);
+    }
+  }
+
+  private async preparedVideoForCurrentTrim(shouldShowBusy: boolean): Promise<PreparedVideo> {
+    const key = this.trimKey();
+    if (this.preparedVideo?.key === key) {
+      return this.preparedVideo;
+    }
+
+    if (this.preparationFailure?.key === key) {
+      this.preparationFailure = null;
+    }
+
+    if (shouldShowBusy) {
+      this.setBusy(true);
+    }
+
+    try {
+      if (this.pendingPreparation?.key === key) {
+        return await this.pendingPreparation.promise;
+      }
+
+      return await this.prepareVideo(key, this.trimRange());
+    } finally {
+      if (shouldShowBusy) {
+        this.setBusy(false);
+      }
+    }
+  }
+
   private async reportError(message: string, error: unknown): Promise<void> {
     const detail = error instanceof Error ? `${message}\n\n${error.message}` : message;
     await getSoftshotApi().showError(detail);
   }
 
   private async saveVideo(): Promise<void> {
-    const outputBytes = await this.exportCurrentVideo();
-    if (outputBytes.byteLength === 0) {
+    const result = await getSoftshotApi().chooseEditorVideoSavePath();
+    if (!result.filePath) {
       return;
     }
 
-    const result = await getSoftshotApi().saveEditorVideo(outputBytes);
-    if (result.filePath) {
-      this.showStatus("Saved");
-    }
+    const preparedVideo = await this.preparedVideoForCurrentTrim(true);
+    await getSoftshotApi().savePreparedEditorVideo(preparedVideo.filePath, result.filePath);
+    this.showStatus("Saved");
+  }
+
+  private schedulePreparedVideoRefresh(): void {
+    this.clearPreparationTimer();
+    this.preparationHandle = setTimeout((): void => {
+      this.preparationHandle = null;
+      this.startBackgroundPreparation(this.trimKey(), this.trimRange());
+    }, prepareDebounceMs);
   }
 
   private setBusy(isBusy: boolean): void {
@@ -181,6 +277,7 @@ class VideoEditorApp {
     }
 
     this.currentTimeText.textContent = formatTime(this.video.currentTime);
+    this.timeline.style.setProperty("--playhead", `${String(percentOf(this.video.currentTime, this.durationSeconds))}%`);
     this.syncPlayButton();
   }
 
@@ -196,6 +293,42 @@ class VideoEditorApp {
     const endPercent = percentOf(this.trimEndSeconds, this.durationSeconds);
     this.timeline.style.setProperty("--trim-start", `${String(startPercent)}%`);
     this.timeline.style.setProperty("--trim-end", `${String(endPercent)}%`);
+  }
+
+  private startBackgroundPreparation(key: string, trimRange: TrimRange): void {
+    void this.prepareVideo(key, trimRange).catch((error: unknown): void => {
+      if (key === this.trimKey()) {
+        this.preparationFailure = { error, key };
+      }
+    });
+  }
+
+  private startPlaybackFrameSync(): void {
+    if (this.playbackFrameHandle !== null) {
+      return;
+    }
+
+    const syncFrame = (): void => {
+      this.syncPlaybackTime();
+      if (this.video.paused) {
+        this.playbackFrameHandle = null;
+        return;
+      }
+
+      this.playbackFrameHandle = requestAnimationFrame(syncFrame);
+    };
+
+    this.playbackFrameHandle = requestAnimationFrame(syncFrame);
+  }
+
+  private stopPlaybackFrameSync(): void {
+    if (this.playbackFrameHandle === null) {
+      return;
+    }
+
+    cancelAnimationFrame(this.playbackFrameHandle);
+    this.playbackFrameHandle = null;
+    this.syncPlaybackTime();
   }
 
   private async togglePlayback(): Promise<void> {
@@ -215,9 +348,9 @@ class VideoEditorApp {
     await this.video.play();
   }
 
-  private isFullTrimRange(): boolean {
-    return this.trimStartSeconds <= trimToleranceSeconds
-      && Math.abs(this.trimEndSeconds - this.durationSeconds) <= trimToleranceSeconds;
+  private isFullTrimRange(trimRange: TrimRange): boolean {
+    return trimRange.start <= trimToleranceSeconds
+      && Math.abs(trimRange.end - this.durationSeconds) <= trimToleranceSeconds;
   }
 
   private trimRange(): TrimRange {
@@ -225,6 +358,10 @@ class VideoEditorApp {
       end: this.trimEndSeconds,
       start: this.trimStartSeconds
     };
+  }
+
+  private trimKey(): string {
+    return trimKeyFromRange(this.trimRange());
   }
 
   private updateTrimEnd(value: number): void {
@@ -237,6 +374,7 @@ class VideoEditorApp {
 
     this.syncTimeline();
     this.syncPlaybackTime();
+    this.schedulePreparedVideoRefresh();
   }
 
   private updateTrimStart(value: number): void {
@@ -249,6 +387,7 @@ class VideoEditorApp {
 
     this.syncTimeline();
     this.syncPlaybackTime();
+    this.schedulePreparedVideoRefresh();
   }
 
   async initialize(): Promise<void> {
@@ -261,11 +400,19 @@ class VideoEditorApp {
       this.totalTimeText.textContent = formatTime(this.durationSeconds);
       this.syncTimeline();
       this.syncPlaybackTime();
+      this.schedulePreparedVideoRefresh();
     } catch (error) {
       await this.reportError("Could not open the editor.", error);
       await this.closeEditor();
     }
   }
+}
+
+function preparedVideoFromFile(key: string, file: PreparedVideoFile): PreparedVideo {
+  return {
+    filePath: file.filePath,
+    key
+  };
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -297,6 +444,10 @@ function positiveDuration(value: number): number {
   }
 
   return value;
+}
+
+function trimKeyFromRange(trimRange: TrimRange): string {
+  return `${trimRange.start.toFixed(trimKeyPrecisionDigits)}:${trimRange.end.toFixed(trimKeyPrecisionDigits)}`;
 }
 
 async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {

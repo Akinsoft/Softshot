@@ -26,7 +26,6 @@ export interface Rect {
 }
 
 export interface OverlayBootstrap {
-  sourceId: string;
   imageDataUrl: string;
   displayBounds: Rect;
   scaleFactor: number;
@@ -47,14 +46,20 @@ export interface SaveDialogResult {
   filePath: string | null;
 }
 
+export interface PreparedVideoFile {
+  filePath: string;
+}
+
 export interface SoftshotApi {
   getBootstrap(): Promise<OverlayBootstrap>;
   saveScreenshot(dataUrl: string): Promise<SaveResult>;
   copyScreenshot(dataUrl: string): Promise<void>;
   openVideoEditor(bytes: Uint8Array, fps: VideoFps, durationSeconds: number, mimeType: string): Promise<void>;
   getEditorBootstrap(): Promise<EditorBootstrap>;
-  saveEditorVideo(bytes: Uint8Array): Promise<SaveDialogResult>;
-  copyEditorVideo(bytes: Uint8Array): Promise<void>;
+  chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
+  prepareEditorVideoFile(bytes: Uint8Array): Promise<PreparedVideoFile>;
+  savePreparedEditorVideo(preparedFilePath: string, targetFilePath: string): Promise<SaveResult>;
+  copyPreparedEditorVideo(filePath: string): Promise<void>;
   closeEditor(): Promise<void>;
   readyToShow(): Promise<void>;
   closeOverlay(): Promise<void>;

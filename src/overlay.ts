@@ -576,8 +576,7 @@ class OverlayApp {
         annotations: this.annotations,
         crop: this.selection,
         fps: this.fps,
-        quality: this.quality,
-        sourceId: this.bootstrap.sourceId
+        quality: this.quality
       });
       this.recordingSession.start();
       this.recordingHud.startRecordingTimer();

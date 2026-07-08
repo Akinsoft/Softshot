@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { EditorBootstrap, OverlayBootstrap, SaveDialogResult, SaveResult, SoftshotApi, VideoFps } from "./shared";
+import type { EditorBootstrap, OverlayBootstrap, PreparedVideoFile, SaveDialogResult, SaveResult, SoftshotApi, VideoFps } from "./shared";
 
 const api: SoftshotApi = {
   getBootstrap: async () => ipcRenderer.invoke("overlay:get-bootstrap") as Promise<OverlayBootstrap>,
@@ -10,9 +10,12 @@ const api: SoftshotApi = {
   openVideoEditor: async (bytes: Uint8Array, fps: VideoFps, durationSeconds: number, mimeType: string) =>
     ipcRenderer.invoke("recording:open-editor", bytes, fps, durationSeconds, mimeType) as Promise<void>,
   getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
-  saveEditorVideo: async (bytes: Uint8Array) =>
-    ipcRenderer.invoke("editor:save-video", bytes) as Promise<SaveDialogResult>,
-  copyEditorVideo: async (bytes: Uint8Array) => ipcRenderer.invoke("editor:copy-video", bytes) as Promise<void>,
+  chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
+  prepareEditorVideoFile: async (bytes: Uint8Array) =>
+    ipcRenderer.invoke("editor:prepare-video-file", bytes) as Promise<PreparedVideoFile>,
+  savePreparedEditorVideo: async (preparedFilePath: string, targetFilePath: string) =>
+    ipcRenderer.invoke("editor:save-prepared-video", preparedFilePath, targetFilePath) as Promise<SaveResult>,
+  copyPreparedEditorVideo: async (filePath: string) => ipcRenderer.invoke("editor:copy-prepared-video", filePath) as Promise<void>,
   closeEditor: async () => ipcRenderer.invoke("editor:close") as Promise<void>,
   readyToShow: async () => ipcRenderer.invoke("overlay:ready-to-show") as Promise<void>,
   closeOverlay: async () => ipcRenderer.invoke("overlay:close") as Promise<void>,

@@ -62,9 +62,12 @@
           </span>
         </button>
 
-        <div id="timeline" class="timeline" style="--trim-start: 0%; --trim-end: 100%">
-          <div class="timeline-base"></div>
-          <div class="timeline-selection"></div>
+        <div id="timeline" class="timeline" style="--playhead: 0%; --trim-start: 0%; --trim-end: 100%">
+          <div class="timeline-track" aria-hidden="true">
+            <div class="timeline-base"></div>
+            <div class="timeline-selection"></div>
+            <div class="timeline-playhead"></div>
+          </div>
           <input id="trim-start" class="trim-range trim-start" type="range" min="0" value="0" aria-label="Trim start" />
           <input id="trim-end" class="trim-range trim-end" type="range" min="0" value="0" aria-label="Trim end" />
         </div>

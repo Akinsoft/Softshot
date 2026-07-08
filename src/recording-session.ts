@@ -1,3 +1,4 @@
+import { getCursorlessDesktopStream, stopTracks } from "./desktop-capture.js";
 import { drawAnnotations } from "./overlay-drawing.js";
 import type { Annotation } from "./overlay-model.js";
 import type { Rect, VideoFps, VideoQuality } from "./shared.js";
@@ -16,7 +17,6 @@ export interface RecordingSessionConfig {
   crop: Rect;
   fps: VideoFps;
   quality: VideoQuality;
-  sourceId: string;
 }
 
 export interface RecordingResult {
@@ -25,20 +25,9 @@ export interface RecordingResult {
   mimeType: string;
 }
 
-interface DesktopCaptureMandatoryConstraints {
-  chromeMediaSource: "desktop";
-  chromeMediaSourceId: string;
-  maxFrameRate: VideoFps;
-}
-
-interface DesktopCaptureVideoConstraints extends MediaTrackConstraints {
-  cursor: "never";
-  mandatory: DesktopCaptureMandatoryConstraints;
-}
-
 export class RecordingSession {
   static async create(config: RecordingSessionConfig): Promise<RecordingSession> {
-    const sourceStream = await getDesktopStream(config.sourceId, config.fps);
+    const sourceStream = await getCursorlessDesktopStream(config.fps);
     const sourceVideo = await createSourceVideo(sourceStream);
     const outputSize = videoOutputSize(config.crop, config.quality);
     const outputCanvas = document.createElement("canvas");
@@ -211,28 +200,6 @@ async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoEl
   await sourceVideo.play();
   await waitForVideoMetadata(sourceVideo);
   return sourceVideo;
-}
-
-async function getDesktopStream(sourceId: string, fps: VideoFps): Promise<MediaStream> {
-  const videoConstraints: DesktopCaptureVideoConstraints = {
-    cursor: "never",
-    mandatory: {
-      chromeMediaSource: "desktop",
-      chromeMediaSourceId: sourceId,
-      maxFrameRate: fps
-    }
-  };
-
-  return await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: videoConstraints
-  });
-}
-
-function stopTracks(stream: MediaStream): void {
-  for (const track of stream.getTracks()) {
-    track.stop();
-  }
 }
 
 function supportedVideoMimeType(): string {

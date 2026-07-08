@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -16,11 +16,13 @@ import {
   nativeImage,
   Notification,
   screen,
+  session,
   shell,
-  Tray
+  Tray,
+  webContents as electronWebContents
 } from "electron";
 
-import type { EditorBootstrap, OverlayBootstrap, SaveDialogResult, SaveResult, VideoFps } from "./shared";
+import type { EditorBootstrap, OverlayBootstrap, PreparedVideoFile, SaveDialogResult, SaveResult, VideoFps } from "./shared";
 
 const appName = "Softshot";
 const primaryShortcut = "PrintScreen";
@@ -31,6 +33,8 @@ const timestampPartWidth = 2;
 const pngDataUrlPrefix = "data:image/png;base64,";
 const clipboardFileEnvironmentName = "SOFTSHOT_CLIPBOARD_FILE";
 const clipboardFolderName = "clipboard";
+const frozenCaptureFileEnvironmentName = "SOFTSHOT_FROZEN_CAPTURE_FILE";
+const perMonitorDpiAwareV2 = -4;
 const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 560;
 const editorWindowMinWidthPx = 720;
@@ -45,6 +49,12 @@ class SoftshotApp {
   private activeOverlay: BrowserWindow | null = null;
 
   private readonly editorDataByWebContents = new Map<number, EditorBootstrap>();
+
+  private readonly editorSavePathsByWebContents = new Map<number, Set<string>>();
+
+  private readonly editorTempFilesByWebContents = new Map<number, Set<string>>();
+
+  private readonly displayMediaDisplayIdsByWebContents = new Map<number, number>();
 
   private isPrintScreenUnavailable = false;
 
@@ -66,6 +76,34 @@ class SoftshotApp {
     }
 
     window.close();
+  }
+
+  private assertEditorSavePath(webContentsId: number, filePath: string): void {
+    if (this.editorSavePathsByWebContents.get(webContentsId)?.has(filePath)) {
+      return;
+    }
+
+    throw new Error("The save path was not selected by this editor.");
+  }
+
+  private assertEditorTempFile(webContentsId: number, filePath: string): void {
+    if (this.editorTempFilesByWebContents.get(webContentsId)?.has(filePath)) {
+      return;
+    }
+
+    throw new Error("The prepared recording file does not belong to this editor.");
+  }
+
+  private registerEditorSavePath(webContentsId: number, filePath: string): void {
+    const savePaths = this.editorSavePathsByWebContents.get(webContentsId) ?? new Set<string>();
+    savePaths.add(filePath);
+    this.editorSavePathsByWebContents.set(webContentsId, savePaths);
+  }
+
+  private registerEditorTempFile(webContentsId: number, filePath: string): void {
+    const temporaryFiles = this.editorTempFilesByWebContents.get(webContentsId) ?? new Set<string>();
+    temporaryFiles.add(filePath);
+    this.editorTempFilesByWebContents.set(webContentsId, temporaryFiles);
   }
 
   private createOverlayWindow(display: Display): BrowserWindow {
@@ -149,31 +187,78 @@ class SoftshotApp {
   }
 
   private async getDesktopSourceForDisplay(
-    displayId: number,
-    width: number,
-    height: number,
-    scaleFactor: number
+    displayId: number
   ): Promise<Electron.DesktopCapturerSource> {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
       fetchWindowIcons: false,
       thumbnailSize: {
-        width: Math.round(width * scaleFactor),
-        height: Math.round(height * scaleFactor)
+        width: 0,
+        height: 0
       }
     });
 
     const source = sources.find((candidate) => candidate.display_id === String(displayId));
     if (source) {
-      return this.requireUsableThumbnail(source);
+      return source;
     }
 
     if (sources.length === 1) {
-      return this.requireUsableThumbnail(sources[0]);
+      return sources[0];
     }
 
     const availableIds = sources.map((candidate) => candidate.display_id || "(empty)").join(", ");
     throw new Error(`Could not match display ${String(displayId)} to a screen source. Available display ids: ${availableIds}.`);
+  }
+
+  private async captureFrozenScreenDataUrl(): Promise<string> {
+    const targetDirectory = path.join(app.getPath("temp"), appName);
+    await mkdir(targetDirectory, { recursive: true });
+
+    const filePath = path.join(targetDirectory, `${appName} frozen ${randomUUID()}.png`);
+    try {
+      await captureScreenWithoutCursor(filePath);
+      const data = await readFile(filePath);
+      return `${pngDataUrlPrefix}${data.toString("base64")}`;
+    } finally {
+      await rm(filePath, { force: true });
+    }
+  }
+
+  private getDisplayMediaDisplayId(request: Electron.DisplayMediaRequestHandlerHandlerRequest): number {
+    if (!request.videoRequested) {
+      throw new Error("Softshot display capture requires a video stream.");
+    }
+
+    if (!request.frame) {
+      throw new Error("Softshot could not identify the display capture frame.");
+    }
+
+    const requestWebContents = electronWebContents.fromFrame(request.frame);
+    if (!requestWebContents) {
+      throw new Error("Softshot could not identify the display capture window.");
+    }
+
+    const displayId = this.displayMediaDisplayIdsByWebContents.get(requestWebContents.id);
+    if (typeof displayId !== "number") {
+      throw new TypeError("Softshot received an unexpected display capture request.");
+    }
+
+    return displayId;
+  }
+
+  private async handleDisplayMediaRequest(
+    request: Electron.DisplayMediaRequestHandlerHandlerRequest,
+    callback: (streams: Electron.Streams) => void
+  ): Promise<void> {
+    try {
+      const displayId = this.getDisplayMediaDisplayId(request);
+      const source = await this.getDesktopSourceForDisplay(displayId);
+      callback({ video: source });
+    } catch (error) {
+      this.debugLog(`display media request failed: ${errorMessage(error)}`);
+      callback({});
+    }
   }
 
   private getOverlayData(event: Electron.IpcMainInvokeEvent): OverlayBootstrap {
@@ -199,6 +284,7 @@ class SoftshotApp {
     try {
       await app.whenReady();
       app.setName(appName);
+      this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
       this.registerCaptureShortcuts();
       this.tray = this.createTray();
@@ -225,6 +311,33 @@ class SoftshotApp {
     }).show();
   }
 
+  private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
+    const targetDirectory = path.join(app.getPath("videos"), appName);
+    await mkdir(targetDirectory, { recursive: true });
+
+    const parentWindow = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.SaveDialogOptions = {
+      defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.webm`),
+      filters: [
+        {
+          name: "WebM video",
+          extensions: ["webm"]
+        }
+      ],
+      title: "Save recording"
+    };
+    const result = parentWindow && !parentWindow.isDestroyed()
+      ? await dialog.showSaveDialog(parentWindow, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return { filePath: null };
+    }
+
+    this.registerEditorSavePath(event.sender.id, result.filePath);
+    return { filePath: result.filePath };
+  }
+
   private async openKeyboardSettings(): Promise<void> {
     try {
       await shell.openExternal("ms-settings:easeofaccess-keyboard");
@@ -243,15 +356,8 @@ class SoftshotApp {
     this.debugLog("creating overlay");
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
-    const source = await this.getDesktopSourceForDisplay(
-      display.id,
-      display.bounds.width,
-      display.bounds.height,
-      display.scaleFactor
-    );
-    const imageDataUrl = source.thumbnail.toDataURL();
-    const thumbnailSize = source.thumbnail.getSize();
-    this.debugLog(`captured thumbnail ${String(thumbnailSize.width)}x${String(thumbnailSize.height)}`);
+    await this.getDesktopSourceForDisplay(display.id);
+    const imageDataUrl = await this.captureFrozenScreenDataUrl();
 
     const overlay = this.createOverlayWindow(display);
     overlay.setFullScreen(true);
@@ -271,7 +377,6 @@ class SoftshotApp {
     });
 
     this.overlayDataByWebContents.set(overlayWebContentsId, {
-      sourceId: source.id,
       imageDataUrl,
       displayBounds: {
         x: display.bounds.x,
@@ -281,11 +386,13 @@ class SoftshotApp {
       },
       scaleFactor: display.scaleFactor
     });
+    this.displayMediaDisplayIdsByWebContents.set(overlayWebContentsId, display.id);
 
     overlay.on("closed", (): void => {
       clearTimeout(readinessTimeout);
       this.debugLog("overlay closed");
       this.overlayDataByWebContents.delete(overlayWebContentsId);
+      this.displayMediaDisplayIdsByWebContents.delete(overlayWebContentsId);
       if (this.activeOverlay === overlay) {
         this.activeOverlay = null;
       }
@@ -336,6 +443,10 @@ class SoftshotApp {
 
     editor.on("closed", (): void => {
       this.editorDataByWebContents.delete(editorWebContentsId);
+      this.editorSavePathsByWebContents.delete(editorWebContentsId);
+      void this.cleanupEditorTempFiles(editorWebContentsId).catch((error: unknown): void => {
+        this.debugLog(`editor temp cleanup failed: ${errorMessage(error)}`);
+      });
     });
 
     await editor.loadFile(path.join(app.getAppPath(), "src", "editor.html"));
@@ -376,6 +487,12 @@ class SoftshotApp {
     }
 
     this.registeredShortcuts = shortcuts;
+  }
+
+  private registerDisplayMediaRequestHandler(): void {
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback): void => {
+      void this.handleDisplayMediaRequest(request, callback);
+    });
   }
 
   private registerIpcHandlers(): void {
@@ -445,43 +562,26 @@ class SoftshotApp {
       return data;
     });
 
-    ipcMain.handle("editor:save-video", async (event, bytes: Uint8Array): Promise<SaveDialogResult> => {
-      if (bytes.byteLength === 0) {
-        return { filePath: null };
-      }
-
-      const targetDirectory = path.join(app.getPath("videos"), appName);
-      await mkdir(targetDirectory, { recursive: true });
-      const parentWindow = BrowserWindow.fromWebContents(event.sender);
-      const options: Electron.SaveDialogOptions = {
-        defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.webm`),
-        filters: [
-          {
-            name: "WebM video",
-            extensions: ["webm"]
-          }
-        ],
-        title: "Save recording"
-      };
-      const result = parentWindow && !parentWindow.isDestroyed()
-        ? await dialog.showSaveDialog(parentWindow, options)
-        : await dialog.showSaveDialog(options);
-
-      if (result.canceled || !result.filePath) {
-        return { filePath: null };
-      }
-
-      await writeFile(result.filePath, Buffer.from(bytes));
-      this.notifySaved("Recording saved", result.filePath);
-      return { filePath: result.filePath };
+    ipcMain.handle("editor:choose-save-path", async (event): Promise<SaveDialogResult> => {
+      return await this.chooseEditorVideoSavePath(event);
     });
 
-    ipcMain.handle("editor:copy-video", async (event, bytes: Uint8Array): Promise<void> => {
+    ipcMain.handle("editor:prepare-video-file", async (event, bytes: Uint8Array): Promise<PreparedVideoFile> => {
       if (bytes.byteLength === 0) {
-        return;
+        throw new Error("Cannot prepare an empty recording.");
       }
 
-      await this.copyVideoFileToClipboard(bytes);
+      return await this.prepareEditorVideoFile(event.sender.id, bytes);
+    });
+
+    ipcMain.handle("editor:save-prepared-video", async (event, preparedFilePath: string, targetFilePath: string): Promise<SaveResult> => {
+      await this.savePreparedEditorVideo(event.sender.id, preparedFilePath, targetFilePath);
+      return { filePath: targetFilePath };
+    });
+
+    ipcMain.handle("editor:copy-prepared-video", async (event, filePath: string): Promise<void> => {
+      this.assertEditorTempFile(event.sender.id, filePath);
+      await writeFileDropListToClipboard(filePath);
       const editor = BrowserWindow.fromWebContents(event.sender);
       if (editor && !editor.isDestroyed()) {
         editor.focus();
@@ -491,15 +591,6 @@ class SoftshotApp {
     ipcMain.handle("editor:close", (event): void => {
       this.closeSenderWindow(event);
     });
-  }
-
-  private requireUsableThumbnail<TSource extends Electron.DesktopCapturerSource>(source: TSource): TSource {
-    const size = source.thumbnail.getSize();
-    if (source.thumbnail.isEmpty() || size.width <= 0 || size.height <= 0) {
-      throw new Error(`Could not capture a frozen frame for ${source.name}.`);
-    }
-
-    return source;
   }
 
   private async showError(message: string, error?: unknown): Promise<void> {
@@ -621,18 +712,40 @@ class SoftshotApp {
     return filePath;
   }
 
-  private async writeClipboardVideoFile(data: Buffer): Promise<string> {
+  private async cleanupEditorTempFiles(webContentsId: number): Promise<void> {
+    const temporaryFiles = this.editorTempFilesByWebContents.get(webContentsId);
+    this.editorTempFilesByWebContents.delete(webContentsId);
+    if (!temporaryFiles) {
+      return;
+    }
+
+    await Promise.all([...temporaryFiles].map(async (filePath): Promise<void> => {
+      await rm(filePath, { force: true });
+    }));
+  }
+
+  private async prepareEditorVideoFile(webContentsId: number, bytes: Uint8Array): Promise<PreparedVideoFile> {
+    const filePath = await this.writeTemporaryVideoFile(Buffer.from(bytes));
+    this.registerEditorTempFile(webContentsId, filePath);
+    return { filePath };
+  }
+
+  private async savePreparedEditorVideo(webContentsId: number, preparedFilePath: string, targetFilePath: string): Promise<void> {
+    this.assertEditorTempFile(webContentsId, preparedFilePath);
+    this.assertEditorSavePath(webContentsId, targetFilePath);
+    await mkdir(path.dirname(targetFilePath), { recursive: true });
+    await copyFile(preparedFilePath, targetFilePath);
+    this.editorSavePathsByWebContents.get(webContentsId)?.delete(targetFilePath);
+    this.notifySaved("Recording saved", targetFilePath);
+  }
+
+  private async writeTemporaryVideoFile(data: Buffer): Promise<string> {
     const targetDirectory = path.join(app.getPath("temp"), appName, clipboardFolderName);
     await mkdir(targetDirectory, { recursive: true });
 
     const filePath = path.join(targetDirectory, `${appName} ${this.timestamp()} ${randomUUID()}.webm`);
     await writeFile(filePath, data);
     return filePath;
-  }
-
-  private async copyVideoFileToClipboard(bytes: Uint8Array): Promise<void> {
-    const filePath = await this.writeClipboardVideoFile(Buffer.from(bytes));
-    await writeFileDropListToClipboard(filePath);
   }
 
   start(): void {
@@ -667,6 +780,71 @@ async function writeFileDropListToClipboard(filePath: string): Promise<void> {
   }
 
   await runPowershellClipboardScript(filePath);
+}
+
+async function captureScreenWithoutCursor(filePath: string): Promise<void> {
+  if (process.platform !== "win32") {
+    throw new Error("Cursor-free frozen screenshots are only supported on Windows.");
+  }
+
+  await runPowershellFrozenCaptureScript(filePath);
+}
+
+async function runPowershellFrozenCaptureScript(filePath: string): Promise<void> {
+  const script = `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class SoftshotDpiAwareness {
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+}
+"@
+$dpiContext = [IntPtr]::new(${String(perMonitorDpiAwareV2)})
+if (-not [SoftshotDpiAwareness]::SetProcessDpiAwarenessContext($dpiContext)) {
+  throw "Could not enable per-monitor DPI awareness for frozen screen capture."
+}
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$out = [Environment]::GetEnvironmentVariable("${frozenCaptureFileEnvironmentName}")
+if ([string]::IsNullOrWhiteSpace($out)) {
+  throw "Missing ${frozenCaptureFileEnvironmentName}."
+}
+$screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
+$bounds = $screen.Bounds
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+try {
+  $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+  $bitmap.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $graphics.Dispose()
+  $bitmap.Dispose()
+}
+`;
+
+  await new Promise<void>((resolve, reject) => {
+    execFile(
+      powershellExecutable,
+      powershellClipboardArguments(script),
+      {
+        env: {
+          ...process.env,
+          [frozenCaptureFileEnvironmentName]: filePath
+        },
+        windowsHide: true
+      },
+      (error, standardOutput, standardError): void => {
+        if (error) {
+          reject(new Error(powershellFrozenCaptureErrorMessage(error, standardOutput, standardError)));
+          return;
+        }
+
+        resolve();
+      }
+    );
+  });
 }
 
 async function runPowershellClipboardScript(filePath: string): Promise<void> {
@@ -708,6 +886,15 @@ function powershellClipboardArguments(script: string): string[] {
   return ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script];
 }
 
+function powershellFrozenCaptureErrorMessage(error: Error, standardOutput: string, standardError: string): string {
+  const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
+  if (!output) {
+    return `Could not capture the frozen screen without the cursor.\n${error.message}`;
+  }
+
+  return `Could not capture the frozen screen without the cursor.\n${output}`;
+}
+
 function powershellClipboardErrorMessage(error: Error, standardOutput: string, standardError: string): string {
   const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
   if (!output) {
@@ -715,6 +902,10 @@ function powershellClipboardErrorMessage(error: Error, standardOutput: string, s
   }
 
   return `Could not put the recording file on the clipboard.\n${output}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const softshotApp = new SoftshotApp();
