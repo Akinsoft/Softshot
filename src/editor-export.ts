@@ -1,12 +1,13 @@
 import type { AudioSourceKind, VideoFps } from "./shared.js";
+import { exportedVideoBitrate } from "./video-bitrate.js";
 import { hasWebmCluster } from "./webm.js";
 
 const minimumOutputDimensionPx = 2;
 const trimToleranceSeconds = 0.04;
-const supportedMimeTypes = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"] as const;
+const supportedMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
 const supportedAudioVideoMimeTypes = [
-  "video/webm;codecs=vp9,opus",
   "video/webm;codecs=vp8,opus",
+  "video/webm;codecs=vp9,opus",
   "video/webm"
 ] as const;
 
@@ -144,7 +145,10 @@ async function recordVideoSegment(
     stream.addTrack(audioTrack);
   }
 
-  const recorder = new MediaRecorder(stream, { mimeType: supportedVideoMimeType(preferredMimeType, audioElements.length > 0) });
+  const recorder = new MediaRecorder(stream, {
+    mimeType: supportedVideoMimeType(preferredMimeType, audioElements.length > 0),
+    videoBitsPerSecond: exportedVideoBitrate(height, fps)
+  });
   const chunks: Blob[] = [];
   const stopped = new Promise<Blob>((resolve) => {
     recorder.addEventListener("stop", () => {

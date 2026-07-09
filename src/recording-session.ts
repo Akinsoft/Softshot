@@ -4,11 +4,9 @@ import { drawAnnotations } from "./overlay-drawing.js";
 import type { Annotation } from "./overlay-model.js";
 import { RecordingFileWriter } from "./recording-file-writer.js";
 import type { AudioSourceKind, RecordingAudioTrack, Rect, VideoFps, VideoQuality } from "./shared.js";
-import { videoFpsOptions, videoQualityHeights } from "./shared.js";
+import { videoQualityHeights } from "./shared.js";
+import { recordingVideoBitrate } from "./video-bitrate.js";
 
-const highQualityBitrate = 10_000_000;
-const standardQualityBitrate = 5_000_000;
-const highFpsBitrateMultiplier = 1.5;
 const minimumVideoDimensionPx = 2;
 const millisecondsPerSecond = 1000;
 const supportedMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
@@ -72,7 +70,7 @@ export class RecordingSession {
       const mimeType = supportedVideoMimeType();
       const recorder = new MediaRecorder(outputStream, {
         mimeType,
-        videoBitsPerSecond: videoBitrate(config.quality, config.fps)
+        videoBitsPerSecond: recordingVideoBitrate(config.quality, config.fps)
       });
       videoWriter.connect(recorder);
       const session = new RecordingSession({
@@ -411,11 +409,6 @@ function nextFrameDueAt(timestamp: number, currentFrameDueAtMs: number | null, f
   }
 
   return nextFrameAt;
-}
-
-function videoBitrate(selectedQuality: VideoQuality, selectedFps: VideoFps): number {
-  const base = selectedQuality === "720p" ? standardQualityBitrate : highQualityBitrate;
-  return selectedFps === videoFpsOptions.high ? Math.round(base * highFpsBitrateMultiplier) : base;
 }
 
 function videoOutputSize(rect: Rect, selectedQuality: VideoQuality): { height: number; width: number } {
