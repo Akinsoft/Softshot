@@ -1,27 +1,46 @@
-import type { VideoFps } from "./shared.js";
+import type { AudioSourceKind, VideoFps } from "./shared.js";
 import { hasWebmCluster } from "./webm.js";
 
 const minimumOutputDimensionPx = 2;
 const trimToleranceSeconds = 0.04;
 const supportedMimeTypes = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"] as const;
+const supportedAudioVideoMimeTypes = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm"
+] as const;
 
 export interface TrimRange {
   end: number;
   start: number;
 }
 
+export interface ExportAudioTrack {
+  kind: AudioSourceKind;
+  mimeType: string;
+  sourceUrl: string;
+}
+
 interface LoadedVideo {
   video: HTMLVideoElement;
+}
+
+interface AudioMix {
+  context: AudioContext;
+  sources: MediaElementAudioSourceNode[];
+  stream: MediaStream;
 }
 
 export async function exportTrimmedVideo(
   sourceUrl: string,
   mimeType: string,
   fps: VideoFps,
-  trimRange: TrimRange
+  trimRange: TrimRange,
+  audioTracks: ExportAudioTrack[]
 ): Promise<Uint8Array> {
   const loadedVideo = await createLoadedVideo(sourceUrl);
-  return await recordVideoSegment(loadedVideo.video, mimeType, fps, trimRange);
+  const audioElements = await createLoadedAudioElements(audioTracks);
+  return await recordVideoSegment(loadedVideo.video, audioElements, mimeType, fps, trimRange);
 }
 
 async function createLoadedVideo(sourceUrl: string): Promise<LoadedVideo> {
@@ -34,15 +53,53 @@ async function createLoadedVideo(sourceUrl: string): Promise<LoadedVideo> {
   return { video };
 }
 
+async function createLoadedAudioElements(audioTracks: ExportAudioTrack[]): Promise<HTMLAudioElement[]> {
+  return await Promise.all(audioTracks.map(async (audioTrack): Promise<HTMLAudioElement> => {
+    const audio = new Audio();
+    audio.preload = "auto";
+    audio.src = audioTrack.sourceUrl;
+    await waitForMediaMetadata(audio);
+    return audio;
+  }));
+}
+
+function createAudioMix(audioElements: HTMLAudioElement[]): AudioMix | null {
+  if (audioElements.length === 0) {
+    return null;
+  }
+
+  const context = new AudioContext();
+  const destination = context.createMediaStreamDestination();
+  const sources = audioElements.map((audioElement) => {
+    const source = context.createMediaElementSource(audioElement);
+    source.connect(destination);
+    return source;
+  });
+  return {
+    context,
+    sources,
+    stream: destination.stream
+  };
+}
+
 async function playSegment(
   video: HTMLVideoElement,
+  audioElements: HTMLAudioElement[],
   context: CanvasRenderingContext2D,
   trimRange: TrimRange,
   width: number,
   height: number
 ): Promise<void> {
-  await seekVideo(video, trimRange.start);
-  await video.play();
+  await Promise.all([
+    seekMedia(video, trimRange.start),
+    ...audioElements.map(async (audioElement) => {
+      await seekMedia(audioElement, trimRange.start);
+    })
+  ]);
+  await Promise.all([
+    video.play(),
+    ...audioElements.map(async (audioElement) => audioElement.play())
+  ]);
 
   await new Promise<void>((resolve) => {
     const drawFrame = (): void => {
@@ -50,6 +107,7 @@ async function playSegment(
 
       if (video.currentTime >= trimRange.end || video.ended) {
         video.pause();
+        pauseMediaElements(audioElements);
         resolve();
         return;
       }
@@ -63,6 +121,7 @@ async function playSegment(
 
 async function recordVideoSegment(
   video: HTMLVideoElement,
+  audioElements: HTMLAudioElement[],
   preferredMimeType: string,
   fps: VideoFps,
   trimRange: TrimRange
@@ -79,7 +138,13 @@ async function recordVideoSegment(
   }
 
   const stream = canvas.captureStream(fps);
-  const recorder = new MediaRecorder(stream, { mimeType: supportedVideoMimeType(preferredMimeType) });
+  const audioMix = createAudioMix(audioElements);
+  const mixedAudioTracks = audioMix?.stream.getAudioTracks() ?? [];
+  for (const audioTrack of mixedAudioTracks) {
+    stream.addTrack(audioTrack);
+  }
+
+  const recorder = new MediaRecorder(stream, { mimeType: supportedVideoMimeType(preferredMimeType, audioElements.length > 0) });
   const chunks: Blob[] = [];
   const stopped = new Promise<Blob>((resolve) => {
     recorder.addEventListener("stop", () => {
@@ -93,12 +158,22 @@ async function recordVideoSegment(
     }
   });
 
-  recorder.start();
-  await playSegment(video, context, trimRange, width, height);
-  recorder.stop();
+  let outputBlob: Blob;
+  try {
+    recorder.start();
+    await playSegment(video, audioElements, context, trimRange, width, height);
+    recorder.stop();
+    outputBlob = await stopped;
+  } finally {
+    if (recorder.state !== "inactive") {
+      recorder.stop();
+    }
 
-  const outputBlob = await stopped;
-  stopTracks(stream);
+    stopTracks(stream);
+    await closeAudioMix(audioMix);
+    pauseMediaElements(audioElements);
+  }
+
   if (outputBlob.size === 0) {
     throw new Error("The trimmed recording did not contain any video data.");
   }
@@ -111,16 +186,34 @@ async function recordVideoSegment(
   return outputBytes;
 }
 
-async function seekVideo(video: HTMLVideoElement, timeSeconds: number): Promise<void> {
-  if (Math.abs(video.currentTime - timeSeconds) <= trimToleranceSeconds) {
+async function closeAudioMix(audioMix: AudioMix | null): Promise<void> {
+  if (!audioMix) {
+    return;
+  }
+
+  for (const source of audioMix.sources) {
+    source.disconnect();
+  }
+
+  await audioMix.context.close();
+}
+
+function pauseMediaElements(elements: HTMLMediaElement[]): void {
+  for (const element of elements) {
+    element.pause();
+  }
+}
+
+async function seekMedia(media: HTMLMediaElement, timeSeconds: number): Promise<void> {
+  if (Math.abs(media.currentTime - timeSeconds) <= trimToleranceSeconds) {
     return;
   }
 
   await new Promise<void>((resolve) => {
-    video.addEventListener("seeked", () => {
+    media.addEventListener("seeked", () => {
       resolve();
     }, { once: true });
-    video.currentTime = timeSeconds;
+    media.currentTime = timeSeconds;
   });
 }
 
@@ -130,12 +223,13 @@ function stopTracks(stream: MediaStream): void {
   }
 }
 
-function supportedVideoMimeType(preferredMimeType: string): string {
-  if (MediaRecorder.isTypeSupported(preferredMimeType)) {
+function supportedVideoMimeType(preferredMimeType: string, hasAudio: boolean): string {
+  if (!hasAudio && MediaRecorder.isTypeSupported(preferredMimeType)) {
     return preferredMimeType;
   }
 
-  const supported = supportedMimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
+  const mimeTypes = hasAudio ? supportedAudioVideoMimeTypes : supportedMimeTypes;
+  const supported = mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
   if (!supported) {
     throw new Error("This system does not support WebM video export.");
   }
@@ -148,8 +242,16 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
     return;
   }
 
+  await waitForMediaMetadata(video);
+}
+
+async function waitForMediaMetadata(media: HTMLMediaElement): Promise<void> {
+  if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    return;
+  }
+
   await new Promise<void>((resolve) => {
-    video.addEventListener("loadedmetadata", () => {
+    media.addEventListener("loadedmetadata", () => {
       resolve();
     }, { once: true });
   });

@@ -28,9 +28,12 @@ import { loadAppSettings, saveAppSettings, validateCaptureShortcut } from "./app
 import { startUpdateChecks } from "./app-updater";
 import type {
   AppSettings,
+  AudioSourceKind,
+  EditorAudioTrack,
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
+  RecordingAudioTrack,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
@@ -54,11 +57,11 @@ const frozenCaptureFileEnvironmentName = "SOFTSHOT_FROZEN_CAPTURE_FILE";
 const perMonitorDpiAwareV2 = -4;
 const transparentWindowBackground = "#00000000";
 const editorWindowWidthPx = 860;
-const editorWindowHeightPx = 560;
+const editorWindowHeightPx = 620;
 const editorWindowMinWidthPx = 720;
-const editorWindowMinHeightPx = 460;
+const editorWindowMinHeightPx = 520;
 const settingsWindowWidthPx = 380;
-const settingsWindowHeightPx = 196;
+const settingsWindowHeightPx = 320;
 const appIconRelativePath = path.join("src", "assets", "app-logo.ico");
 const appLogoRelativePath = path.join("src", "assets", "app-logo.png");
 const preloadScriptRelativePath = path.join("dist", "preload.js");
@@ -71,6 +74,7 @@ const minimumRecordingByteLength = 1;
 const webmScanChunkSizeBytes = 65_536;
 const webmSignatureCarryByteLength = webmClusterSignatureLength - 1;
 const noKeyValue = "Unidentified";
+const mediaPermissionName = "media";
 const settingsKeybindEventChannel = "settings:keybind-event";
 const settingsKeybindShortcutRearmDelayMs = 250;
 const maxCaptureShortcutKeyCount = 3;
@@ -186,6 +190,10 @@ interface PendingOverlayBootstrap {
 interface RecordingTemporaryFile {
   byteLength: number;
   filePath: string;
+}
+
+interface RecordingAudioTrackFile extends RecordingAudioTrack {
+  file: RecordingTemporaryFile;
 }
 
 interface SettingsUpdateOptions {
@@ -559,7 +567,12 @@ class SoftshotApp {
     try {
       const displayId = this.getDisplayMediaDisplayId(request);
       const source = await this.getDesktopSourceForDisplay(displayId);
-      callback({ video: source });
+      const streams: Electron.Streams = { video: source };
+      if (request.audioRequested) {
+        streams.audio = "loopback";
+      }
+
+      callback(streams);
     } catch (error) {
       this.debugLog(`display media request failed: ${errorMessage(error)}`);
       callback({});
@@ -650,6 +663,7 @@ class SoftshotApp {
       app.setAppUserModelId(appId);
       this.settings = await loadAppSettings(app.getPath("userData"), app.getLoginItemSettings().openAtLogin);
       this.applyLaunchAtStartup(this.settings.launchAtStartup);
+      this.registerPermissionRequestHandler();
       this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
       this.registerCaptureShortcuts();
@@ -967,6 +981,13 @@ class SoftshotApp {
     return settingsWindow;
   }
 
+  private assertSenderWindow(event: Electron.IpcMainInvokeEvent): void {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!senderWindow || senderWindow.isDestroyed()) {
+      throw new Error("Missing Softshot window.");
+    }
+  }
+
   private async openSettingsWindow(): Promise<void> {
     if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
       this.showSettingsWindow(this.settingsWindow);
@@ -1200,6 +1221,26 @@ class SoftshotApp {
       nextSettings.launchAtStartup = update.launchAtStartup;
     }
 
+    if ("microphoneDeviceId" in update) {
+      if (update.microphoneDeviceId !== null && typeof update.microphoneDeviceId !== "string") {
+        throw new TypeError("Microphone device id must be a string or null.");
+      }
+
+      if (typeof update.microphoneDeviceId === "string" && update.microphoneDeviceId.trim().length === 0) {
+        throw new Error("Microphone device id cannot be empty.");
+      }
+
+      nextSettings.microphoneDeviceId = update.microphoneDeviceId;
+    }
+
+    if ("systemAudioEnabled" in update) {
+      if (typeof update.systemAudioEnabled !== "boolean") {
+        throw new TypeError("System audio enabled must be a boolean.");
+      }
+
+      nextSettings.systemAudioEnabled = update.systemAudioEnabled;
+    }
+
     return nextSettings;
   }
 
@@ -1235,7 +1276,7 @@ class SoftshotApp {
   }
 
   private async updateSettings(event: Electron.IpcMainInvokeEvent, update: unknown): Promise<AppSettings> {
-    this.getSenderSettingsWindow(event);
+    this.assertSenderWindow(event);
     return await this.applySettingsUpdate(update);
   }
 
@@ -1264,27 +1305,66 @@ class SoftshotApp {
     return isRegistered;
   }
 
+  private async deleteRecordingFiles(recordingFile: RecordingTemporaryFile, audioTrackFiles: RecordingAudioTrackFile[]): Promise<void> {
+    await Promise.all([
+      rm(recordingFile.filePath, { force: true }),
+      ...audioTrackFiles.map(async (audioTrackFile) => {
+        await rm(audioTrackFile.file.filePath, { force: true });
+      })
+    ]);
+  }
+
+  private async editorAudioTracksFromRecordingFiles(audioTrackFiles: RecordingAudioTrackFile[]): Promise<EditorAudioTrack[]> {
+    const editorAudioTracks: EditorAudioTrack[] = [];
+    for (const audioTrackFile of audioTrackFiles) {
+      if (!await this.hasUsableRecordingFile(audioTrackFile.file)) {
+        throw new Error(`${audioTrackLabel(audioTrackFile.kind)} did not contain usable audio data.`);
+      }
+
+      editorAudioTracks.push({
+        kind: audioTrackFile.kind,
+        mimeType: audioTrackFile.mimeType,
+        sourceFilePath: audioTrackFile.file.filePath,
+        sourceUrl: pathToFileURL(audioTrackFile.file.filePath).toString()
+      });
+    }
+
+    return editorAudioTracks;
+  }
+
+  private takeRecordingAudioTrackFiles(audioTracks: RecordingAudioTrack[]): RecordingAudioTrackFile[] {
+    return audioTracks.map((audioTrack) => ({
+      ...audioTrack,
+      file: this.takeRecordingTempFile(audioTrack.recordingId)
+    }));
+  }
+
   private async openVideoEditor(
     event: Electron.IpcMainInvokeEvent,
     recordingId: string,
     fps: VideoFps,
     durationSeconds: number,
-    mimeType: string
+    mimeType: string,
+    audioTracks: RecordingAudioTrack[]
   ): Promise<void> {
     const recordingFile = this.takeRecordingTempFile(recordingId);
+    let audioTrackFiles: RecordingAudioTrackFile[] = [];
     let isRecordingFileOwnedByEditor = false;
     try {
+      audioTrackFiles = this.takeRecordingAudioTrackFiles(audioTracks);
       if (!await this.hasUsableRecordingFile(recordingFile)) {
-        await rm(recordingFile.filePath, { force: true });
+        await this.deleteRecordingFiles(recordingFile, audioTrackFiles);
         this.closeSenderWindow(event);
         return;
       }
 
+      const editorAudioTracks = await this.editorAudioTracksFromRecordingFiles(audioTrackFiles);
       const overlay = BrowserWindow.fromWebContents(event.sender);
       const editor = this.createEditorWindow();
       const editorWebContentsId = editor.webContents.id;
       this.activeEditorWindows.add(editor);
       this.editorDataByWebContents.set(editorWebContentsId, {
+        audioTracks: editorAudioTracks,
         durationSeconds,
         fps,
         mimeType,
@@ -1292,6 +1372,10 @@ class SoftshotApp {
         sourceUrl: pathToFileURL(recordingFile.filePath).toString()
       });
       this.registerEditorTempFile(editorWebContentsId, recordingFile.filePath);
+      for (const audioTrackFile of audioTrackFiles) {
+        this.registerEditorTempFile(editorWebContentsId, audioTrackFile.file.filePath);
+      }
+
       isRecordingFileOwnedByEditor = true;
 
       editor.once("ready-to-show", (): void => {
@@ -1323,7 +1407,7 @@ class SoftshotApp {
       }
     } catch (error) {
       if (!isRecordingFileOwnedByEditor) {
-        await rm(recordingFile.filePath, { force: true });
+        await this.deleteRecordingFiles(recordingFile, audioTrackFiles);
       }
 
       throw error;
@@ -1401,6 +1485,12 @@ class SoftshotApp {
     }
   }
 
+  private registerPermissionRequestHandler(): void {
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback): void => {
+      callback(permission === mediaPermissionName && !webContents.isDestroyed());
+    });
+  }
+
   private registerDisplayMediaRequestHandler(): void {
     session.defaultSession.setDisplayMediaRequestHandler((request, callback): void => {
       void this.handleDisplayMediaRequest(request, callback);
@@ -1466,6 +1556,12 @@ class SoftshotApp {
       this.closeSenderWindow(event);
     });
 
+    this.registerRecordingIpcHandlers();
+    this.registerEditorIpcHandlers();
+    this.registerSettingsIpcHandlers();
+  }
+
+  private registerRecordingIpcHandlers(): void {
     ipcMain.handle("recording:create-file", async (event): Promise<RecordingFile> => {
       this.getSenderOverlay(event);
       return await this.createRecordingFile();
@@ -1483,11 +1579,20 @@ class SoftshotApp {
 
     ipcMain.handle(
       "recording:open-editor",
-      async (event, recordingId: string, fps: VideoFps, durationSeconds: number, mimeType: string): Promise<void> => {
-        await this.openVideoEditor(event, recordingId, fps, durationSeconds, mimeType);
+      async (
+        event,
+        recordingId: string,
+        fps: VideoFps,
+        durationSeconds: number,
+        mimeType: string,
+        audioTracks: unknown
+      ): Promise<void> => {
+        await this.openVideoEditor(event, recordingId, fps, durationSeconds, mimeType, recordingAudioTracksFromUnknown(audioTracks));
       }
     );
+  }
 
+  private registerEditorIpcHandlers(): void {
     ipcMain.handle("editor:get-bootstrap", (event): EditorBootstrap => {
       const data = this.editorDataByWebContents.get(event.sender.id);
       if (!data) {
@@ -1526,13 +1631,11 @@ class SoftshotApp {
     ipcMain.handle("editor:close", (event): void => {
       this.closeSenderWindow(event);
     });
-
-    this.registerSettingsIpcHandlers();
   }
 
   private registerSettingsIpcHandlers(): void {
     ipcMain.handle("settings:get", (event): AppSettings => {
-      this.getSenderSettingsWindow(event);
+      this.assertSenderWindow(event);
       return this.settingsSnapshot();
     });
 
@@ -1745,6 +1848,46 @@ class SoftshotApp {
 
 function padDatePart(part: number): string {
   return part.toString().padStart(timestampPartWidth, "0");
+}
+
+function audioTrackLabel(kind: AudioSourceKind): string {
+  return kind === "microphone" ? "Microphone audio" : "Desktop audio";
+}
+
+function recordingAudioTrackFromUnknown(value: unknown): RecordingAudioTrack {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Recording audio track must be an object.");
+  }
+
+  if (!("recordingId" in value) || typeof value.recordingId !== "string" || value.recordingId.length === 0) {
+    throw new TypeError("Recording audio track id must be a string.");
+  }
+
+  if (!("mimeType" in value) || typeof value.mimeType !== "string" || value.mimeType.length === 0) {
+    throw new TypeError("Recording audio track mime type must be a string.");
+  }
+
+  return {
+    kind: recordingAudioTrackKindFromUnknown(value),
+    mimeType: value.mimeType,
+    recordingId: value.recordingId
+  };
+}
+
+function recordingAudioTrackKindFromUnknown(value: Record<string, unknown>): AudioSourceKind {
+  if (value.kind === "microphone" || value.kind === "system") {
+    return value.kind;
+  }
+
+  throw new TypeError("Recording audio track kind must be microphone or system.");
+}
+
+function recordingAudioTracksFromUnknown(value: unknown): RecordingAudioTrack[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError("Recording audio tracks must be an array.");
+  }
+
+  return value.map((audioTrack) => recordingAudioTrackFromUnknown(audioTrack));
 }
 
 function joinedBytes(left: Uint8Array, right: Uint8Array): Uint8Array {

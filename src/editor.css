@@ -126,7 +126,7 @@ body {
 
 .editor-content {
   display: grid;
-  grid-template-rows: minmax(220px, 1fr) 42px 72px;
+  grid-template-rows: minmax(220px, 1fr) 42px 72px auto;
   gap: 8px;
   min-height: 0;
   padding: 18px 20px 20px;
@@ -290,4 +290,98 @@ body {
 
 body.busy .editor-video {
   opacity: 0.7;
+}
+
+.audio-tracks {
+  display: grid;
+  gap: 6px;
+}
+
+.audio-tracks[hidden] {
+  display: none;
+}
+
+.audio-track {
+  --audio-level: 0;
+  display: grid;
+  grid-template-columns: 34px 1fr 34px;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(17, 18, 20, 0.58);
+}
+
+.audio-track-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: rgba(245, 247, 251, 0.86);
+}
+
+.audio-track-line {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.18);
+  opacity: 0.9;
+}
+
+.audio-track-line::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.88), rgba(56, 189, 248, 0.76));
+  content: "";
+  transform: scaleX(var(--audio-level));
+  transform-origin: left center;
+  transition: transform 80ms linear;
+}
+
+.audio-track.muted .audio-track-line {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+  opacity: 0.62;
+}
+
+.audio-track.muted .audio-track-line::before {
+  opacity: 0;
+}
+
+.audio-track-mute {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #f4f7fb;
+  cursor: pointer;
+}
+
+.audio-track-mute:hover,
+.audio-track-mute:focus-visible {
+  background: var(--control-hover);
+  outline: none;
+}
+
+.audio-track-icon svg,
+.audio-track-mute svg {
+  width: 18px;
+  height: 18px;
+}
+
+.audio-track-icon path,
+.audio-track-mute path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }

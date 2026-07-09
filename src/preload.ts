@@ -6,6 +6,7 @@ import type {
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
+  RecordingAudioTrack,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
@@ -29,8 +30,14 @@ const api: SoftshotApi = {
   saveScreenshot: async (dataUrl: string) =>
     ipcRenderer.invoke("capture:save-screenshot", dataUrl) as Promise<SaveResult>,
   copyScreenshot: async (dataUrl: string) => ipcRenderer.invoke("capture:copy-screenshot", dataUrl) as Promise<void>,
-  openVideoEditor: async (recordingId: string, fps: VideoFps, durationSeconds: number, mimeType: string) =>
-    ipcRenderer.invoke("recording:open-editor", recordingId, fps, durationSeconds, mimeType) as Promise<void>,
+  openVideoEditor: async (
+    recordingId: string,
+    fps: VideoFps,
+    durationSeconds: number,
+    mimeType: string,
+    audioTracks: RecordingAudioTrack[]
+  ) =>
+    ipcRenderer.invoke("recording:open-editor", recordingId, fps, durationSeconds, mimeType, audioTracks) as Promise<void>,
   getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
   chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
   prepareEditorVideoFile: async (bytes: Uint8Array) =>

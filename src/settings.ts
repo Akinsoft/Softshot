@@ -1,8 +1,16 @@
+import {
+  audioInputDevices,
+  defaultDeviceId,
+  displayMicrophoneLabel,
+  microphoneDeviceOptionValue,
+  normalizeMicrophoneDeviceId
+} from "./audio-devices.js";
 import type { AppSettings, AppSettingsUpdate, SettingsKeybindEvent, SoftshotApi } from "./shared";
 
 const statusClearDelayMs = 1400;
 const keySeparator = "+";
 const recordingButtonText = "Press keys";
+const mediaDeviceChangeEventName = "devicechange";
 
 const displayNames = new Map([
   ["Control", "Ctrl"],
@@ -34,11 +42,17 @@ class SettingsController {
 
   private readonly keybindButton = getRequiredElement("keybind-button", HTMLButtonElement);
 
+  private readonly microphoneSelect = getRequiredElement("microphone-select", HTMLSelectElement);
+
   private readonly startupCheckbox = getRequiredElement("startup-checkbox", HTMLInputElement);
+
+  private readonly systemAudioCheckbox = getRequiredElement("system-audio-checkbox", HTMLInputElement);
 
   private readonly status = getRequiredElement("settings-status", HTMLSpanElement);
 
   private isRecordingKeybind = false;
+
+  private microphoneDevices: MediaDeviceInfo[] = [];
 
   private settings: AppSettings | null = null;
 
@@ -78,10 +92,24 @@ class SettingsController {
     }
 
     this.startupCheckbox.checked = this.settings.launchAtStartup;
+    this.systemAudioCheckbox.checked = this.settings.systemAudioEnabled;
+    this.renderMicrophoneOptions();
 
     if (!this.isRecordingKeybind) {
       this.keybindButton.textContent = displayShortcut(this.settings.captureShortcut);
     }
+  }
+
+  private renderMicrophoneOptions(): void {
+    const selectedDeviceId = this.settings?.microphoneDeviceId ?? null;
+    const options = [
+      microphoneOption("Off", null, selectedDeviceId),
+      microphoneOption("Default", defaultDeviceId, selectedDeviceId),
+      ...this.microphoneDevices.map((device, index) =>
+        microphoneOption(displayMicrophoneLabel(device, index), device.deviceId, selectedDeviceId)
+      )
+    ];
+    this.microphoneSelect.replaceChildren(...options);
   }
 
   private setStatus(message: string): void {
@@ -121,6 +149,18 @@ class SettingsController {
       void this.updateLaunchAtStartup();
     });
 
+    this.microphoneSelect.addEventListener("change", (): void => {
+      void this.updateMicrophoneDevice();
+    });
+
+    this.systemAudioCheckbox.addEventListener("change", (): void => {
+      void this.updateSystemAudio();
+    });
+
+    navigator.mediaDevices.addEventListener(mediaDeviceChangeEventName, (): void => {
+      void this.refreshMicrophoneDevices().catch(reportError);
+    });
+
     softshotApi().onSettingsKeybindEvent((event): void => {
       this.handleSettingsKeybindEvent(event);
     });
@@ -138,6 +178,40 @@ class SettingsController {
     } finally {
       this.startupCheckbox.disabled = false;
     }
+  }
+
+  private async updateMicrophoneDevice(): Promise<void> {
+    this.microphoneSelect.disabled = true;
+    try {
+      await this.updateSettings({
+        microphoneDeviceId: normalizeMicrophoneDeviceId(this.microphoneSelect.value)
+      });
+    } catch (error) {
+      this.render();
+      this.setTemporaryStatus(errorMessage(error));
+    } finally {
+      this.microphoneSelect.disabled = false;
+    }
+  }
+
+  private async updateSystemAudio(): Promise<void> {
+    const isSystemAudioEnabled = this.systemAudioCheckbox.checked;
+    this.systemAudioCheckbox.disabled = true;
+
+    try {
+      await this.updateSettings({ systemAudioEnabled: isSystemAudioEnabled });
+    } catch (error) {
+      this.systemAudioCheckbox.checked = !isSystemAudioEnabled;
+      this.setTemporaryStatus(errorMessage(error));
+    } finally {
+      this.systemAudioCheckbox.disabled = false;
+    }
+  }
+
+  private async refreshMicrophoneDevices(): Promise<void> {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    this.microphoneDevices = audioInputDevices(devices);
+    this.renderMicrophoneOptions();
   }
 
   private async closeSettings(): Promise<void> {
@@ -181,6 +255,7 @@ class SettingsController {
   async start(): Promise<void> {
     this.wireEvents();
     this.settings = await softshotApi().getSettings();
+    await this.refreshMicrophoneDevices();
     this.render();
     await softshotApi().settingsReadyToShow();
   }
@@ -207,6 +282,14 @@ function getRequiredElement<TElement extends HTMLElement>(
   }
 
   return value;
+}
+
+function microphoneOption(label: string, deviceId: string | null, selectedDeviceId: string | null): HTMLOptionElement {
+  const option = document.createElement("option");
+  option.value = microphoneDeviceOptionValue(deviceId);
+  option.textContent = label;
+  option.selected = selectedDeviceId === deviceId;
+  return option;
 }
 
 async function reportError(error: unknown): Promise<void> {

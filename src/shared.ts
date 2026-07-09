@@ -15,6 +15,7 @@ export const videoQualityHeights = {
 
 export type CaptureMode = "screenshot" | "video";
 export type DrawingTool = "select" | "pen" | "arrow";
+export type AudioSourceKind = "microphone" | "system";
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
 
@@ -32,11 +33,25 @@ export interface OverlayBootstrap {
 }
 
 export interface EditorBootstrap {
+  audioTracks: EditorAudioTrack[];
   durationSeconds: number;
   fps: VideoFps;
   mimeType: string;
   sourceFilePath: string;
   sourceUrl: string;
+}
+
+export interface EditorAudioTrack {
+  kind: AudioSourceKind;
+  mimeType: string;
+  sourceFilePath: string;
+  sourceUrl: string;
+}
+
+export interface RecordingAudioTrack {
+  kind: AudioSourceKind;
+  mimeType: string;
+  recordingId: string;
 }
 
 export interface RecordingFile {
@@ -58,11 +73,15 @@ export interface PreparedVideoFile {
 export interface AppSettings {
   captureShortcut: string;
   launchAtStartup: boolean;
+  microphoneDeviceId: string | null;
+  systemAudioEnabled: boolean;
 }
 
 export interface AppSettingsUpdate {
   captureShortcut?: string;
   launchAtStartup?: boolean;
+  microphoneDeviceId?: string | null;
+  systemAudioEnabled?: boolean;
 }
 
 export type SettingsKeybindEvent =
@@ -82,7 +101,13 @@ export interface SoftshotApi {
   getBootstrap(): Promise<OverlayBootstrap>;
   saveScreenshot(dataUrl: string): Promise<SaveResult>;
   copyScreenshot(dataUrl: string): Promise<void>;
-  openVideoEditor(recordingId: string, fps: VideoFps, durationSeconds: number, mimeType: string): Promise<void>;
+  openVideoEditor(
+    recordingId: string,
+    fps: VideoFps,
+    durationSeconds: number,
+    mimeType: string,
+    audioTracks: RecordingAudioTrack[]
+  ): Promise<void>;
   getEditorBootstrap(): Promise<EditorBootstrap>;
   chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
   prepareEditorVideoFile(bytes: Uint8Array): Promise<PreparedVideoFile>;

@@ -7,13 +7,13 @@ interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
 }
 
 interface DisplayCaptureOptions extends DisplayMediaStreamOptions {
-  audio: false;
+  audio: boolean;
   video: DisplayCaptureVideoConstraints;
 }
 
-export async function getCursorlessDesktopStream(fps: VideoFps): Promise<MediaStream> {
+export async function getCursorlessDesktopStream(fps: VideoFps, shouldCaptureSystemAudio: boolean): Promise<MediaStream> {
   const options: DisplayCaptureOptions = {
-    audio: false,
+    audio: shouldCaptureSystemAudio,
     video: {
       cursor: "never",
       displaySurface: "monitor",
@@ -24,7 +24,11 @@ export async function getCursorlessDesktopStream(fps: VideoFps): Promise<MediaSt
   return await navigator.mediaDevices.getDisplayMedia(options);
 }
 
-export function stopTracks(stream: MediaStream): void {
+export function stopTracks(stream: MediaStream | null): void {
+  if (!stream) {
+    return;
+  }
+
   for (const track of stream.getTracks()) {
     track.stop();
   }

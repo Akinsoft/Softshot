@@ -1,10 +1,13 @@
-import { exportTrimmedVideo, type TrimRange } from "./editor-export.js";
+import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
+import { type ExportAudioTrack, exportTrimmedVideo, type TrimRange } from "./editor-export.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { EditorBootstrap, PreparedVideoFile, VideoFps } from "./shared.js";
+import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, PreparedVideoFile, VideoFps } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const defaultMimeType = "video/webm";
+const ariaLabelAttribute = "aria-label";
+const audioLevelCssProperty = "--audio-level";
 const minimumTrimDurationSeconds = 0.05;
 const prepareDebounceMs = 350;
 const rangeStepSeconds = 0.01;
@@ -30,6 +33,15 @@ interface PendingPreparation {
   promise: Promise<PreparedVideo>;
 }
 
+interface AudioMeter {
+  analyser: AnalyserNode;
+  context: AudioContext;
+  data: Uint8Array<ArrayBuffer>;
+  gain: GainNode;
+  row: HTMLElement | null;
+  source: MediaElementAudioSourceNode;
+}
+
 interface PreparationFailure {
   error: unknown;
   key: string;
@@ -39,6 +51,7 @@ class VideoEditorApp {
   private readonly closeButton = getRequiredElement("editor-close-button", HTMLButtonElement);
   private readonly copyButton = getRequiredElement("editor-copy-button", HTMLButtonElement);
   private readonly currentTimeText = getRequiredElement("current-time", HTMLSpanElement);
+  private readonly audioTracksElement = getRequiredElement("audio-tracks", HTMLElement);
   private readonly endRange = getRequiredElement("trim-end", HTMLInputElement);
   private readonly playButton = getRequiredElement("play-button", HTMLButtonElement);
   private readonly saveButton = getRequiredElement("editor-save-button", HTMLButtonElement);
@@ -49,6 +62,11 @@ class VideoEditorApp {
   private readonly totalTimeText = getRequiredElement("total-time", HTMLSpanElement);
   private readonly video = getRequiredElement("editor-video", HTMLVideoElement);
   private activeTimelinePointerId = noPointerId;
+  private audioMeterFrame: number | null = null;
+  private audioReady: Promise<void> = Promise.resolve();
+  private audioTracks: EditorAudioTrack[] = [];
+  private readonly audioElementsByKind = new Map<AudioSourceKind, HTMLAudioElement>();
+  private readonly audioMetersByKind = new Map<AudioSourceKind, AudioMeter>();
   private durationSeconds = zeroSeconds;
   private fps: VideoFps = videoFpsOptions.high;
   private isBusy = false;
@@ -64,6 +82,7 @@ class VideoEditorApp {
   private statusHandle: ReturnType<typeof setTimeout> | null = null;
   private trimEndSeconds = zeroSeconds;
   private trimStartSeconds = zeroSeconds;
+  private readonly mutedAudioKinds = new Set<AudioSourceKind>();
 
   private bindEvents(): void {
     this.bindKeyboardEvents();
@@ -78,6 +97,14 @@ class VideoEditorApp {
     });
     this.playButton.addEventListener("click", (): void => {
       this.runAsync(this.togglePlayback(), "Could not preview the recording.");
+    });
+    this.audioTracksElement.addEventListener("click", (event): void => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-audio-kind]");
+      if (!button) {
+        return;
+      }
+
+      this.toggleAudioTrackMute(audioSourceKindFromString(button.dataset.audioKind));
     });
     this.startRange.addEventListener("input", (): void => {
       this.updateTrimStart(Number(this.startRange.value));
@@ -101,11 +128,13 @@ class VideoEditorApp {
       this.syncPlaybackTime();
     });
     this.video.addEventListener("pause", (): void => {
+      this.pauseAudioPreview();
       this.stopPlaybackFrameSync();
       this.syncPlayButton();
     });
     this.video.addEventListener("play", (): void => {
       this.startPlaybackFrameSync();
+      this.startAudioMeterLoop();
       this.syncPlayButton();
     });
   }
@@ -146,6 +175,7 @@ class VideoEditorApp {
 
   private async closeEditor(): Promise<void> {
     this.clearPreparationTimer();
+    this.disposeAudioPreview();
     this.stopPlaybackFrameSync();
     await getSoftshotApi().closeEditor();
   }
@@ -187,7 +217,7 @@ class VideoEditorApp {
   }
 
   private async createPreparedVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
-    if (this.isFullTrimRange(trimRange)) {
+    if (this.isFullTrimRange(trimRange) && this.audioTracksForExport().length === 0) {
       return {
         filePath: this.sourceFilePath,
         key
@@ -203,6 +233,50 @@ class VideoEditorApp {
     return preparedVideoFromFile(key, preparedFile);
   }
 
+  private audioTracksForExport(): ExportAudioTrack[] {
+    return this.audioTracks
+      .filter((audioTrack) => !this.mutedAudioKinds.has(audioTrack.kind))
+      .map((audioTrack) => ({
+        kind: audioTrack.kind,
+        mimeType: audioTrack.mimeType,
+        sourceUrl: audioTrack.sourceUrl
+      }));
+  }
+
+  private createAudioPreviewElements(): void {
+    this.audioElementsByKind.clear();
+    this.audioMetersByKind.clear();
+    const audioReadyPromises = this.audioTracks.map(async (audioTrack): Promise<void> => {
+      const audio = new Audio();
+      audio.preload = "auto";
+      audio.src = audioTrack.sourceUrl;
+      this.audioElementsByKind.set(audioTrack.kind, audio);
+      this.audioMetersByKind.set(audioTrack.kind, this.createAudioMeter(audio, this.mutedAudioKinds.has(audioTrack.kind)));
+      await waitForMediaMetadata(audio);
+    });
+    this.audioReady = waitForAudioReady(audioReadyPromises);
+  }
+
+  private createAudioMeter(audio: HTMLAudioElement, isMuted: boolean): AudioMeter {
+    const context = new AudioContext();
+    const source = context.createMediaElementSource(audio);
+    const analyser = context.createAnalyser();
+    const gain = context.createGain();
+    analyser.fftSize = audioAnalyzerFftSize;
+    gain.gain.value = isMuted ? 0 : 1;
+    source.connect(analyser);
+    analyser.connect(gain);
+    gain.connect(context.destination);
+    return {
+      analyser,
+      context,
+      data: new Uint8Array(analyser.fftSize),
+      gain,
+      row: null,
+      source
+    };
+  }
+
   private endTimelineScrub(event: PointerEvent): void {
     if (this.activeTimelinePointerId !== event.pointerId) {
       return;
@@ -215,16 +289,19 @@ class VideoEditorApp {
   }
 
   private async exportVideoForTrimRange(trimRange: TrimRange): Promise<Uint8Array> {
-    return await exportTrimmedVideo(this.sourceUrl, this.mimeType, this.fps, trimRange);
+    return await exportTrimmedVideo(this.sourceUrl, this.mimeType, this.fps, trimRange, this.audioTracksForExport());
   }
 
   private loadRecording(bootstrap: EditorBootstrap): void {
+    this.audioTracks = bootstrap.audioTracks;
     this.durationSeconds = positiveDuration(bootstrap.durationSeconds);
     this.fps = bootstrap.fps;
     this.mimeType = bootstrap.mimeType;
     this.sourceFilePath = bootstrap.sourceFilePath;
     this.sourceUrl = bootstrap.sourceUrl;
     this.video.src = this.sourceUrl;
+    this.createAudioPreviewElements();
+    this.renderAudioTracks();
   }
 
   private async prepareVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
@@ -278,6 +355,51 @@ class VideoEditorApp {
     await getSoftshotApi().showError(detail);
   }
 
+  private renderAudioTracks(): void {
+    this.audioTracksElement.hidden = this.audioTracks.length === 0;
+    this.audioTracksElement.replaceChildren(...this.audioTracks.map((audioTrack) => this.audioTrackElement(audioTrack)));
+  }
+
+  private audioTrackElement(audioTrack: EditorAudioTrack): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "audio-track";
+    row.classList.toggle("muted", this.mutedAudioKinds.has(audioTrack.kind));
+    row.style.setProperty(audioLevelCssProperty, "0");
+    this.assignAudioMeterRow(audioTrack.kind, row);
+
+    const icon = document.createElement("span");
+    const label = audioTrackLabel(audioTrack.kind);
+    icon.className = "audio-track-icon";
+    icon.title = label;
+    icon.setAttribute(ariaLabelAttribute, label);
+    icon.innerHTML = audioTrackIcon(audioTrack.kind);
+
+    const line = document.createElement("span");
+    line.className = "audio-track-line";
+
+    row.append(icon, line, this.audioTrackMuteButton(audioTrack.kind));
+    return row;
+  }
+
+  private assignAudioMeterRow(kind: AudioSourceKind, row: HTMLElement): void {
+    const meter = this.audioMetersByKind.get(kind);
+    if (meter) {
+      meter.row = row;
+    }
+  }
+
+  private audioTrackMuteButton(kind: AudioSourceKind): HTMLButtonElement {
+    const isMuted = this.mutedAudioKinds.has(kind);
+    const button = document.createElement("button");
+    button.className = "audio-track-mute";
+    button.type = "button";
+    button.dataset.audioKind = kind;
+    button.title = isMuted ? `Unmute ${audioTrackLabel(kind)}` : `Mute ${audioTrackLabel(kind)}`;
+    button.setAttribute(ariaLabelAttribute, button.title);
+    button.innerHTML = audioTrackMuteIcon(isMuted);
+    return button;
+  }
+
   private async saveVideo(): Promise<void> {
     const result = await getSoftshotApi().chooseEditorVideoSavePath();
     if (!result.filePath) {
@@ -290,7 +412,9 @@ class VideoEditorApp {
   }
 
   private seekTo(value: number): void {
-    this.video.currentTime = this.clampedPlaybackTime(value);
+    const currentTime = this.clampedPlaybackTime(value);
+    this.video.currentTime = currentTime;
+    this.syncAudioPreviewTime(currentTime);
     this.syncPlaybackTime();
   }
 
@@ -316,6 +440,9 @@ class VideoEditorApp {
     this.startRange.disabled = isBusy;
     this.endRange.disabled = isBusy;
     this.playButton.disabled = isBusy;
+    for (const button of this.audioTracksElement.querySelectorAll<HTMLButtonElement>("[data-audio-kind]")) {
+      button.disabled = isBusy;
+    }
   }
 
   private showStatus(message: string): void {
@@ -330,9 +457,95 @@ class VideoEditorApp {
     }, transientStatusDurationMs);
   }
 
+  private pauseAudioPreview(): void {
+    for (const audio of this.audioElementsByKind.values()) {
+      audio.pause();
+    }
+
+    this.stopAudioMeterLoop();
+    this.resetAudioMeterLevels();
+  }
+
+  private async playAudioPreview(): Promise<void> {
+    await this.audioReady;
+    await this.resumeAudioMeters();
+    const playPromises = Array.from(this.audioElementsByKind.values(), async (audio) => audio.play());
+    await Promise.all(playPromises);
+    this.startAudioMeterLoop();
+  }
+
+  private disposeAudioPreview(): void {
+    this.stopAudioMeterLoop();
+    for (const audio of this.audioElementsByKind.values()) {
+      audio.pause();
+      audio.removeAttribute("src");
+    }
+
+    for (const meter of this.audioMetersByKind.values()) {
+      void meter.context.close();
+    }
+
+    this.audioElementsByKind.clear();
+    this.audioMetersByKind.clear();
+  }
+
+  private resetAudioMeterLevels(): void {
+    for (const meter of this.audioMetersByKind.values()) {
+      meter.row?.style.setProperty(audioLevelCssProperty, "0");
+    }
+  }
+
+  private async resumeAudioMeters(): Promise<void> {
+    const resumePromises = Array.from(this.audioMetersByKind.values(), async (meter) => meter.context.resume());
+    await Promise.all(resumePromises);
+  }
+
+  private startAudioMeterLoop(): void {
+    if (this.audioMeterFrame !== null) {
+      return;
+    }
+
+    const updateFrame = (): void => {
+      this.updateAudioMeterLevels();
+      if (this.video.paused) {
+        this.audioMeterFrame = null;
+        return;
+      }
+
+      this.audioMeterFrame = requestAnimationFrame(updateFrame);
+    };
+
+    this.audioMeterFrame = requestAnimationFrame(updateFrame);
+  }
+
+  private stopAudioMeterLoop(): void {
+    if (this.audioMeterFrame === null) {
+      return;
+    }
+
+    cancelAnimationFrame(this.audioMeterFrame);
+    this.audioMeterFrame = null;
+  }
+
+  private updateAudioMeterLevels(): void {
+    for (const [kind, meter] of this.audioMetersByKind) {
+      meter.analyser.getByteTimeDomainData(meter.data);
+      const level = this.mutedAudioKinds.has(kind) ? 0 : audioLevelFromTimeDomainSamples(meter.data);
+      meter.row?.style.setProperty(audioLevelCssProperty, String(level));
+    }
+  }
+
+  private syncAudioPreviewTime(currentTime: number): void {
+    for (const audio of this.audioElementsByKind.values()) {
+      if (Math.abs(audio.currentTime - currentTime) > trimToleranceSeconds) {
+        audio.currentTime = currentTime;
+      }
+    }
+  }
+
   private syncPlayButton(): void {
     this.playButton.dataset.state = this.video.paused ? "play" : "pause";
-    this.playButton.setAttribute("aria-label", this.video.paused ? "Play" : "Pause");
+    this.playButton.setAttribute(ariaLabelAttribute, this.video.paused ? "Play" : "Pause");
     this.playButton.title = this.video.paused ? "Play" : "Pause";
   }
 
@@ -341,6 +554,8 @@ class VideoEditorApp {
     if (currentTime !== this.video.currentTime) {
       this.video.currentTime = currentTime;
     }
+
+    this.syncAudioPreviewTime(currentTime);
 
     if (!this.video.paused && currentTime >= this.trimEndSeconds) {
       this.video.pause();
@@ -413,9 +628,13 @@ class VideoEditorApp {
 
     if (this.video.currentTime < this.trimStartSeconds || this.video.currentTime >= this.trimEndSeconds) {
       this.video.currentTime = this.trimStartSeconds;
+      this.syncAudioPreviewTime(this.trimStartSeconds);
     }
 
-    await this.video.play();
+    await Promise.all([
+      this.video.play(),
+      this.playAudioPreview()
+    ]);
   }
 
   private updateTimelineScrub(event: PointerEvent): void {
@@ -439,7 +658,33 @@ class VideoEditorApp {
   }
 
   private trimKey(): string {
-    return trimKeyFromRange(this.trimRange());
+    return `${trimKeyFromRange(this.trimRange())}:${this.audioExportKey()}`;
+  }
+
+  private audioExportKey(): string {
+    return this.audioTracks
+      .map((audioTrack) => `${audioTrack.kind}=${String(!this.mutedAudioKinds.has(audioTrack.kind))}`)
+      .join(",");
+  }
+
+  private toggleAudioTrackMute(kind: AudioSourceKind): void {
+    if (this.mutedAudioKinds.has(kind)) {
+      this.mutedAudioKinds.delete(kind);
+    } else {
+      this.mutedAudioKinds.add(kind);
+    }
+
+    this.syncAudioMuteState(kind);
+
+    this.renderAudioTracks();
+    this.schedulePreparedVideoRefresh();
+  }
+
+  private syncAudioMuteState(kind: AudioSourceKind): void {
+    const meter = this.audioMetersByKind.get(kind);
+    if (meter) {
+      meter.gain.gain.value = this.mutedAudioKinds.has(kind) ? 0 : 1;
+    }
   }
 
   private updateTrimEnd(value: number): void {
@@ -485,6 +730,42 @@ function preparedVideoFromFile(key: string, file: PreparedVideoFile): PreparedVi
   };
 }
 
+function audioSourceKindFromString(value: string | undefined): AudioSourceKind {
+  if (value === "microphone" || value === "system") {
+    return value;
+  }
+
+  throw new Error("Unexpected audio track type.");
+}
+
+function audioTrackLabel(kind: AudioSourceKind): string {
+  return kind === "microphone" ? "Mic" : "Desktop";
+}
+
+function audioTrackIcon(kind: AudioSourceKind): string {
+  if (kind === "microphone") {
+    return microphoneTrackIcon();
+  }
+
+  return speakerTrackIcon(`<path d="M16.5 9.5a4 4 0 0 1 0 5" />`);
+}
+
+function audioTrackMuteIcon(isMuted: boolean): string {
+  if (isMuted) {
+    return speakerTrackIcon(`<path d="M19 5 5 19" />`);
+  }
+
+  return speakerTrackIcon(`<path d="M16.5 9.5a4 4 0 0 1 0 5" />`);
+}
+
+function microphoneTrackIcon(): string {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" /><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" /><path d="M12 18v3" /></svg>`;
+}
+
+function speakerTrackIcon(detailPath: string): string {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Z" />${detailPath}</svg>`;
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
@@ -521,11 +802,23 @@ async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
     return;
   }
 
+  await waitForMediaMetadata(video);
+}
+
+async function waitForMediaMetadata(media: HTMLMediaElement): Promise<void> {
+  if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    return;
+  }
+
   await new Promise<void>((resolve) => {
-    video.addEventListener("loadedmetadata", () => {
+    media.addEventListener("loadedmetadata", () => {
       resolve();
     }, { once: true });
   });
+}
+
+async function waitForAudioReady(audioReadyPromises: Array<Promise<void>>): Promise<void> {
+  await Promise.all(audioReadyPromises);
 }
 
 const editorApp = new VideoEditorApp();

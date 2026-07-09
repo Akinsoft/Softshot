@@ -63,6 +63,25 @@
         <span class="large-swatch" aria-hidden="true"></span>
       </button>
 
+      <button id="microphone-button" class="tool-button dropdown-button audio-button video-tool muted" type="button" title="Microphone" aria-label="Microphone">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" />
+          <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+          <path d="M12 18v3" />
+        </svg>
+        <span class="audio-slash" aria-hidden="true"></span>
+        <span id="microphone-meter" class="audio-meter" aria-hidden="true"></span>
+      </button>
+
+      <button id="system-audio-button" class="tool-button audio-button video-tool active" type="button" title="Desktop audio" aria-label="Desktop audio">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 10v4h4l5 4V6l-5 4H4Z" />
+          <path d="M16.5 9.5a4 4 0 0 1 0 5" />
+          <path d="M18.8 7.2a7.5 7.5 0 0 1 0 9.6" />
+        </svg>
+        <span class="audio-slash" aria-hidden="true"></span>
+      </button>
+
       <button id="settings-button" class="tool-button dropdown-button" type="button" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="3" />
@@ -84,6 +103,8 @@
         <button class="color-choice" type="button" data-color="#22c55e" style="--choice-color: #22c55e" aria-label="Green"></button>
         <button class="color-choice" type="button" data-color="#ffffff" style="--choice-color: #ffffff" aria-label="White"></button>
       </div>
+
+      <div id="microphone-menu" class="menu microphone-menu" hidden></div>
 
       <div id="settings-menu" class="menu settings-menu" hidden>
         <div class="menu-section">

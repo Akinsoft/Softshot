@@ -177,6 +177,17 @@ html.live-capture #annotation-canvas {
   transform: scaleX(0.28);
 }
 
+.toolbar:not(.video-mode) .video-tool {
+  flex-basis: 0;
+  width: 0;
+  margin-right: 0;
+  padding-right: 0;
+  padding-left: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: scaleX(0.28);
+}
+
 .tool-button:hover,
 .tool-button:focus-visible {
   background: var(--button-hover);
@@ -266,6 +277,47 @@ html.live-capture #annotation-canvas {
   box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.25);
 }
 
+.audio-button {
+  --meter-level: 0;
+}
+
+.audio-button .audio-slash {
+  position: absolute;
+  width: 29px;
+  height: 2px;
+  border-radius: 999px;
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.55);
+  opacity: 0;
+  transform: rotate(-42deg);
+  transition: opacity 150ms ease;
+}
+
+.audio-button.muted .audio-slash {
+  opacity: 1;
+}
+
+.audio-meter {
+  position: absolute;
+  right: 9px;
+  bottom: 5px;
+  left: 9px;
+  height: 3px;
+  border-radius: 999px;
+  background: #22c55e;
+  box-shadow: 0 0 9px rgba(34, 197, 94, 0.48);
+  opacity: 0;
+  transform: scaleX(var(--meter-level));
+  transform-origin: left center;
+  transition:
+    opacity 140ms ease,
+    transform 80ms linear;
+}
+
+.audio-button:not(.muted) .audio-meter {
+  opacity: 1;
+}
+
 .menu {
   position: absolute;
   top: calc(100% + 8px);
@@ -311,6 +363,18 @@ html.live-capture #annotation-canvas {
 
 .settings-menu {
   min-width: 146px;
+}
+
+.microphone-menu {
+  right: 108px;
+  min-width: 210px;
+  max-width: 260px;
+}
+
+.microphone-menu .menu-choice {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .menu-section {

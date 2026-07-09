@@ -7,6 +7,8 @@ const settingsFileName = "settings.json";
 const settingsIndentSpaces = 2;
 const maxShortcutKeyCount = 3;
 const defaultCaptureShortcut = "PrintScreen";
+const defaultMicrophoneDeviceId = null;
+const isSystemAudioEnabledByDefault = true;
 const keySeparator = "+";
 
 const modifierKeys = new Set(["Alt", "Control", "Meta", "Shift"]);
@@ -14,7 +16,9 @@ const modifierKeys = new Set(["Alt", "Control", "Meta", "Shift"]);
 export function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSettings {
   return {
     captureShortcut: defaultCaptureShortcut,
-    launchAtStartup: isLaunchAtStartupEnabled
+    launchAtStartup: isLaunchAtStartupEnabled,
+    microphoneDeviceId: defaultMicrophoneDeviceId,
+    systemAudioEnabled: isSystemAudioEnabledByDefault
   };
 }
 
@@ -66,7 +70,9 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
 
   return {
     captureShortcut: captureShortcutFromJson(value),
-    launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled)
+    launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
+    microphoneDeviceId: microphoneDeviceIdFromJson(value),
+    systemAudioEnabled: isSystemAudioEnabledFromJson(value)
   };
 }
 
@@ -100,6 +106,38 @@ function isLaunchAtStartupFromJson(value: Record<string, unknown>, isLaunchAtSta
   }
 
   return value.launchAtStartup;
+}
+
+function microphoneDeviceIdFromJson(value: Record<string, unknown>): string | null {
+  if (!("microphoneDeviceId" in value)) {
+    return defaultMicrophoneDeviceId;
+  }
+
+  if (value.microphoneDeviceId === null) {
+    return null;
+  }
+
+  if (typeof value.microphoneDeviceId !== "string") {
+    throw new TypeError("Settings microphoneDeviceId must be a string or null.");
+  }
+
+  if (value.microphoneDeviceId.trim().length === 0) {
+    throw new Error("Settings microphoneDeviceId cannot be empty.");
+  }
+
+  return value.microphoneDeviceId;
+}
+
+function isSystemAudioEnabledFromJson(value: Record<string, unknown>): boolean {
+  if (!("systemAudioEnabled" in value)) {
+    return isSystemAudioEnabledByDefault;
+  }
+
+  if (typeof value.systemAudioEnabled !== "boolean") {
+    throw new TypeError("Settings systemAudioEnabled must be a boolean.");
+  }
+
+  return value.systemAudioEnabled;
 }
 
 function settingsFilePath(userDataPath: string): string {

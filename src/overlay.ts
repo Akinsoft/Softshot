@@ -1,3 +1,13 @@
+import {
+  audioInputDevices,
+  defaultDeviceId,
+  displayMicrophoneLabel,
+  microphoneConstraints,
+  microphoneDeviceOptionValue,
+  microphoneSelectionLabel,
+  normalizeMicrophoneDeviceId
+} from "./audio-devices.js";
+import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
 import { getCanvasContext, getRequiredElement, loadImage } from "./overlay-dom.js";
 import { drawAnnotations, drawArrow, drawSelectionFrame } from "./overlay-drawing.js";
 import type {
@@ -23,7 +33,7 @@ import {
 } from "./overlay-model.js";
 import { RecordingHudController } from "./recording-hud.js";
 import { type RecordingResult, RecordingSession } from "./recording-session.js";
-import type { CaptureMode, OverlayBootstrap, Rect, VideoFps, VideoQuality } from "./shared.js";
+import type { AppSettings, AppSettingsUpdate, CaptureMode, OverlayBootstrap, Rect, VideoFps, VideoQuality } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
@@ -39,6 +49,8 @@ const spaceKey = " ";
 const toolbarPulseDurationMs = 160;
 const videoButtonAnimationDurationMs = 220;
 const zeroPoint = { x: 0, y: 0 };
+const ariaLabelAttribute = "aria-label";
+const mediaDeviceChangeEventName = "devicechange";
 const countdownFirstValue = 3;
 const countdownSecondValue = 2;
 const countdownThirdValue = 1;
@@ -65,15 +77,19 @@ class OverlayApp {
   private readonly colorButton = getRequiredElement("color-button", HTMLButtonElement);
   private readonly colorMenu = getRequiredElement("color-menu", HTMLDivElement);
   private readonly context = getCanvasContext(this.canvas, canvasContextError);
+  private readonly microphoneButton = getRequiredElement("microphone-button", HTMLButtonElement);
+  private readonly microphoneMenu = getRequiredElement("microphone-menu", HTMLDivElement);
   private readonly penButton = getRequiredElement("pen-button", HTMLButtonElement);
   private readonly recordingHud = new RecordingHudController();
   private readonly screenImage = getRequiredElement("screen-image", HTMLImageElement);
   private readonly screenshotButton = getRequiredElement("screenshot-button", HTMLButtonElement);
   private readonly settingsButton = getRequiredElement("settings-button", HTMLButtonElement);
   private readonly settingsMenu = getRequiredElement("settings-menu", HTMLDivElement);
+  private readonly systemAudioButton = getRequiredElement("system-audio-button", HTMLButtonElement);
   private readonly toolbar = getRequiredElement("capture-toolbar", HTMLDivElement);
   private readonly videoButton = getRequiredElement("video-button", HTMLButtonElement);
   private readonly screenshotToolButtons: HTMLButtonElement[] = [this.penButton, this.arrowButton, this.colorButton];
+  private readonly videoToolButtons: HTMLButtonElement[] = [this.microphoneButton, this.systemAudioButton];
   private activeTool = defaultDrawingTool;
   private annotations: Annotation[] = [];
   private bootstrap: OverlayBootstrap | null = null;
@@ -86,11 +102,20 @@ class OverlayApp {
   private isLiveCaptureMousePassthrough = false;
   private isRecording = false;
   private isRenderQueued = false;
+  private microphoneAnalyser: AnalyserNode | null = null;
+  private microphoneAudioContext: AudioContext | null = null;
+  private microphoneDeviceId: string | null = null;
+  private microphoneDevices: MediaDeviceInfo[] = [];
+  private microphoneLevelData: Uint8Array<ArrayBuffer> | null = null;
+  private microphoneLevelFrame: number | null = null;
+  private microphoneMonitorStream: MediaStream | null = null;
+  private microphoneSource: MediaStreamAudioSourceNode | null = null;
   private quality: VideoQuality = defaultVideoQuality;
   private recordingSession: RecordingSession | null = null;
   private removeStopRecordingRequestHandler: (() => void) | null = null;
   private selectedColor = defaultPenColor;
   private selection: Rect | null = null;
+  private systemAudioEnabled = true;
 
   private async reportAsyncError(task: Promise<void>, message: string): Promise<void> {
     try {
@@ -116,6 +141,9 @@ class OverlayApp {
     this.bindMenuEvents();
     this.bindLiveCaptureEvents();
     this.bindMainEvents();
+    navigator.mediaDevices.addEventListener(mediaDeviceChangeEventName, (): void => {
+      this.runAsync(this.refreshMicrophoneDevices(), "Could not refresh microphone devices.");
+    });
   }
 
   private bindKeyboardEvents(): void {
@@ -168,6 +196,16 @@ class OverlayApp {
       this.requestRender();
     });
 
+    this.microphoneMenu.addEventListener("click", (event): void => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-microphone-id]");
+      if (!button || this.isRecording || this.isCountingDown) {
+        return;
+      }
+
+      const deviceId = normalizeMicrophoneDeviceId(button.dataset.microphoneId ?? microphoneDeviceOptionValue(null));
+      this.runAsync(this.setMicrophoneDevice(deviceId), "Could not update the microphone.");
+    });
+
     this.settingsMenu.addEventListener("click", (event): void => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-quality], [data-fps]");
       if (!button || this.isRecording || this.isCountingDown) {
@@ -217,10 +255,20 @@ class OverlayApp {
       this.selectTool("arrow");
     });
     this.colorButton.addEventListener("click", (): void => {
-      this.toggleMenu(this.colorMenu, this.settingsMenu);
+      this.toggleMenu(this.colorMenu, [this.microphoneMenu, this.settingsMenu]);
+    });
+    this.microphoneButton.addEventListener("click", (): void => {
+      if (this.captureMode !== "video") {
+        return;
+      }
+
+      this.toggleMenu(this.microphoneMenu, [this.colorMenu, this.settingsMenu]);
+    });
+    this.systemAudioButton.addEventListener("click", (): void => {
+      this.runAsync(this.toggleSystemAudio(), "Could not update desktop audio.");
     });
     this.settingsButton.addEventListener("click", (): void => {
-      this.toggleMenu(this.settingsMenu, this.colorMenu);
+      this.toggleMenu(this.settingsMenu, [this.colorMenu, this.microphoneMenu]);
     });
     this.closeButton.addEventListener("click", (): void => {
       this.runAsync(this.closeOverlay(), "Could not close the overlay.");
@@ -234,6 +282,7 @@ class OverlayApp {
     this.syncToolbar();
     this.requestRender();
     await this.exitLiveCapture();
+    await this.syncMicrophoneMonitor();
   }
 
   private cancelDrag(): void {
@@ -243,6 +292,7 @@ class OverlayApp {
 
   private closeMenus(): void {
     this.hideMenu(this.colorMenu);
+    this.hideMenu(this.microphoneMenu);
     this.hideMenu(this.settingsMenu);
   }
 
@@ -271,9 +321,11 @@ class OverlayApp {
     menu.hidden = false;
   }
 
-  private toggleMenu(menu: HTMLDivElement, otherMenu: HTMLDivElement): void {
+  private toggleMenu(menu: HTMLDivElement, otherMenus: HTMLDivElement[]): void {
     const shouldShowMenu = menu.hidden || menu.classList.contains("closing");
-    this.hideMenu(otherMenu);
+    for (const otherMenu of otherMenus) {
+      this.hideMenu(otherMenu);
+    }
 
     if (shouldShowMenu) {
       this.showMenu(menu);
@@ -294,8 +346,134 @@ class OverlayApp {
     }
 
     this.unbindMainEvents();
+    this.stopMicrophoneMonitor();
     await this.exitLiveCapture();
     await getSoftshotApi().closeOverlay();
+  }
+
+  private async applyAppSettings(settings: AppSettings): Promise<void> {
+    const previousMicrophoneDeviceId = this.microphoneDeviceId;
+    this.microphoneDeviceId = settings.microphoneDeviceId;
+    this.systemAudioEnabled = settings.systemAudioEnabled;
+    this.syncToolbar();
+
+    if (previousMicrophoneDeviceId !== this.microphoneDeviceId) {
+      await this.syncMicrophoneMonitor();
+    }
+  }
+
+  private microphoneChoiceButton(label: string, deviceId: string | null): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.className = "menu-choice";
+    button.type = "button";
+    button.dataset.microphoneId = microphoneDeviceOptionValue(deviceId);
+    button.textContent = label;
+    button.classList.toggle("selected", this.microphoneDeviceId === deviceId);
+    return button;
+  }
+
+  private renderMicrophoneMenu(): void {
+    const buttons = [
+      this.microphoneChoiceButton("Off", null),
+      this.microphoneChoiceButton("Default", defaultDeviceId),
+      ...this.microphoneDevices.map((device, index) =>
+        this.microphoneChoiceButton(displayMicrophoneLabel(device, index), device.deviceId)
+      )
+    ];
+    this.microphoneMenu.replaceChildren(...buttons);
+  }
+
+  private async refreshMicrophoneDevices(): Promise<void> {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    this.microphoneDevices = audioInputDevices(devices);
+    this.renderMicrophoneMenu();
+    this.syncAudioButtons(this.captureMode === "video");
+  }
+
+  private async setMicrophoneDevice(deviceId: string | null): Promise<void> {
+    this.hideMenu(this.microphoneMenu);
+    await this.updateAppSettings({ microphoneDeviceId: deviceId });
+  }
+
+  private setMicrophoneLevel(level: number): void {
+    this.microphoneButton.style.setProperty("--meter-level", String(level));
+  }
+
+  private startMicrophoneLevelLoop(): void {
+    if (!this.microphoneAnalyser || !this.microphoneLevelData) {
+      return;
+    }
+
+    this.microphoneAnalyser.getByteTimeDomainData(this.microphoneLevelData);
+    this.setMicrophoneLevel(audioLevelFromTimeDomainSamples(this.microphoneLevelData));
+    this.microphoneLevelFrame = requestAnimationFrame((): void => {
+      this.startMicrophoneLevelLoop();
+    });
+  }
+
+  private async startMicrophoneMonitor(): Promise<void> {
+    const deviceId = this.microphoneDeviceId;
+    if (deviceId === null || !this.shouldMonitorMicrophone()) {
+      this.setMicrophoneLevel(0);
+      return;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: microphoneConstraints(deviceId),
+      video: false
+    });
+    const audioContext = new AudioContext();
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = audioAnalyzerFftSize;
+    this.microphoneSource = audioContext.createMediaStreamSource(stream);
+    this.microphoneSource.connect(analyser);
+    this.microphoneMonitorStream = stream;
+    this.microphoneAudioContext = audioContext;
+    this.microphoneAnalyser = analyser;
+    this.microphoneLevelData = new Uint8Array(analyser.fftSize);
+    this.startMicrophoneLevelLoop();
+    await this.refreshMicrophoneDevices();
+  }
+
+  private stopMicrophoneMonitor(): void {
+    if (this.microphoneLevelFrame !== null) {
+      cancelAnimationFrame(this.microphoneLevelFrame);
+      this.microphoneLevelFrame = null;
+    }
+
+    stopMicrophoneResources(this.microphoneMonitorStream, this.microphoneAudioContext);
+    this.microphoneMonitorStream = null;
+    this.microphoneAudioContext = null;
+    this.microphoneAnalyser = null;
+    this.microphoneLevelData = null;
+    this.microphoneSource = null;
+    this.setMicrophoneLevel(0);
+  }
+
+  private async syncMicrophoneMonitor(): Promise<void> {
+    this.stopMicrophoneMonitor();
+    if (!this.shouldMonitorMicrophone()) {
+      return;
+    }
+
+    try {
+      await this.startMicrophoneMonitor();
+    } catch (error) {
+      await this.reportError("Could not start microphone monitoring.", error);
+    }
+  }
+
+  private async toggleSystemAudio(): Promise<void> {
+    if (this.captureMode !== "video" || this.isRecording || this.isCountingDown) {
+      return;
+    }
+
+    await this.updateAppSettings({ systemAudioEnabled: !this.systemAudioEnabled });
+  }
+
+  private async updateAppSettings(update: AppSettingsUpdate): Promise<void> {
+    const settings = await getSoftshotApi().updateSettings(update);
+    await this.applyAppSettings(settings);
   }
 
   private async copyScreenshot(): Promise<void> {
@@ -325,6 +503,8 @@ class OverlayApp {
     this.captureMode = "video";
     this.activeTool = "select";
     this.syncToolbar();
+    this.runAsync(this.refreshMicrophoneDevices(), "Could not refresh microphone devices.");
+    this.runAsync(this.syncMicrophoneMonitor(), "Could not update microphone monitoring.");
   }
 
   private async enterLiveCapture(): Promise<void> {
@@ -369,8 +549,9 @@ class OverlayApp {
     this.syncToolbar();
     await this.exitLiveCapture();
     this.unbindMainEvents();
+    this.stopMicrophoneMonitor();
 
-    await getSoftshotApi().openVideoEditor(result.recordingId, this.fps, result.durationSeconds, result.mimeType);
+    await getSoftshotApi().openVideoEditor(result.recordingId, this.fps, result.durationSeconds, result.mimeType, result.audioTracks);
   }
 
   private async handleStopRecordingRequest(): Promise<void> {
@@ -455,6 +636,7 @@ class OverlayApp {
     this.closeMenus();
     this.captureMode = "screenshot";
     this.activeTool = "select";
+    this.stopMicrophoneMonitor();
     this.syncToolbar();
 
     if (this.selection) {
@@ -612,7 +794,9 @@ class OverlayApp {
         annotations: [...this.annotations],
         crop: this.selection,
         fps: this.fps,
-        quality: this.quality
+        microphoneDeviceId: this.microphoneDeviceId,
+        quality: this.quality,
+        systemAudioEnabled: this.systemAudioEnabled
       });
       return { kind: "ready", session };
     } catch (error) {
@@ -683,6 +867,7 @@ class OverlayApp {
       this.isRecording = true;
       this.recordingSession = session;
       this.syncToolbar();
+      this.stopMicrophoneMonitor();
       this.recordingHud.showRecordingPending();
       this.requestRender();
       session.start();
@@ -694,6 +879,7 @@ class OverlayApp {
       this.recordingHud.stopRecording();
       this.syncToolbar();
       await this.exitLiveCapture();
+      await this.syncMicrophoneMonitor();
       await this.reportError("Could not start the recording.", error);
     }
   }
@@ -715,6 +901,7 @@ class OverlayApp {
       this.syncToolbar();
       throw error;
     }
+    this.stopMicrophoneMonitor();
     const sessionPromise = this.prepareRecordingSession();
 
     for (const value of countdownValues) {
@@ -764,6 +951,7 @@ class OverlayApp {
       this.recordingHud.stopRecording();
       this.syncToolbar();
       await this.exitLiveCapture();
+      await this.syncMicrophoneMonitor();
       await this.reportError("Could not start the recording.", error);
     }
   }
@@ -792,14 +980,32 @@ class OverlayApp {
     this.videoButton.classList.toggle("active", this.captureMode === "video");
     this.videoButton.classList.toggle("recording", this.isRecording || this.isCountingDown);
     this.videoButton.title = this.videoButtonTitle(videoState);
-    this.videoButton.setAttribute("aria-label", this.videoButton.title);
+    this.videoButton.setAttribute(ariaLabelAttribute, this.videoButton.title);
     this.setVideoButtonState(videoState);
     this.penButton.classList.toggle("active", this.activeTool === "pen");
     this.arrowButton.classList.toggle("active", this.activeTool === "arrow");
     this.syncScreenshotToolAvailability(isVideoMode);
     document.documentElement.style.setProperty("--accent", this.selectedColor);
     this.syncColorMenu();
+    this.syncVideoToolAvailability(isVideoMode);
+    this.syncAudioButtons(isVideoMode);
     this.syncSettingsMenu();
+  }
+
+  private syncAudioButtons(isVideoMode: boolean): void {
+    if (!isVideoMode) {
+      this.hideMenu(this.microphoneMenu);
+    }
+
+    const microphoneLabel = microphoneSelectionLabel(this.microphoneDeviceId, this.microphoneDevices);
+    this.microphoneButton.classList.toggle("muted", this.microphoneDeviceId === null);
+    this.microphoneButton.title = `Microphone: ${microphoneLabel}`;
+    this.microphoneButton.setAttribute(ariaLabelAttribute, this.microphoneButton.title);
+    this.systemAudioButton.classList.toggle("active", this.systemAudioEnabled);
+    this.systemAudioButton.classList.toggle("muted", !this.systemAudioEnabled);
+    this.systemAudioButton.title = this.systemAudioEnabled ? "Desktop audio: on" : "Desktop audio: off";
+    this.systemAudioButton.setAttribute(ariaLabelAttribute, this.systemAudioButton.title);
+    this.renderMicrophoneMenu();
   }
 
   private syncColorMenu(): void {
@@ -823,6 +1029,14 @@ class OverlayApp {
       button.disabled = isVideoMode;
       button.ariaHidden = String(isVideoMode);
       button.tabIndex = isVideoMode ? -1 : 0;
+    }
+  }
+
+  private syncVideoToolAvailability(isVideoMode: boolean): void {
+    for (const button of this.videoToolButtons) {
+      button.disabled = !isVideoMode;
+      button.ariaHidden = String(!isVideoMode);
+      button.tabIndex = isVideoMode ? 0 : -1;
     }
   }
 
@@ -936,9 +1150,21 @@ class OverlayApp {
     return !this.isCountingDown || runId !== this.countdownRunId;
   }
 
+  private shouldMonitorMicrophone(): boolean {
+    return this.captureMode === "video"
+      && this.microphoneDeviceId !== null
+      && !this.isCountingDown
+      && !this.isRecording;
+  }
+
   async initialize(): Promise<void> {
     try {
-      this.bootstrap = await getSoftshotApi().getBootstrap();
+      const [bootstrap, settings] = await Promise.all([
+        getSoftshotApi().getBootstrap(),
+        getSoftshotApi().getSettings()
+      ]);
+      this.bootstrap = bootstrap;
+      await this.applyAppSettings(settings);
       await loadImage(this.screenImage, this.bootstrap.imageDataUrl, "Timed out loading the frozen screen image.");
       this.resizeCanvas();
       this.bindEvents();
@@ -956,6 +1182,18 @@ async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function stopMicrophoneResources(stream: MediaStream | null, audioContext: AudioContext | null): void {
+  if (stream) {
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  }
+
+  if (audioContext) {
+    void audioContext.close();
+  }
 }
 
 const overlayApp = new OverlayApp();
