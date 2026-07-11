@@ -50,6 +50,7 @@ const screenshotCopyAction = "copy";
 const screenshotSaveAction = "save";
 const spaceKey = " ";
 const toolbarPulseDurationMs = 160;
+const undoShortcutKey = "z";
 const videoButtonAnimationDurationMs = 220;
 const zeroPoint = { x: 0, y: 0 };
 const mediaDeviceChangeEventName = "devicechange";
@@ -160,6 +161,12 @@ class OverlayApp {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === copyShortcutKey) {
         event.preventDefault();
         this.runAsync(this.copyScreenshot(), "Could not copy the screenshot.");
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === undoShortcutKey) {
+        event.preventDefault();
+        this.undoLastAnnotation();
         return;
       }
 
@@ -1130,6 +1137,15 @@ class OverlayApp {
     if (fps === "30" || fps === "60") {
       this.fps = Number(fps) as VideoFps;
     }
+  }
+
+  private undoLastAnnotation(): void {
+    if (this.dragState || this.isCountingDown || this.isRecording || this.annotations.length === 0) {
+      return;
+    }
+
+    this.annotations.pop();
+    this.requestRender();
   }
 
   private videoButtonState(): VideoButtonState {
