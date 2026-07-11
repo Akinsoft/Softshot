@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -34,10 +34,12 @@ import type {
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingAudioTrack,
+  RecordingEncoder,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
   SettingsKeybindEvent,
+  VideoFileExtension,
   VideoFps
 } from "./shared";
 import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
@@ -53,8 +55,6 @@ const timestampPartWidth = 2;
 const pngDataUrlPrefix = "data:image/png;base64,";
 const clipboardFileEnvironmentName = "SOFTSHOT_CLIPBOARD_FILE";
 const clipboardFolderName = "clipboard";
-const frozenCaptureFileEnvironmentName = "SOFTSHOT_FROZEN_CAPTURE_FILE";
-const perMonitorDpiAwareV2 = -4;
 const transparentWindowBackground = "#00000000";
 const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 620;
@@ -73,6 +73,19 @@ const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1
 const minimumRecordingByteLength = 1;
 const webmScanChunkSizeBytes = 65_536;
 const webmSignatureCarryByteLength = webmClusterSignatureLength - 1;
+const mp4FileTypeSignature = new TextEncoder().encode("ftyp");
+const mp4MediaDataSignature = new TextEncoder().encode("mdat");
+const daysToRetainTemporaryRecordings = 7;
+const hoursPerDay = 24;
+const minutesPerHour = 60;
+const secondsPerMinute = 60;
+const millisecondsPerSecond = 1000;
+const temporaryRecordingRetentionMs = daysToRetainTemporaryRecordings
+  * hoursPerDay
+  * minutesPerHour
+  * secondsPerMinute
+  * millisecondsPerSecond;
+const missingEditorRecordingDataMessage = "Missing editor recording data.";
 const noKeyValue = "Unidentified";
 const mediaPermissionName = "media";
 const settingsKeybindEventChannel = "settings:keybind-event";
@@ -207,7 +220,11 @@ class SoftshotApp {
 
   private readonly editorSavePathsByWebContents = new Map<number, Set<string>>();
 
+  private readonly editorSourceFilesByWebContents = new Map<number, string>();
+
   private readonly editorTempFilesByWebContents = new Map<number, Set<string>>();
+
+  private readonly savedEditorWebContents = new Set<number>();
 
   private settings: AppSettings | null = null;
 
@@ -301,9 +318,9 @@ class SoftshotApp {
     recordingFile.byteLength += bytes.byteLength;
   }
 
-  private async createRecordingFile(): Promise<RecordingFile> {
+  private async createRecordingFile(fileExtension: VideoFileExtension): Promise<RecordingFile> {
     const id = randomUUID();
-    const filePath = await this.createTemporaryVideoFilePath();
+    const filePath = await this.createTemporaryVideoFilePath(fileExtension);
     await writeFile(filePath, "");
     this.recordingTempFilesById.set(id, {
       byteLength: 0,
@@ -333,6 +350,26 @@ class SoftshotApp {
     return false;
   }
 
+  private async fileHasMp4Media(filePath: string): Promise<boolean> {
+    return await this.fileContainsSignature(filePath, mp4FileTypeSignature)
+      && await this.fileContainsSignature(filePath, mp4MediaDataSignature);
+  }
+
+  private async fileContainsSignature(filePath: string, signature: Uint8Array): Promise<boolean> {
+    let carry: Uint8Array = new Uint8Array();
+    const stream = createReadStream(filePath, { highWaterMark: webmScanChunkSizeBytes });
+    for await (const chunk of stream as AsyncIterable<Buffer>) {
+      const scanBytes = joinedBytes(carry, chunk);
+      if (hasByteSignature(scanBytes, signature)) {
+        return true;
+      }
+
+      carry = trailingBytes(scanBytes, signature.byteLength - 1);
+    }
+
+    return false;
+  }
+
   private getRecordingTempFile(recordingId: string): RecordingTemporaryFile {
     const recordingFile = this.recordingTempFilesById.get(recordingId);
     if (!recordingFile) {
@@ -342,8 +379,14 @@ class SoftshotApp {
     return recordingFile;
   }
 
-  private async hasUsableRecordingFile(recordingFile: RecordingTemporaryFile): Promise<boolean> {
-    return recordingFile.byteLength >= minimumRecordingByteLength && await this.fileHasWebmCluster(recordingFile.filePath);
+  private async hasUsableRecordingFile(recordingFile: RecordingTemporaryFile, mimeType: string): Promise<boolean> {
+    if (recordingFile.byteLength < minimumRecordingByteLength) {
+      return false;
+    }
+
+    return mimeType.startsWith("video/mp4")
+      ? await this.fileHasMp4Media(recordingFile.filePath)
+      : await this.fileHasWebmCluster(recordingFile.filePath);
   }
 
   private takeRecordingTempFile(recordingId: string): RecordingTemporaryFile {
@@ -498,15 +541,13 @@ class SoftshotApp {
   }
 
   private async getDesktopSourceForDisplay(
-    displayId: number
+    displayId: number,
+    thumbnailSize?: Electron.Size
   ): Promise<Electron.DesktopCapturerSource> {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
       fetchWindowIcons: false,
-      thumbnailSize: {
-        height: 0,
-        width: 0
-      }
+      thumbnailSize: thumbnailSize ?? { height: 0, width: 0 }
     });
 
     const source = sources.find((candidate) => candidate.display_id === String(displayId));
@@ -522,18 +563,16 @@ class SoftshotApp {
     throw new Error(`Could not match display ${String(displayId)} to a screen source. Available display ids: ${availableIds}.`);
   }
 
-  private async captureFrozenScreenDataUrl(): Promise<string> {
-    const targetDirectory = path.join(app.getPath("temp"), appName);
-    await mkdir(targetDirectory, { recursive: true });
-
-    const filePath = path.join(targetDirectory, `${appName} frozen ${randomUUID()}.png`);
-    try {
-      await captureScreenWithoutCursor(filePath);
-      const data = await readFile(filePath);
-      return `${pngDataUrlPrefix}${data.toString("base64")}`;
-    } finally {
-      await rm(filePath, { force: true });
+  private async captureFrozenScreenDataUrl(display: Display): Promise<string> {
+    const source = await this.getDesktopSourceForDisplay(display.id, {
+      height: Math.round(display.bounds.height * display.scaleFactor),
+      width: Math.round(display.bounds.width * display.scaleFactor)
+    });
+    if (source.thumbnail.isEmpty()) {
+      throw new Error("Desktop capture did not provide a frozen screen image.");
     }
+
+    return source.thumbnail.toDataURL();
   }
 
   private getDisplayMediaDisplayId(request: Electron.DisplayMediaRequestHandlerHandlerRequest): number {
@@ -666,6 +705,9 @@ class SoftshotApp {
       this.registerIpcHandlers();
       this.registerCaptureShortcuts();
       this.tray = this.createTray();
+      void this.cleanupExpiredTemporaryRecordings().catch((error: unknown): void => {
+        this.debugLog(`temporary recording cleanup failed: ${errorMessage(error)}`);
+      });
       this.prepareNextOverlay();
       this.startUpdater();
 
@@ -688,6 +730,52 @@ class SoftshotApp {
       title,
       body: filePath
     }).show();
+  }
+
+  private notifyRecoverableRecording(filePath: string): void {
+    if (!Notification.isSupported()) {
+      return;
+    }
+
+    const notification = new Notification({
+      title: "Unsaved recording kept for 7 days",
+      body: filePath
+    });
+    notification.on("click", (): void => {
+      shell.showItemInFolder(filePath);
+    });
+    notification.show();
+  }
+
+  private recordingTempDirectory(): string {
+    return path.join(app.getPath("temp"), appName, clipboardFolderName);
+  }
+
+  private async cleanupExpiredTemporaryRecordings(): Promise<void> {
+    const targetDirectory = this.recordingTempDirectory();
+    await mkdir(targetDirectory, { recursive: true });
+    const entries = await readdir(targetDirectory, { withFileTypes: true });
+    const expiresBefore = Date.now() - temporaryRecordingRetentionMs;
+    await Promise.all(entries.map(async (entry): Promise<void> => {
+      if (!entry.isFile()) {
+        return;
+      }
+
+      const filePath = path.join(targetDirectory, entry.name);
+      const fileStats = await stat(filePath);
+      if (fileStats.mtimeMs < expiresBefore) {
+        await rm(filePath, { force: true });
+      }
+    }));
+  }
+
+  private async openRecordingTempDirectory(): Promise<void> {
+    const targetDirectory = this.recordingTempDirectory();
+    await mkdir(targetDirectory, { recursive: true });
+    const error = await shell.openPath(targetDirectory);
+    if (error) {
+      throw new Error(error);
+    }
   }
 
   private canInstallUpdatesNow(): boolean {
@@ -887,12 +975,18 @@ class SoftshotApp {
     await mkdir(targetDirectory, { recursive: true });
 
     const parentWindow = BrowserWindow.fromWebContents(event.sender);
+    const editorData = this.editorDataByWebContents.get(event.sender.id);
+    if (!editorData) {
+      throw new Error(missingEditorRecordingDataMessage);
+    }
+
+    const fileExtension = videoFileExtension(editorData.mimeType);
     const options: Electron.SaveDialogOptions = {
-      defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.webm`),
+      defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.${fileExtension}`),
       filters: [
         {
-          name: "WebM video",
-          extensions: ["webm"]
+          name: fileExtension === "mp4" ? "MP4 video" : "WebM video",
+          extensions: [fileExtension]
         }
       ],
       title: "Save recording"
@@ -927,7 +1021,7 @@ class SoftshotApp {
     this.debugLog("creating overlay");
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
-    const imageDataUrl = await this.captureFrozenScreenDataUrl();
+    const imageDataUrl = await this.captureFrozenScreenDataUrl(display);
     const overlay = this.preparedOverlayForCapture(display);
     overlay.setFullScreen(true);
     overlay.setAlwaysOnTop(true, "screen-saver");
@@ -1341,7 +1435,7 @@ class SoftshotApp {
   private async editorAudioTracksFromRecordingFiles(audioTrackFiles: RecordingAudioTrackFile[]): Promise<EditorAudioTrack[]> {
     const editorAudioTracks: EditorAudioTrack[] = [];
     for (const audioTrackFile of audioTrackFiles) {
-      if (!await this.hasUsableRecordingFile(audioTrackFile.file)) {
+      if (!await this.hasUsableRecordingFile(audioTrackFile.file, audioTrackFile.mimeType)) {
         throw new Error(`${audioTrackLabel(audioTrackFile.kind)} did not contain usable audio data.`);
       }
 
@@ -1369,6 +1463,7 @@ class SoftshotApp {
     fps: VideoFps,
     durationSeconds: number,
     mimeType: string,
+    encoder: RecordingEncoder,
     audioTracks: RecordingAudioTrack[]
   ): Promise<void> {
     const recordingFile = this.takeRecordingTempFile(recordingId);
@@ -1376,7 +1471,7 @@ class SoftshotApp {
     let isRecordingFileOwnedByEditor = false;
     try {
       audioTrackFiles = this.takeRecordingAudioTrackFiles(audioTracks);
-      if (!await this.hasUsableRecordingFile(recordingFile)) {
+      if (!await this.hasUsableRecordingFile(recordingFile, mimeType)) {
         await this.deleteRecordingFiles(recordingFile, audioTrackFiles);
         this.closeSenderWindow(event);
         return;
@@ -1390,11 +1485,13 @@ class SoftshotApp {
       this.editorDataByWebContents.set(editorWebContentsId, {
         audioTracks: editorAudioTracks,
         durationSeconds,
+        encoder,
         fps,
         mimeType,
         sourceFilePath: recordingFile.filePath,
         sourceUrl: pathToFileURL(recordingFile.filePath).toString()
       });
+      this.editorSourceFilesByWebContents.set(editorWebContentsId, recordingFile.filePath);
       this.registerEditorTempFile(editorWebContentsId, recordingFile.filePath);
       for (const audioTrackFile of audioTrackFiles) {
         this.registerEditorTempFile(editorWebContentsId, audioTrackFile.file.filePath);
@@ -1410,7 +1507,10 @@ class SoftshotApp {
         this.activeEditorWindows.delete(editor);
         this.editorDataByWebContents.delete(editorWebContentsId);
         this.editorSavePathsByWebContents.delete(editorWebContentsId);
-        void this.cleanupEditorTempFiles(editorWebContentsId).catch((error: unknown): void => {
+        void this.cleanupEditorTempFiles(
+          editorWebContentsId,
+          !this.savedEditorWebContents.delete(editorWebContentsId)
+        ).catch((error: unknown): void => {
           this.debugLog(`editor temp cleanup failed: ${errorMessage(error)}`);
         });
       });
@@ -1590,9 +1690,9 @@ class SoftshotApp {
   }
 
   private registerRecordingIpcHandlers(): void {
-    ipcMain.handle("recording:create-file", async (event): Promise<RecordingFile> => {
+    ipcMain.handle("recording:create-file", async (event, fileExtension: unknown): Promise<RecordingFile> => {
       this.getSenderOverlay(event);
-      return await this.createRecordingFile();
+      return await this.createRecordingFile(videoFileExtensionFromUnknown(fileExtension));
     });
 
     ipcMain.handle("recording:append-file-chunk", async (event, recordingId: string, bytes: Uint8Array): Promise<void> => {
@@ -1613,9 +1713,18 @@ class SoftshotApp {
         fps: VideoFps,
         durationSeconds: number,
         mimeType: string,
+        encoder: unknown,
         audioTracks: unknown
       ): Promise<void> => {
-        await this.openVideoEditor(event, recordingId, fps, durationSeconds, mimeType, recordingAudioTracksFromUnknown(audioTracks));
+        await this.openVideoEditor(
+          event,
+          recordingId,
+          fps,
+          durationSeconds,
+          mimeType,
+          recordingEncoderFromUnknown(encoder),
+          recordingAudioTracksFromUnknown(audioTracks)
+        );
       }
     );
   }
@@ -1624,7 +1733,7 @@ class SoftshotApp {
     ipcMain.handle("editor:get-bootstrap", (event): EditorBootstrap => {
       const data = this.editorDataByWebContents.get(event.sender.id);
       if (!data) {
-        throw new Error("Missing editor recording data.");
+        throw new Error(missingEditorRecordingDataMessage);
       }
 
       return data;
@@ -1763,6 +1872,14 @@ class SoftshotApp {
     template.push(
       { type: "separator" },
       {
+        label: "Recent recordings",
+        click: (): void => {
+          void this.openRecordingTempDirectory().catch((error: unknown): void => {
+            void this.showError("Could not open recent recordings.", error);
+          });
+        }
+      },
+      {
         label: "Settings",
         click: (): void => {
           void this.openSettingsWindow();
@@ -1801,20 +1918,38 @@ class SoftshotApp {
     });
   }
 
-  private async cleanupEditorTempFiles(webContentsId: number): Promise<void> {
+  private async cleanupEditorTempFiles(webContentsId: number, shouldPreserveSourceFile: boolean): Promise<void> {
     const temporaryFiles = this.editorTempFilesByWebContents.get(webContentsId);
+    const sourceFilePath = this.editorSourceFilesByWebContents.get(webContentsId);
     this.editorTempFilesByWebContents.delete(webContentsId);
+    this.editorSourceFilesByWebContents.delete(webContentsId);
     if (!temporaryFiles) {
       return;
     }
 
     await Promise.all([...temporaryFiles].map(async (filePath): Promise<void> => {
+      if (shouldPreserveSourceFile && filePath === sourceFilePath) {
+        return;
+      }
+
       await rm(filePath, { force: true });
     }));
+
+    if (shouldPreserveSourceFile && sourceFilePath) {
+      this.notifyRecoverableRecording(sourceFilePath);
+    }
   }
 
   private async prepareEditorVideoFile(webContentsId: number, bytes: Uint8Array): Promise<PreparedVideoFile> {
-    const filePath = await this.writeTemporaryVideoFile(Buffer.from(bytes));
+    const editorData = this.editorDataByWebContents.get(webContentsId);
+    if (!editorData) {
+      throw new Error(missingEditorRecordingDataMessage);
+    }
+
+    const filePath = await this.writeTemporaryVideoFile(
+      Buffer.from(bytes),
+      videoFileExtension(editorData.mimeType)
+    );
     this.registerEditorTempFile(webContentsId, filePath);
     return { filePath };
   }
@@ -1824,19 +1959,20 @@ class SoftshotApp {
     this.assertEditorSavePath(webContentsId, targetFilePath);
     await mkdir(path.dirname(targetFilePath), { recursive: true });
     await copyFile(preparedFilePath, targetFilePath);
+    this.savedEditorWebContents.add(webContentsId);
     this.editorSavePathsByWebContents.get(webContentsId)?.delete(targetFilePath);
     this.notifySaved("Recording saved", targetFilePath);
   }
 
-  private async createTemporaryVideoFilePath(): Promise<string> {
-    const targetDirectory = path.join(app.getPath("temp"), appName, clipboardFolderName);
+  private async createTemporaryVideoFilePath(fileExtension: VideoFileExtension): Promise<string> {
+    const targetDirectory = this.recordingTempDirectory();
     await mkdir(targetDirectory, { recursive: true });
 
-    return path.join(targetDirectory, `${appName} ${this.timestamp()} ${randomUUID()}.webm`);
+    return path.join(targetDirectory, `${appName} ${this.timestamp()} ${randomUUID()}.${fileExtension}`);
   }
 
-  private async writeTemporaryVideoFile(data: Buffer): Promise<string> {
-    const filePath = await this.createTemporaryVideoFilePath();
+  private async writeTemporaryVideoFile(data: Buffer, fileExtension: VideoFileExtension): Promise<string> {
+    const filePath = await this.createTemporaryVideoFilePath(fileExtension);
     await writeFile(filePath, data);
     return filePath;
   }
@@ -1907,6 +2043,45 @@ function recordingAudioTracksFromUnknown(value: unknown): RecordingAudioTrack[] 
   }
 
   return value.map((audioTrack) => recordingAudioTrackFromUnknown(audioTrack));
+}
+
+function recordingEncoderFromUnknown(value: unknown): RecordingEncoder {
+  if (value === "hardware" || value === "compatibility") {
+    return value;
+  }
+
+  throw new TypeError("Recording encoder must be hardware or compatibility.");
+}
+
+function videoFileExtension(mimeType: string): VideoFileExtension {
+  return mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+}
+
+function videoFileExtensionFromUnknown(value: unknown): VideoFileExtension {
+  if (value === "mp4" || value === "webm") {
+    return value;
+  }
+
+  throw new TypeError("Recording file extension must be mp4 or webm.");
+}
+
+function hasByteSignature(bytes: Uint8Array, signature: Uint8Array): boolean {
+  if (bytes.byteLength < signature.byteLength) {
+    return false;
+  }
+
+  const lastStartOffset = bytes.byteLength - signature.byteLength;
+  for (let offset = 0; offset <= lastStartOffset; offset += 1) {
+    if (hasByteSignatureAt(bytes, signature, offset)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasByteSignatureAt(bytes: Uint8Array, signature: Uint8Array, offset: number): boolean {
+  return signature.every((expectedByte, byteIndex) => bytes[offset + byteIndex] === expectedByte);
 }
 
 function joinedBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
@@ -2044,71 +2219,6 @@ async function writeFileDropListToClipboard(filePath: string): Promise<void> {
   await runPowershellClipboardScript(filePath);
 }
 
-async function captureScreenWithoutCursor(filePath: string): Promise<void> {
-  if (process.platform !== "win32") {
-    throw new Error("Cursor-free frozen screenshots are only supported on Windows.");
-  }
-
-  await runPowershellFrozenCaptureScript(filePath);
-}
-
-async function runPowershellFrozenCaptureScript(filePath: string): Promise<void> {
-  const script = `
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class SoftshotDpiAwareness {
-  [DllImport("user32.dll")]
-  public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
-}
-"@
-$dpiContext = [IntPtr]::new(${String(perMonitorDpiAwareV2)})
-if (-not [SoftshotDpiAwareness]::SetProcessDpiAwarenessContext($dpiContext)) {
-  throw "Could not enable per-monitor DPI awareness for frozen screen capture."
-}
-Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
-$out = [Environment]::GetEnvironmentVariable("${frozenCaptureFileEnvironmentName}")
-if ([string]::IsNullOrWhiteSpace($out)) {
-  throw "Missing ${frozenCaptureFileEnvironmentName}."
-}
-$screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
-$bounds = $screen.Bounds
-$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-try {
-  $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-  $bitmap.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-} finally {
-  $graphics.Dispose()
-  $bitmap.Dispose()
-}
-`;
-
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      powershellExecutable,
-      powershellArguments(script),
-      {
-        env: {
-          ...process.env,
-          [frozenCaptureFileEnvironmentName]: filePath
-        },
-        windowsHide: true
-      },
-      (error, standardOutput, standardError): void => {
-        if (error) {
-          reject(new Error(powershellFrozenCaptureErrorMessage(error, standardOutput, standardError)));
-          return;
-        }
-
-        resolve();
-      }
-    );
-  });
-}
-
 async function runPowershellClipboardScript(filePath: string): Promise<void> {
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
@@ -2146,15 +2256,6 @@ $files = New-Object System.Collections.Specialized.StringCollection
 
 function powershellArguments(script: string): string[] {
   return ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script];
-}
-
-function powershellFrozenCaptureErrorMessage(error: Error, standardOutput: string, standardError: string): string {
-  const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
-  if (!output) {
-    return `Could not capture the frozen screen without the cursor.\n${error.message}`;
-  }
-
-  return `Could not capture the frozen screen without the cursor.\n${output}`;
 }
 
 function powershellClipboardErrorMessage(error: Error, standardOutput: string, standardError: string): string {

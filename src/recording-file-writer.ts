@@ -1,8 +1,11 @@
+import type { VideoFileExtension } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
+const recordingChunkIntervalMs = 1000;
+
 export class RecordingFileWriter {
-  static async create(): Promise<RecordingFileWriter> {
-    const recordingFile = await getSoftshotApi().createRecordingFile();
+  static async create(fileExtension: VideoFileExtension): Promise<RecordingFileWriter> {
+    const recordingFile = await getSoftshotApi().createRecordingFile(fileExtension);
     return new RecordingFileWriter(recordingFile.id);
   }
 
@@ -28,6 +31,10 @@ export class RecordingFileWriter {
 
   private async writeBlobChunk(blob: Blob): Promise<void> {
     const bytes = new Uint8Array(await blob.arrayBuffer());
+    await this.writeBytes(bytes);
+  }
+
+  private async writeBytes(bytes: Uint8Array): Promise<void> {
     await getSoftshotApi().appendRecordingFileChunk(this.recordingId, bytes);
   }
 
@@ -66,6 +73,14 @@ export class RecordingFileWriter {
   }
 
   start(recorder: MediaRecorder): void {
-    recorder.start();
+    recorder.start(recordingChunkIntervalMs);
+  }
+
+  writableStream(): WritableStream<Uint8Array> {
+    return new WritableStream({
+      write: async (bytes): Promise<void> => {
+        await this.writeBytes(bytes);
+      }
+    });
   }
 }

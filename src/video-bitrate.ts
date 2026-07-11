@@ -1,9 +1,9 @@
 import type { VideoFps, VideoQuality } from "./shared.js";
 import { videoFpsOptions, videoQualityHeights } from "./shared.js";
 
-const highQualityVideoBitrate = 20_000_000;
-const standardQualityVideoBitrate = 10_000_000;
-const highFpsBitrateMultiplier = 1.5;
+const highQualityVideoBitrate = 8_000_000;
+const standardQualityVideoBitrate = 4_500_000;
+const highFpsBitrateMultiplier = 1.25;
 
 export function exportedVideoBitrate(height: number, selectedFps: VideoFps): number {
   const baseBitrate = height <= videoQualityHeights.low

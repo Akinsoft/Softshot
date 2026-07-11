@@ -10,6 +10,14 @@ const supportedAudioVideoMimeTypes = [
   "video/webm;codecs=vp9,opus",
   "video/webm"
 ] as const;
+const supportedMp4MimeTypes = [
+  "video/mp4;codecs=avc1.640028",
+  "video/mp4;codecs=avc1.42E01E"
+] as const;
+const supportedAudioVideoMp4MimeTypes = [
+  "video/mp4;codecs=avc1.640028,mp4a.40.2",
+  "video/mp4;codecs=avc1.42E01E,mp4a.40.2"
+] as const;
 
 export interface TrimRange {
   end: number;
@@ -228,14 +236,16 @@ function stopTracks(stream: MediaStream): void {
 }
 
 function supportedVideoMimeType(preferredMimeType: string, hasAudio: boolean): string {
-  if (!hasAudio && MediaRecorder.isTypeSupported(preferredMimeType)) {
-    return preferredMimeType;
+  const isMp4 = preferredMimeType.startsWith("video/mp4");
+  let mimeTypes: readonly string[];
+  if (isMp4) {
+    mimeTypes = hasAudio ? supportedAudioVideoMp4MimeTypes : supportedMp4MimeTypes;
+  } else {
+    mimeTypes = hasAudio ? supportedAudioVideoMimeTypes : supportedMimeTypes;
   }
-
-  const mimeTypes = hasAudio ? supportedAudioVideoMimeTypes : supportedMimeTypes;
   const supported = mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
   if (!supported) {
-    throw new Error("This system does not support WebM video export.");
+    throw new Error(`This system does not support ${isMp4 ? "MP4" : "WebM"} video export.`);
   }
 
   return supported;

@@ -219,7 +219,7 @@ class VideoEditorApp {
   }
 
   private async createPreparedVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
-    if (this.isFullTrimRange(trimRange) && this.audioTracksForExport().length === 0) {
+    if (this.isFullTrimRange(trimRange) && this.mutedAudioKinds.size === 0) {
       return {
         filePath: this.sourceFilePath,
         key
@@ -301,9 +301,11 @@ class VideoEditorApp {
     this.mimeType = bootstrap.mimeType;
     this.sourceFilePath = bootstrap.sourceFilePath;
     this.sourceUrl = bootstrap.sourceUrl;
+    this.video.muted = this.audioTracks.length > 0;
     this.video.src = this.sourceUrl;
     this.createAudioPreviewElements();
     this.renderAudioTracks();
+    this.showStatus(bootstrap.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding");
   }
 
   private async prepareVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {

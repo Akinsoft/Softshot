@@ -1,16 +1,32 @@
+import {
+  AppendOnlyStreamTarget,
+  CanvasSource,
+  MediaStreamAudioTrackSource,
+  MediaStreamVideoTrackSource,
+  Mp4OutputFormat,
+  Output
+} from "mediabunny";
+
 import { microphoneConstraints } from "./audio-devices.js";
 import { getCursorlessDesktopStream, stopTracks } from "./desktop-capture.js";
 import { drawAnnotations } from "./overlay-drawing.js";
 import type { Annotation } from "./overlay-model.js";
 import { RecordingFileWriter } from "./recording-file-writer.js";
-import type { AudioSourceKind, RecordingAudioTrack, Rect, VideoFps, VideoQuality } from "./shared.js";
+import type { AudioSourceKind, RecordingAudioTrack, RecordingEncoder, Rect, VideoFps, VideoQuality } from "./shared.js";
 import { videoQualityHeights } from "./shared.js";
 import { recordingVideoBitrate } from "./video-bitrate.js";
+import { selectVideoRecorderProfile } from "./video-recorder-profile.js";
 
 const minimumVideoDimensionPx = 2;
 const millisecondsPerSecond = 1000;
-const supportedMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
 const supportedAudioMimeTypes = ["audio/webm;codecs=opus", "audio/webm"] as const;
+const hardwareVideoCodec = "avc";
+const hardwareVideoCodecString = "avc1.640028";
+const hardwareAudioBitrate = 192_000;
+const hardwareKeyframeIntervalSeconds = 2;
+const hardwareFragmentDurationSeconds = 1;
+
+type HardwareRecordingOutput = Output<Mp4OutputFormat, AppendOnlyStreamTarget>;
 
 export interface RecordingSessionConfig {
   annotations: Annotation[];
@@ -24,6 +40,7 @@ export interface RecordingSessionConfig {
 export interface RecordingResult {
   audioTracks: RecordingAudioTrack[];
   durationSeconds: number;
+  encoder: RecordingEncoder;
   mimeType: string;
   recordingId: string;
 }
@@ -35,10 +52,28 @@ interface AudioRecorder {
   writer: RecordingFileWriter;
 }
 
+interface VideoOutput {
+  annotationCanvas: HTMLCanvasElement | null;
+  canvas: HTMLCanvasElement | null;
+  context: CanvasRenderingContext2D | null;
+  stream: MediaStream;
+}
+
+interface EmbeddedAudioMix {
+  context: AudioContext | null;
+  track: MediaStreamTrack | null;
+}
+
+interface HardwareRecording {
+  canvasSource: CanvasSource | null;
+  output: HardwareRecordingOutput;
+}
+
 export class RecordingSession {
   static async create(config: RecordingSessionConfig): Promise<RecordingSession> {
-    const videoWriter = await RecordingFileWriter.create();
+    let videoWriter: RecordingFileWriter | null = null;
     const audioRecorders: AudioRecorder[] = [];
+    let embeddedAudioContext: AudioContext | null = null;
     let microphoneStream: MediaStream | null = null;
     let sourceStream: MediaStream | null = null;
     try {
@@ -53,84 +88,112 @@ export class RecordingSession {
       }
 
       const sourceVideo = await createSourceVideo(sourceStream);
-      const outputSize = videoOutputSize(config.crop, config.quality);
-      const outputCanvas = document.createElement("canvas");
-      outputCanvas.width = outputSize.width;
-      outputCanvas.height = outputSize.height;
-
-      const outputContext = outputCanvas.getContext("2d", {
-        alpha: false,
-        desynchronized: true
-      });
-      if (!outputContext) {
-        throw new Error("Could not create the recording canvas.");
+      const outputSize = videoOutputSize(config.crop, config.quality, sourceVideo);
+      const bitrate = recordingVideoBitrate(config.quality, config.fps);
+      const profile = await selectVideoRecorderProfile(
+        outputSize.width,
+        outputSize.height,
+        config.fps,
+        bitrate,
+        audioRecorders.length > 0
+      );
+      videoWriter = await RecordingFileWriter.create(profile.fileExtension);
+      const videoOutput = await createVideoOutput(sourceStream, config, outputSize);
+      const embeddedAudioMix = await createEmbeddedAudioMix(audioRecorders);
+      embeddedAudioContext = embeddedAudioMix.context;
+      if (embeddedAudioMix.track) {
+        videoOutput.stream.addTrack(embeddedAudioMix.track);
       }
 
-      const outputStream = outputCanvas.captureStream(config.fps);
-      const mimeType = supportedVideoMimeType();
-      const recorder = new MediaRecorder(outputStream, {
-        mimeType,
-        videoBitsPerSecond: recordingVideoBitrate(config.quality, config.fps)
-      });
-      videoWriter.connect(recorder);
+      const hardwareRecording = profile.encoder === "hardware"
+        ? createHardwareRecording(videoOutput, embeddedAudioMix.track, config.fps, bitrate, videoWriter)
+        : null;
+      const recorder = hardwareRecording
+        ? null
+        : new MediaRecorder(videoOutput.stream, {
+          mimeType: profile.mimeType,
+          videoBitsPerSecond: bitrate
+        });
+      if (recorder) {
+        videoWriter.connect(recorder);
+      }
+
       const session = new RecordingSession({
         audioRecorders,
+        annotationCanvas: videoOutput.annotationCanvas,
         crop: { ...config.crop },
-        frameIntervalMs: millisecondsPerSecond / config.fps,
-        outputCanvas,
-        outputContext,
-        outputStream,
-        mimeType,
+        embeddedAudioContext: embeddedAudioMix.context,
+        encoder: profile.encoder,
+        hardwareCanvasSource: hardwareRecording?.canvasSource ?? null,
+        hardwareOutput: hardwareRecording?.output ?? null,
+        outputCanvas: videoOutput.canvas,
+        outputContext: videoOutput.context,
+        outputStream: videoOutput.stream,
+        mimeType: profile.mimeType,
         microphoneStream,
         recorder,
         sourceStream,
         sourceVideo,
         videoWriter
       });
-      session.connectRecorder(config.annotations);
+      session.connectRecorder();
       return session;
     } catch (error) {
       stopTracks(microphoneStream);
       stopTracks(sourceStream);
+      if (embeddedAudioContext?.state !== "closed") {
+        await embeddedAudioContext?.close();
+      }
       await discardWriters(videoWriter, audioRecorders);
       throw error;
     }
   }
 
-  private animationHandle: number | null = null;
+  private readonly annotationCanvas: HTMLCanvasElement | null;
   private readonly audioRecorders: AudioRecorder[];
   private readonly crop: Rect;
-  private readonly frameIntervalMs: number;
+  private readonly embeddedAudioContext: AudioContext | null;
+  private readonly encoder: RecordingEncoder;
+  private frameCallbackHandle: number | null = null;
+  private readonly hardwareCanvasSource: CanvasSource | null;
+  private readonly hardwareOutput: HardwareRecordingOutput | null;
   private isFinalized = false;
-  private nextFrameDueAtMs: number | null = null;
-  private readonly outputCanvas: HTMLCanvasElement;
-  private readonly outputContext: CanvasRenderingContext2D;
+  private readonly outputCanvas: HTMLCanvasElement | null;
+  private readonly outputContext: CanvasRenderingContext2D | null;
   private readonly outputStream: MediaStream;
   private readonly mimeType: string;
   private readonly microphoneStream: MediaStream | null;
-  private readonly recorder: MediaRecorder;
+  private readonly recorder: MediaRecorder | null;
   private recordingStartedAtMs: number | null = null;
   private readonly sourceStream: MediaStream;
   private readonly sourceVideo: HTMLVideoElement;
   private readonly videoWriter: RecordingFileWriter;
 
   private constructor(config: {
+    annotationCanvas: HTMLCanvasElement | null;
     audioRecorders: AudioRecorder[];
     crop: Rect;
-    frameIntervalMs: number;
-    outputCanvas: HTMLCanvasElement;
-    outputContext: CanvasRenderingContext2D;
+    embeddedAudioContext: AudioContext | null;
+    encoder: RecordingEncoder;
+    hardwareCanvasSource: CanvasSource | null;
+    hardwareOutput: HardwareRecordingOutput | null;
+    outputCanvas: HTMLCanvasElement | null;
+    outputContext: CanvasRenderingContext2D | null;
     outputStream: MediaStream;
     mimeType: string;
     microphoneStream: MediaStream | null;
-    recorder: MediaRecorder;
+    recorder: MediaRecorder | null;
     sourceStream: MediaStream;
     sourceVideo: HTMLVideoElement;
     videoWriter: RecordingFileWriter;
   }) {
+    this.annotationCanvas = config.annotationCanvas;
     this.audioRecorders = config.audioRecorders;
     this.crop = config.crop;
-    this.frameIntervalMs = config.frameIntervalMs;
+    this.embeddedAudioContext = config.embeddedAudioContext;
+    this.encoder = config.encoder;
+    this.hardwareCanvasSource = config.hardwareCanvasSource;
+    this.hardwareOutput = config.hardwareOutput;
     this.outputCanvas = config.outputCanvas;
     this.outputContext = config.outputContext;
     this.outputStream = config.outputStream;
@@ -142,14 +205,30 @@ export class RecordingSession {
     this.videoWriter = config.videoWriter;
   }
 
-  private connectRecorder(annotations: Annotation[]): void {
+  private connectRecorder(): void {
+    if (!this.recorder) {
+      return;
+    }
+
     this.recorder.addEventListener("start", () => {
-      this.drawFrameWithAnnotations(annotations);
-      this.queueNextFrame(annotations);
+      this.startDrawingFrames();
     });
   }
 
+  private startDrawingFrames(): void {
+    if (!this.outputCanvas) {
+      return;
+    }
+
+    this.drawFrame();
+    this.queueNextFrame();
+  }
+
   private drawFrame(): void {
+    if (!this.outputCanvas || !this.outputContext) {
+      return;
+    }
+
     const sourceScaleX = this.sourceVideo.videoWidth / window.innerWidth;
     const sourceScaleY = this.sourceVideo.videoHeight / window.innerHeight;
     this.outputContext.clearRect(0, 0, this.outputCanvas.width, this.outputCanvas.height);
@@ -164,37 +243,27 @@ export class RecordingSession {
       this.outputCanvas.width,
       this.outputCanvas.height
     );
+    if (this.annotationCanvas) {
+      this.outputContext.drawImage(this.annotationCanvas, 0, 0);
+    }
   }
 
-  private drawFrameWithAnnotations(annotations: Annotation[]): void {
+  private queueNextFrame(): void {
+    this.frameCallbackHandle = this.sourceVideo.requestVideoFrameCallback((): void => {
+      void this.drawAndEncodeFrame();
+    });
+  }
+
+  private async drawAndEncodeFrame(): Promise<void> {
     this.drawFrame();
-    drawAnnotations(this.outputContext, annotations, {
-      clip: this.crop,
-      offset: { x: this.crop.x, y: this.crop.y },
-      scale: {
-        x: this.outputCanvas.width / this.crop.width,
-        y: this.outputCanvas.height / this.crop.height
-      }
-    });
-  }
-
-  private queueNextFrame(annotations: Annotation[]): void {
-    this.animationHandle = requestAnimationFrame((timestamp): void => {
-      this.updateFrame(annotations, timestamp);
-    });
-  }
-
-  private updateFrame(annotations: Annotation[], timestamp: number): void {
-    if (this.shouldDrawFrame(timestamp)) {
-      this.drawFrameWithAnnotations(annotations);
-      this.nextFrameDueAtMs = nextFrameDueAt(timestamp, this.nextFrameDueAtMs, this.frameIntervalMs);
+    if (this.hardwareCanvasSource && this.recordingStartedAtMs !== null) {
+      const timestamp = (performance.now() - this.recordingStartedAtMs) / millisecondsPerSecond;
+      await this.hardwareCanvasSource.add(timestamp);
     }
 
-    this.queueNextFrame(annotations);
-  }
-
-  private shouldDrawFrame(timestamp: number): boolean {
-    return this.nextFrameDueAtMs === null || timestamp >= this.nextFrameDueAtMs;
+    if (this.frameCallbackHandle !== null) {
+      this.queueNextFrame();
+    }
   }
 
   private recordingDurationSeconds(stoppedAtMs: number): number {
@@ -206,13 +275,26 @@ export class RecordingSession {
   }
 
   private async stopRecorderIfActive(): Promise<void> {
-    if (this.recorder.state === "inactive") {
+    if (this.hardwareOutput) {
+      this.stopFrameDrawing();
+      this.hardwareCanvasSource?.close();
+      await this.hardwareOutput.finalize();
+      await this.videoWriter.finalize();
+      return;
+    }
+
+    const { recorder } = this;
+    if (!recorder) {
+      throw new Error("The recording has no video encoder.");
+    }
+
+    if (recorder.state === "inactive") {
       await this.videoWriter.finalize();
       return;
     }
 
     const stopped = new Promise<void>((resolve) => {
-      this.recorder.addEventListener(
+      recorder.addEventListener(
         "stop",
         () => {
           resolve();
@@ -220,7 +302,7 @@ export class RecordingSession {
         { once: true }
       );
     });
-    this.recorder.stop();
+    recorder.stop();
     await stopped;
     await this.videoWriter.finalize();
   }
@@ -231,9 +313,35 @@ export class RecordingSession {
     }));
   }
 
+  private async closeEmbeddedAudioContext(): Promise<void> {
+    if (!this.embeddedAudioContext || this.embeddedAudioContext.state === "closed") {
+      return;
+    }
+
+    await this.embeddedAudioContext.close();
+  }
+
+  private stopFrameDrawing(): void {
+    if (this.frameCallbackHandle === null) {
+      return;
+    }
+
+    this.sourceVideo.cancelVideoFrameCallback(this.frameCallbackHandle);
+    this.frameCallbackHandle = null;
+  }
+
   async discard(): Promise<void> {
-    await this.stopRecorderIfActive();
+    if (this.hardwareOutput) {
+      this.stopFrameDrawing();
+      if (this.hardwareOutput.state !== "canceled" && this.hardwareOutput.state !== "finalized") {
+        await this.hardwareOutput.cancel();
+      }
+    } else {
+      await this.stopRecorderIfActive();
+    }
+
     await this.stopAudioRecorders();
+    await this.closeEmbeddedAudioContext();
     this.stopTracks();
 
     if (this.isFinalized) {
@@ -244,21 +352,33 @@ export class RecordingSession {
     this.isFinalized = true;
   }
 
-  start(): void {
-    this.recordingStartedAtMs = performance.now();
+  async start(): Promise<void> {
     this.drawFrame();
     for (const audioRecorder of this.audioRecorders) {
       audioRecorder.writer.start(audioRecorder.recorder);
     }
 
+    if (this.hardwareOutput) {
+      await this.hardwareOutput.start();
+      this.recordingStartedAtMs = performance.now();
+      this.startDrawingFrames();
+      return;
+    }
+
+    if (!this.recorder) {
+      throw new Error("The recording has no video encoder.");
+    }
+
+    this.recordingStartedAtMs = performance.now();
     this.videoWriter.start(this.recorder);
   }
 
   async stop(): Promise<RecordingResult> {
-    if (this.recorder.state === "inactive") {
+    if (!this.hardwareOutput && this.recorder?.state === "inactive") {
       return {
         audioTracks: [],
         durationSeconds: 0,
+        encoder: this.encoder,
         mimeType: this.mimeType,
         recordingId: this.videoWriter.recordingId
       };
@@ -267,6 +387,7 @@ export class RecordingSession {
     const durationSeconds = this.recordingDurationSeconds(performance.now());
     await this.stopRecorderIfActive();
     await this.stopAudioRecorders();
+    await this.closeEmbeddedAudioContext();
     this.isFinalized = true;
     return {
       audioTracks: this.audioRecorders.map((audioRecorder) => ({
@@ -275,18 +396,15 @@ export class RecordingSession {
         recordingId: audioRecorder.writer.recordingId
       })),
       durationSeconds,
+      encoder: this.encoder,
       mimeType: this.mimeType,
       recordingId: this.videoWriter.recordingId
     };
   }
 
   stopTracks(): void {
-    if (this.animationHandle !== null) {
-      cancelAnimationFrame(this.animationHandle);
-      this.animationHandle = null;
-    }
+    this.stopFrameDrawing();
 
-    this.nextFrameDueAtMs = null;
     stopTracks(this.sourceStream);
     stopTracks(this.microphoneStream);
     stopTracks(this.outputStream);
@@ -296,7 +414,7 @@ export class RecordingSession {
 async function audioRecorderFromTrack(kind: AudioSourceKind, track: MediaStreamTrack): Promise<AudioRecorder> {
   const stream = new MediaStream([track]);
   const mimeType = supportedAudioMimeType();
-  const writer = await RecordingFileWriter.create();
+  const writer = await RecordingFileWriter.create("webm");
   try {
     const recorder = new MediaRecorder(stream, { mimeType });
     writer.connect(recorder);
@@ -322,9 +440,188 @@ async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoEl
   return sourceVideo;
 }
 
-async function discardWriters(videoWriter: RecordingFileWriter, audioRecorders: AudioRecorder[]): Promise<void> {
+async function createEmbeddedAudioMix(audioRecorders: AudioRecorder[]): Promise<EmbeddedAudioMix> {
+  const tracks = audioRecorders.flatMap((audioRecorder) => audioRecorder.recorder.stream.getAudioTracks());
+  if (tracks.length === 0) {
+    return { context: null, track: null };
+  }
+
+  if (tracks.length === 1) {
+    return { context: null, track: tracks[0] };
+  }
+
+  const context = new AudioContext();
+  const destination = context.createMediaStreamDestination();
+  for (const track of tracks) {
+    context.createMediaStreamSource(new MediaStream([track])).connect(destination);
+  }
+
+  await context.resume();
+  return { context, track: destination.stream.getAudioTracks()[0] };
+}
+
+async function createVideoOutput(
+  sourceStream: MediaStream,
+  config: RecordingSessionConfig,
+  outputSize: { height: number; width: number }
+): Promise<VideoOutput> {
+  const directStream = await directVideoStream(sourceStream, config, outputSize);
+  if (directStream) {
+    setVideoContentHint(directStream);
+    return {
+      annotationCanvas: null,
+      canvas: null,
+      context: null,
+      stream: directStream
+    };
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize.width;
+  canvas.height = outputSize.height;
+  const context = canvas.getContext("2d", {
+    alpha: false,
+    desynchronized: true
+  });
+  if (!context) {
+    throw new Error("Could not create the recording canvas.");
+  }
+
+  const stream = canvas.captureStream(config.fps);
+  setVideoContentHint(stream);
+  return {
+    annotationCanvas: createAnnotationCanvas(config.annotations, config.crop, outputSize),
+    canvas,
+    context,
+    stream
+  };
+}
+
+function createHardwareRecording(
+  videoOutput: VideoOutput,
+  audioTrack: MediaStreamTrack | null,
+  fps: VideoFps,
+  bitrate: number,
+  writer: RecordingFileWriter
+): HardwareRecording {
+  const output = new Output({
+    format: new Mp4OutputFormat({
+      fastStart: "fragmented",
+      minimumFragmentDuration: hardwareFragmentDurationSeconds
+    }),
+    target: new AppendOnlyStreamTarget(writer.writableStream())
+  });
+  const encodingConfig = {
+    bitrate,
+    codec: hardwareVideoCodec,
+    contentHint: "detail",
+    fullCodecString: hardwareVideoCodecString,
+    hardwareAcceleration: "prefer-hardware",
+    keyFrameInterval: hardwareKeyframeIntervalSeconds,
+    latencyMode: "realtime"
+  } as const;
+  let canvasSource: CanvasSource | null = null;
+  if (videoOutput.canvas) {
+    canvasSource = new CanvasSource(videoOutput.canvas, encodingConfig);
+    output.addVideoTrack(canvasSource, { frameRate: fps });
+  } else {
+    const videoTrack = videoOutput.stream.getVideoTracks().at(0);
+    if (!videoTrack) {
+      throw new Error("Desktop capture did not provide a video track.");
+    }
+
+    output.addVideoTrack(
+      new MediaStreamVideoTrackSource(videoTrack, encodingConfig, { frameRate: fps }),
+      { frameRate: fps }
+    );
+  }
+
+  if (audioTrack) {
+    output.addAudioTrack(new MediaStreamAudioTrackSource(audioTrack as MediaStreamAudioTrack, {
+      bitrate: hardwareAudioBitrate,
+      codec: "aac"
+    }));
+  }
+
+  return { canvasSource, output };
+}
+
+async function directVideoStream(
+  sourceStream: MediaStream,
+  config: RecordingSessionConfig,
+  outputSize: { height: number; width: number }
+): Promise<MediaStream | null> {
+  if (config.annotations.length > 0 || !isFullViewportCrop(config.crop)) {
+    return null;
+  }
+
+  const track = sourceStream.getVideoTracks().at(0);
+  if (!track) {
+    throw new Error("Desktop capture did not provide a video track.");
+  }
+
+  try {
+    await track.applyConstraints({
+      frameRate: config.fps,
+      height: outputSize.height,
+      width: outputSize.width
+    });
+  } catch {
+    return null;
+  }
+
+  const settings = track.getSettings();
+  if (settings.width !== outputSize.width || settings.height !== outputSize.height) {
+    return null;
+  }
+
+  return new MediaStream([track]);
+}
+
+function createAnnotationCanvas(
+  annotations: Annotation[],
+  crop: Rect,
+  outputSize: { height: number; width: number }
+): HTMLCanvasElement | null {
+  if (annotations.length === 0) {
+    return null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outputSize.width;
+  canvas.height = outputSize.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Could not create the recording annotation canvas.");
+  }
+
+  drawAnnotations(context, annotations, {
+    clip: crop,
+    offset: { x: crop.x, y: crop.y },
+    scale: {
+      x: outputSize.width / crop.width,
+      y: outputSize.height / crop.height
+    }
+  });
+  return canvas;
+}
+
+function isFullViewportCrop(crop: Rect): boolean {
+  return crop.x <= 0
+    && crop.y <= 0
+    && crop.width >= window.innerWidth
+    && crop.height >= window.innerHeight;
+}
+
+function setVideoContentHint(stream: MediaStream): void {
+  for (const track of stream.getVideoTracks()) {
+    track.contentHint = "detail";
+  }
+}
+
+async function discardWriters(videoWriter: RecordingFileWriter | null, audioRecorders: AudioRecorder[]): Promise<void> {
   await Promise.all([
-    videoWriter.discard(),
+    videoWriter?.discard(),
     ...audioRecorders.map(async (audioRecorder) => {
       await audioRecorder.writer.discard();
     })
@@ -380,15 +677,6 @@ function systemAudioTrack(sourceStream: MediaStream): MediaStreamTrack {
   return tracks[0];
 }
 
-function supportedVideoMimeType(): string {
-  const supported = supportedMimeTypes.find((type) => MediaRecorder.isTypeSupported(type));
-  if (!supported) {
-    throw new Error("This system does not support WebM screen recording through MediaRecorder.");
-  }
-
-  return supported;
-}
-
 function supportedAudioMimeType(): string {
   const supported = supportedAudioMimeTypes.find((type) => MediaRecorder.isTypeSupported(type));
   if (!supported) {
@@ -398,26 +686,19 @@ function supportedAudioMimeType(): string {
   return supported;
 }
 
-function nextFrameDueAt(timestamp: number, currentFrameDueAtMs: number | null, frameIntervalMs: number): number {
-  if (currentFrameDueAtMs === null) {
-    return timestamp + frameIntervalMs;
-  }
-
-  const nextFrameAt = currentFrameDueAtMs + frameIntervalMs;
-  if (timestamp > nextFrameAt) {
-    return timestamp + frameIntervalMs;
-  }
-
-  return nextFrameAt;
+function videoOutputSize(rect: Rect, selectedQuality: VideoQuality, sourceVideo: HTMLVideoElement): { height: number; width: number } {
+  const targetHeight = selectedQuality === "720p" ? videoQualityHeights.low : videoQualityHeights.high;
+  const sourceWidth = rect.width * sourceVideo.videoWidth / window.innerWidth;
+  const sourceHeight = rect.height * sourceVideo.videoHeight / window.innerHeight;
+  const outputScale = Math.min(1, targetHeight / sourceHeight);
+  return {
+    height: evenVideoDimension(sourceHeight * outputScale),
+    width: evenVideoDimension(sourceWidth * outputScale)
+  };
 }
 
-function videoOutputSize(rect: Rect, selectedQuality: VideoQuality): { height: number; width: number } {
-  const targetHeight = selectedQuality === "720p" ? videoQualityHeights.low : videoQualityHeights.high;
-  const aspect = rect.width / rect.height;
-  return {
-    height: targetHeight,
-    width: Math.max(minimumVideoDimensionPx, Math.round(targetHeight * aspect))
-  };
+function evenVideoDimension(value: number): number {
+  return Math.max(minimumVideoDimensionPx, Math.round(value / minimumVideoDimensionPx) * minimumVideoDimensionPx);
 }
 
 async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {

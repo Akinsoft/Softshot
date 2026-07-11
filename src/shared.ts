@@ -18,6 +18,8 @@ export type DrawingTool = "select" | "pen" | "arrow";
 export type AudioSourceKind = "microphone" | "system";
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
+export type VideoFileExtension = "mp4" | "webm";
+export type RecordingEncoder = "hardware" | "compatibility";
 
 export interface Rect {
   x: number;
@@ -35,6 +37,7 @@ export interface OverlayBootstrap {
 export interface EditorBootstrap {
   audioTracks: EditorAudioTrack[];
   durationSeconds: number;
+  encoder: RecordingEncoder;
   fps: VideoFps;
   mimeType: string;
   sourceFilePath: string;
@@ -96,7 +99,7 @@ export type StopRecordingRequestHandler = () => void;
 
 export interface SoftshotApi {
   appendRecordingFileChunk(recordingId: string, bytes: Uint8Array): Promise<void>;
-  createRecordingFile(): Promise<RecordingFile>;
+  createRecordingFile(fileExtension: VideoFileExtension): Promise<RecordingFile>;
   discardRecordingFile(recordingId: string): Promise<void>;
   getBootstrap(): Promise<OverlayBootstrap>;
   saveScreenshot(dataUrl: string): Promise<SaveDialogResult>;
@@ -106,6 +109,7 @@ export interface SoftshotApi {
     fps: VideoFps,
     durationSeconds: number,
     mimeType: string,
+    encoder: RecordingEncoder,
     audioTracks: RecordingAudioTrack[]
   ): Promise<void>;
   getEditorBootstrap(): Promise<EditorBootstrap>;

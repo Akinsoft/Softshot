@@ -575,7 +575,14 @@ class OverlayApp {
     this.unbindMainEvents();
     this.stopMicrophoneMonitor();
 
-    await getSoftshotApi().openVideoEditor(result.recordingId, this.fps, result.durationSeconds, result.mimeType, result.audioTracks);
+    await getSoftshotApi().openVideoEditor(
+      result.recordingId,
+      this.fps,
+      result.durationSeconds,
+      result.mimeType,
+      result.encoder,
+      result.audioTracks
+    );
   }
 
   private async handleStopRecordingRequest(): Promise<void> {
@@ -908,7 +915,7 @@ class OverlayApp {
       this.stopMicrophoneMonitor();
       this.recordingHud.showRecordingPending();
       this.requestRender();
-      session.start();
+      await session.start();
       this.recordingHud.startRecordingTimer();
     } catch (error) {
       this.isRecording = false;

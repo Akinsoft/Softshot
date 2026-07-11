@@ -7,6 +7,7 @@ import type {
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingAudioTrack,
+  RecordingEncoder,
   RecordingFile,
   SaveDialogResult,
   SaveResult,
@@ -14,6 +15,7 @@ import type {
   SettingsKeybindEventHandler,
   SoftshotApi,
   StopRecordingRequestHandler,
+  VideoFileExtension,
   VideoFps
 } from "./shared";
 
@@ -23,7 +25,8 @@ const settingsKeybindEventChannel = "settings:keybind-event";
 const api: SoftshotApi = {
   appendRecordingFileChunk: async (recordingId: string, bytes: Uint8Array) =>
     ipcRenderer.invoke("recording:append-file-chunk", recordingId, bytes) as Promise<void>,
-  createRecordingFile: async () => ipcRenderer.invoke("recording:create-file") as Promise<RecordingFile>,
+  createRecordingFile: async (fileExtension: VideoFileExtension) =>
+    ipcRenderer.invoke("recording:create-file", fileExtension) as Promise<RecordingFile>,
   discardRecordingFile: async (recordingId: string) =>
     ipcRenderer.invoke("recording:discard-file", recordingId) as Promise<void>,
   getBootstrap: async () => ipcRenderer.invoke("overlay:get-bootstrap") as Promise<OverlayBootstrap>,
@@ -35,9 +38,10 @@ const api: SoftshotApi = {
     fps: VideoFps,
     durationSeconds: number,
     mimeType: string,
+    encoder: RecordingEncoder,
     audioTracks: RecordingAudioTrack[]
   ) =>
-    ipcRenderer.invoke("recording:open-editor", recordingId, fps, durationSeconds, mimeType, audioTracks) as Promise<void>,
+    ipcRenderer.invoke("recording:open-editor", recordingId, fps, durationSeconds, mimeType, encoder, audioTracks) as Promise<void>,
   getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
   chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
   prepareEditorVideoFile: async (bytes: Uint8Array) =>
