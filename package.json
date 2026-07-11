@@ -4,6 +4,7 @@
   "description": "A lightweight screenshot and screen recording tool.",
   "main": "dist/main.js",
   "author": "Akinsoft",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "homepage": "https://github.com/akinsoft/Softshot",
   "private": true,
   "repository": {
@@ -36,6 +37,7 @@
       "src/settings.css",
       "src/shared-ui.css",
       "src/styles.css",
+      "LICENSE.md",
       "package.json"
     ],
     "win": {

@@ -55,6 +55,10 @@ npm run build
 npm run lint
 ```
 
+## License
+
+Softshot is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, inspect, modify, and share it only for noncommercial purposes. Commercial use requires separate permission from Akinsoft.
+
 ## Project Status
 
 Softshot is early, practical, and intentionally small. The current app is focused on Windows desktop capture, region screenshots, cursor-free GPU recording, and quick trimming before sharing.
