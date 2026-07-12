@@ -1,9 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { AppSettings } from "./shared";
 
 const settingsFileName = "settings.json";
+const settingsTemporaryFileName = `${settingsFileName}.tmp`;
 const settingsIndentSpaces = 2;
 const maxShortcutKeyCount = 3;
 const defaultCaptureShortcut = "PrintScreen";
@@ -37,8 +38,14 @@ export async function loadAppSettings(userDataPath: string, isLaunchAtStartupEna
 
 export async function saveAppSettings(userDataPath: string, settings: AppSettings): Promise<void> {
   const filePath = settingsFilePath(userDataPath);
+  const temporaryFilePath = path.join(userDataPath, settingsTemporaryFileName);
   await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(settings, null, settingsIndentSpaces)}\n`);
+  try {
+    await writeFile(temporaryFilePath, `${JSON.stringify(settings, null, settingsIndentSpaces)}\n`);
+    await rename(temporaryFilePath, filePath);
+  } finally {
+    await rm(temporaryFilePath, { force: true });
+  }
 }
 
 export function validateCaptureShortcut(shortcut: string): string {

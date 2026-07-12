@@ -1,15 +1,18 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "CommonJS"
+    "module": "CommonJS",
+    "outDir": "dist/main"
   },
   "include": [
     "src/app-updater.ts",
     "src/app-settings.ts",
+    "src/editor-remux.ts",
     "src/global.d.ts",
     "src/main.ts",
     "src/preload.ts",
     "src/shared.ts",
+    "src/temporary-retention.ts",
     "src/webm.ts"
   ]
 }

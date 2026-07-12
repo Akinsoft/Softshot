@@ -48,6 +48,12 @@ function installDownloadedUpdate(options: UpdateCheckOptions): void {
   }
 
   setTimeout((): void => {
+    if (!options.canInstallNow()) {
+      options.log("update install deferred because Softshot became busy");
+      showUpdateReadyNotification();
+      return;
+    }
+
     autoUpdater.quitAndInstall(false, true);
   }, updateInstallDelayMs);
 }

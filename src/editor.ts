@@ -1,5 +1,7 @@
 import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
-import { type ExportAudioTrack, exportTrimmedVideo, type TrimRange } from "./editor-export.js";
+import { audioMixGain, recordingAudioSampleRate } from "./audio-quality.js";
+import { type ExportAudioTrack, type ExportedVideo, exportTrimmedVideo, type TrimRange } from "./editor-export.js";
+import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, PreparedVideoFile, VideoFps } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
@@ -9,8 +11,9 @@ import { setTooltipLabel, TooltipController } from "./ui-tooltip.js";
 const defaultMimeType = "video/webm";
 const audioLevelCssProperty = "--audio-level";
 const minimumTrimDurationSeconds = 0.05;
-const prepareDebounceMs = 350;
 const rangeStepSeconds = 0.01;
+const halfDivisor = 2;
+const fullTrimToleranceSeconds = rangeStepSeconds / halfDivisor;
 const secondsPerMinute = 60;
 const secondsTextLength = 5;
 const spaceKey = " ";
@@ -28,23 +31,12 @@ interface PreparedVideo {
   key: string;
 }
 
-interface PendingPreparation {
-  key: string;
-  promise: Promise<PreparedVideo>;
-}
-
 interface AudioMeter {
   analyser: AnalyserNode;
-  context: AudioContext;
   data: Uint8Array<ArrayBuffer>;
   gain: GainNode;
   row: HTMLElement | null;
   source: MediaElementAudioSourceNode;
-}
-
-interface PreparationFailure {
-  error: unknown;
-  key: string;
 }
 
 class VideoEditorApp {
@@ -64,6 +56,7 @@ class VideoEditorApp {
   private readonly video = getRequiredElement("editor-video", HTMLVideoElement);
   private activeTimelinePointerId = noPointerId;
   private audioMeterFrame: number | null = null;
+  private audioPreviewContext: AudioContext | null = null;
   private audioReady: Promise<void> = Promise.resolve();
   private audioTracks: EditorAudioTrack[] = [];
   private readonly audioElementsByKind = new Map<AudioSourceKind, HTMLAudioElement>();
@@ -71,12 +64,9 @@ class VideoEditorApp {
   private durationSeconds = zeroSeconds;
   private fps: VideoFps = videoFpsOptions.high;
   private isBusy = false;
+  private isClosing = false;
   private mimeType = defaultMimeType;
-  private pendingPreparation: PendingPreparation | null = null;
   private playbackFrameHandle: number | null = null;
-  private preparationFailure: PreparationFailure | null = null;
-  private preparationHandle: ReturnType<typeof setTimeout> | null = null;
-  private preparationRunId = 0;
   private preparedVideo: PreparedVideo | null = null;
   private sourceFilePath = "";
   private sourceUrl = "";
@@ -176,10 +166,21 @@ class VideoEditorApp {
   }
 
   private async closeEditor(): Promise<void> {
-    this.clearPreparationTimer();
-    this.disposeAudioPreview();
-    this.stopPlaybackFrameSync();
-    await getSoftshotApi().closeEditor();
+    if (this.isBusy || this.isClosing) {
+      return;
+    }
+
+    this.isClosing = true;
+    try {
+      try {
+        await this.disposeAudioPreview();
+      } finally {
+        this.stopPlaybackFrameSync();
+        await getSoftshotApi().closeEditor();
+      }
+    } finally {
+      this.isClosing = false;
+    }
   }
 
   private beginTimelineScrub(event: PointerEvent): void {
@@ -193,45 +194,43 @@ class VideoEditorApp {
     event.preventDefault();
   }
 
-  private clearPreparationTimer(): void {
-    if (this.preparationHandle === null) {
-      return;
-    }
-
-    clearTimeout(this.preparationHandle);
-    this.preparationHandle = null;
-  }
-
-  private clearPendingPreparation(promise: Promise<PreparedVideo>): void {
-    if (this.pendingPreparation?.promise === promise) {
-      this.pendingPreparation = null;
-    }
-  }
-
   private clampedPlaybackTime(value: number): number {
     return clamp(value, this.trimStartSeconds, this.trimEndSeconds);
   }
 
   private async copyVideo(): Promise<void> {
-    const preparedVideo = await this.preparedVideoForCurrentTrim(true);
-    await getSoftshotApi().copyPreparedEditorVideo(preparedVideo.filePath);
-    this.showStatus("Copied");
+    if (this.isBusy) {
+      return;
+    }
+
+    this.setBusy(true);
+    try {
+      const preparedVideo = await this.preparedVideoForCurrentTrim();
+      await getSoftshotApi().copyPreparedEditorVideo(preparedVideo.filePath);
+      this.showStatus("Copied");
+    } finally {
+      this.setBusy(false);
+    }
   }
 
   private async createPreparedVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
-    if (this.isFullTrimRange(trimRange) && this.mutedAudioKinds.size === 0) {
-      return {
-        filePath: this.sourceFilePath,
-        key
-      };
+    if (this.mutedAudioKinds.size === 0 && trimRange.start <= fullTrimToleranceSeconds) {
+      if (this.isFullTrimRange(trimRange)) {
+        return {
+          filePath: this.sourceFilePath,
+          key
+        };
+      }
+
+      const trimmedFile = await getSoftshotApi().trimEditorVideoEnd(trimRange.end);
+      return preparedVideoFromFile(key, trimmedFile);
     }
 
-    const outputBytes = await this.exportVideoForTrimRange(trimRange);
-    if (outputBytes.byteLength === 0) {
-      throw new Error("Cannot prepare an empty recording.");
-    }
-
-    const preparedFile = await getSoftshotApi().prepareEditorVideoFile(outputBytes);
+    const exportedVideo = await this.exportVideoForTrimRange(trimRange);
+    const preparedFile = await getSoftshotApi().completeEditorVideoFile(
+      exportedVideo.recordingId,
+      exportedVideo.mimeType
+    );
     return preparedVideoFromFile(key, preparedFile);
   }
 
@@ -239,8 +238,6 @@ class VideoEditorApp {
     return this.audioTracks
       .filter((audioTrack) => !this.mutedAudioKinds.has(audioTrack.kind))
       .map((audioTrack) => ({
-        kind: audioTrack.kind,
-        mimeType: audioTrack.mimeType,
         sourceUrl: audioTrack.sourceUrl
       }));
   }
@@ -248,30 +245,37 @@ class VideoEditorApp {
   private createAudioPreviewElements(): void {
     this.audioElementsByKind.clear();
     this.audioMetersByKind.clear();
+    this.audioPreviewContext = this.audioTracks.length > 0
+      ? new AudioContext({ sampleRate: recordingAudioSampleRate })
+      : null;
     const audioReadyPromises = this.audioTracks.map(async (audioTrack): Promise<void> => {
       const audio = new Audio();
       audio.preload = "auto";
       audio.src = audioTrack.sourceUrl;
       this.audioElementsByKind.set(audioTrack.kind, audio);
-      this.audioMetersByKind.set(audioTrack.kind, this.createAudioMeter(audio, this.mutedAudioKinds.has(audioTrack.kind)));
+      this.audioMetersByKind.set(audioTrack.kind, this.createAudioMeter(audio));
       await waitForMediaMetadata(audio);
     });
+    this.syncAudioMuteStates();
     this.audioReady = waitForAudioReady(audioReadyPromises);
   }
 
-  private createAudioMeter(audio: HTMLAudioElement, isMuted: boolean): AudioMeter {
-    const context = new AudioContext();
+  private createAudioMeter(audio: HTMLAudioElement): AudioMeter {
+    const context = this.audioPreviewContext;
+    if (!context) {
+      throw new Error("Audio preview context is unavailable.");
+    }
+
     const source = context.createMediaElementSource(audio);
     const analyser = context.createAnalyser();
     const gain = context.createGain();
     analyser.fftSize = audioAnalyzerFftSize;
-    gain.gain.value = isMuted ? 0 : 1;
+    gain.gain.value = 0;
     source.connect(analyser);
     analyser.connect(gain);
     gain.connect(context.destination);
     return {
       analyser,
-      context,
       data: new Uint8Array(analyser.fftSize),
       gain,
       row: null,
@@ -290,7 +294,7 @@ class VideoEditorApp {
     }
   }
 
-  private async exportVideoForTrimRange(trimRange: TrimRange): Promise<Uint8Array> {
+  private async exportVideoForTrimRange(trimRange: TrimRange): Promise<ExportedVideo> {
     return await exportTrimmedVideo(this.sourceUrl, this.mimeType, this.fps, trimRange, this.audioTracksForExport());
   }
 
@@ -305,53 +309,23 @@ class VideoEditorApp {
     this.video.src = this.sourceUrl;
     this.createAudioPreviewElements();
     this.renderAudioTracks();
-    this.showStatus(bootstrap.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding");
+    const encoderLabel = bootstrap.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding";
+    const pipelineLabel = bootstrap.capturePipeline === "direct" ? "Direct capture" : "Composited capture";
+    this.showStatus(`${encoderLabel} · ${pipelineLabel}`);
   }
 
-  private async prepareVideo(key: string, trimRange: TrimRange): Promise<PreparedVideo> {
-    this.preparationFailure = null;
-    const runId = this.preparationRunId + 1;
-    this.preparationRunId = runId;
-    const promise = this.createPreparedVideo(key, trimRange);
-    this.pendingPreparation = { key, promise };
-
-    try {
-      const preparedVideo = await promise;
-      if (runId === this.preparationRunId && key === this.trimKey()) {
-        this.preparedVideo = preparedVideo;
-      }
-
-      return preparedVideo;
-    } finally {
-      this.clearPendingPreparation(promise);
-    }
-  }
-
-  private async preparedVideoForCurrentTrim(shouldShowBusy: boolean): Promise<PreparedVideo> {
+  private async preparedVideoForCurrentTrim(): Promise<PreparedVideo> {
     const key = this.trimKey();
     if (this.preparedVideo?.key === key) {
       return this.preparedVideo;
     }
 
-    if (this.preparationFailure?.key === key) {
-      this.preparationFailure = null;
+    const preparedVideo = await this.createPreparedVideo(key, this.trimRange());
+    if (key === this.trimKey()) {
+      this.preparedVideo = preparedVideo;
     }
 
-    if (shouldShowBusy) {
-      this.setBusy(true);
-    }
-
-    try {
-      if (this.pendingPreparation?.key === key) {
-        return await this.pendingPreparation.promise;
-      }
-
-      return await this.prepareVideo(key, this.trimRange());
-    } finally {
-      if (shouldShowBusy) {
-        this.setBusy(false);
-      }
-    }
+    return preparedVideo;
   }
 
   private async reportError(message: string, error: unknown): Promise<void> {
@@ -403,14 +377,23 @@ class VideoEditorApp {
   }
 
   private async saveVideo(): Promise<void> {
-    const result = await getSoftshotApi().chooseEditorVideoSavePath();
-    if (!result.filePath) {
+    if (this.isBusy) {
       return;
     }
 
-    const preparedVideo = await this.preparedVideoForCurrentTrim(true);
-    await getSoftshotApi().savePreparedEditorVideo(preparedVideo.filePath, result.filePath);
-    this.showStatus("Saved");
+    this.setBusy(true);
+    try {
+      const result = await getSoftshotApi().chooseEditorVideoSavePath();
+      if (!result.filePath) {
+        return;
+      }
+
+      const preparedVideo = await this.preparedVideoForCurrentTrim();
+      await getSoftshotApi().savePreparedEditorVideo(preparedVideo.filePath, result.filePath);
+      this.showStatus("Saved");
+    } finally {
+      this.setBusy(false);
+    }
   }
 
   private seekTo(value: number): void {
@@ -426,18 +409,11 @@ class VideoEditorApp {
     this.seekTo(progress * this.durationSeconds);
   }
 
-  private schedulePreparedVideoRefresh(): void {
-    this.clearPreparationTimer();
-    this.preparationHandle = setTimeout((): void => {
-      this.preparationHandle = null;
-      this.startBackgroundPreparation(this.trimKey(), this.trimRange());
-    }, prepareDebounceMs);
-  }
-
   private setBusy(isBusy: boolean): void {
     this.isBusy = isBusy;
     document.body.classList.toggle("busy", isBusy);
     this.copyButton.disabled = isBusy;
+    this.closeButton.disabled = isBusy;
     this.saveButton.disabled = isBusy;
     this.startRange.disabled = isBusy;
     this.endRange.disabled = isBusy;
@@ -468,15 +444,7 @@ class VideoEditorApp {
     this.resetAudioMeterLevels();
   }
 
-  private async playAudioPreview(): Promise<void> {
-    await this.audioReady;
-    await this.resumeAudioMeters();
-    const playPromises = Array.from(this.audioElementsByKind.values(), async (audio) => audio.play());
-    await Promise.all(playPromises);
-    this.startAudioMeterLoop();
-  }
-
-  private disposeAudioPreview(): void {
+  private async disposeAudioPreview(): Promise<void> {
     this.stopAudioMeterLoop();
     for (const audio of this.audioElementsByKind.values()) {
       audio.pause();
@@ -484,7 +452,16 @@ class VideoEditorApp {
     }
 
     for (const meter of this.audioMetersByKind.values()) {
-      void meter.context.close();
+      meter.source.disconnect();
+      meter.gain.disconnect();
+    }
+
+    if (this.audioPreviewContext) {
+      if (this.audioPreviewContext.state !== "closed") {
+        await this.audioPreviewContext.close();
+      }
+
+      this.audioPreviewContext = null;
     }
 
     this.audioElementsByKind.clear();
@@ -498,8 +475,9 @@ class VideoEditorApp {
   }
 
   private async resumeAudioMeters(): Promise<void> {
-    const resumePromises = Array.from(this.audioMetersByKind.values(), async (meter) => meter.context.resume());
-    await Promise.all(resumePromises);
+    if (this.audioPreviewContext?.state === "suspended") {
+      await this.audioPreviewContext.resume();
+    }
   }
 
   private startAudioMeterLoop(): void {
@@ -581,14 +559,6 @@ class VideoEditorApp {
     this.timeline.style.setProperty("--trim-end", `${String(endPercent)}%`);
   }
 
-  private startBackgroundPreparation(key: string, trimRange: TrimRange): void {
-    void this.prepareVideo(key, trimRange).catch((error: unknown): void => {
-      if (key === this.trimKey()) {
-        this.preparationFailure = { error, key };
-      }
-    });
-  }
-
   private startPlaybackFrameSync(): void {
     if (this.playbackFrameHandle !== null) {
       return;
@@ -632,10 +602,19 @@ class VideoEditorApp {
       this.syncAudioPreviewTime(this.trimStartSeconds);
     }
 
-    await Promise.all([
-      this.video.play(),
-      this.playAudioPreview()
-    ]);
+    await this.audioReady;
+    await this.resumeAudioMeters();
+    this.syncAudioPreviewTime(this.video.currentTime);
+    try {
+      await Promise.all([
+        playMedia(this.video),
+        ...Array.from(this.audioElementsByKind.values(), async (audio) => await playMedia(audio))
+      ]);
+    } catch (error) {
+      this.video.pause();
+      this.pauseAudioPreview();
+      throw error;
+    }
   }
 
   private updateTimelineScrub(event: PointerEvent): void {
@@ -647,8 +626,8 @@ class VideoEditorApp {
   }
 
   private isFullTrimRange(trimRange: TrimRange): boolean {
-    return trimRange.start <= trimToleranceSeconds
-      && Math.abs(trimRange.end - this.durationSeconds) <= trimToleranceSeconds;
+    return trimRange.start <= fullTrimToleranceSeconds
+      && Math.abs(trimRange.end - this.durationSeconds) <= fullTrimToleranceSeconds;
   }
 
   private trimRange(): TrimRange {
@@ -675,16 +654,17 @@ class VideoEditorApp {
       this.mutedAudioKinds.add(kind);
     }
 
-    this.syncAudioMuteState(kind);
+    this.syncAudioMuteStates();
 
     this.renderAudioTracks();
-    this.schedulePreparedVideoRefresh();
+    this.preparedVideo = null;
   }
 
-  private syncAudioMuteState(kind: AudioSourceKind): void {
-    const meter = this.audioMetersByKind.get(kind);
-    if (meter) {
-      meter.gain.gain.value = this.mutedAudioKinds.has(kind) ? 0 : 1;
+  private syncAudioMuteStates(): void {
+    const activeTrackCount = this.audioTracks.filter((audioTrack) => !this.mutedAudioKinds.has(audioTrack.kind)).length;
+    const activeGain = activeTrackCount > 0 ? audioMixGain(activeTrackCount) : 0;
+    for (const [kind, meter] of this.audioMetersByKind) {
+      meter.gain.gain.value = this.mutedAudioKinds.has(kind) ? 0 : activeGain;
     }
   }
 
@@ -694,7 +674,7 @@ class VideoEditorApp {
 
     this.syncTimeline();
     this.seekTo(this.video.currentTime);
-    this.schedulePreparedVideoRefresh();
+    this.preparedVideo = null;
   }
 
   private updateTrimStart(value: number): void {
@@ -703,7 +683,7 @@ class VideoEditorApp {
 
     this.syncTimeline();
     this.seekTo(this.video.currentTime);
-    this.schedulePreparedVideoRefresh();
+    this.preparedVideo = null;
   }
 
   async initialize(): Promise<void> {
@@ -711,15 +691,28 @@ class VideoEditorApp {
       this.bindEvents();
       const bootstrap = await getSoftshotApi().getEditorBootstrap();
       this.loadRecording(bootstrap);
-      await waitForVideoMetadata(this.video);
+      await Promise.all([
+        waitForMediaMetadata(this.video),
+        this.audioReady
+      ]);
+      if (this.video.videoWidth < 1 || this.video.videoHeight < 1) {
+        throw new Error("The recording does not contain a usable video track.");
+      }
+
+      if (Number.isFinite(this.video.duration) && this.video.duration > zeroSeconds) {
+        this.durationSeconds = this.video.duration;
+      }
+
       this.trimEndSeconds = this.durationSeconds;
       this.totalTimeText.textContent = formatTime(this.durationSeconds);
       this.syncTimeline();
       this.syncPlaybackTime();
-      this.schedulePreparedVideoRefresh();
     } catch (error) {
-      await this.reportError("Could not open the editor.", error);
-      await this.closeEditor();
+      try {
+        await this.reportError("Could not open the editor.", error);
+      } finally {
+        await this.closeEditor();
+      }
     }
   }
 }
@@ -796,26 +789,6 @@ function positiveDuration(value: number): number {
 
 function trimKeyFromRange(trimRange: TrimRange): string {
   return `${trimRange.start.toFixed(trimKeyPrecisionDigits)}:${trimRange.end.toFixed(trimKeyPrecisionDigits)}`;
-}
-
-async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
-  if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    return;
-  }
-
-  await waitForMediaMetadata(video);
-}
-
-async function waitForMediaMetadata(media: HTMLMediaElement): Promise<void> {
-  if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    media.addEventListener("loadedmetadata", () => {
-      resolve();
-    }, { once: true });
-  });
 }
 
 async function waitForAudioReady(audioReadyPromises: Array<Promise<void>>): Promise<void> {

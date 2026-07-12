@@ -1,3 +1,5 @@
+import { recordingAudioChannelCount, recordingAudioSampleRate } from "./audio-quality.js";
+
 const defaultDeviceId = "default";
 const communicationsDeviceId = "communications";
 const microphoneAliasPrefixes = ["Default - ", "Communications - "] as const;
@@ -30,15 +32,18 @@ export function isDefaultMicrophoneDevice(deviceId: string): boolean {
 }
 
 export function microphoneConstraints(deviceId: string): MediaTrackConstraints {
-  if (isDefaultMicrophoneDevice(deviceId)) {
-    return {};
+  const constraints: MediaTrackConstraints = {
+    autoGainControl: false,
+    channelCount: { ideal: recordingAudioChannelCount },
+    echoCancellation: false,
+    noiseSuppression: false,
+    sampleRate: { ideal: recordingAudioSampleRate }
+  };
+  if (!isDefaultMicrophoneDevice(deviceId)) {
+    constraints.deviceId = { exact: deviceId };
   }
 
-  return {
-    deviceId: {
-      exact: deviceId
-    }
-  };
+  return constraints;
 }
 
 export function microphoneSelectionLabel(deviceId: string | null, devices: MediaDeviceInfo[]): string {

@@ -8,24 +8,27 @@ import {
 } from "mediabunny";
 
 import { microphoneConstraints } from "./audio-devices.js";
+import { audioMixGain, recordingAudioBitrate, recordingAudioSampleRate } from "./audio-quality.js";
 import { getCursorlessDesktopStream, stopTracks } from "./desktop-capture.js";
+import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { drawAnnotations } from "./overlay-drawing.js";
 import type { Annotation } from "./overlay-model.js";
-import { RecordingFileWriter } from "./recording-file-writer.js";
-import type { AudioSourceKind, RecordingAudioTrack, RecordingEncoder, Rect, VideoFps, VideoQuality } from "./shared.js";
-import { videoQualityHeights } from "./shared.js";
-import { recordingVideoBitrate } from "./video-bitrate.js";
+import { RecordingFileWriter, stopMediaRecorder } from "./recording-file-writer.js";
+import { nextRecordingFrameDeadline } from "./recording-frame-clock.js";
+import { recordingOutputSize } from "./recording-output-size.js";
+import type { AudioSourceKind, CapturePipeline, RecordingAudioTrack, RecordingEncoder, Rect, VideoFps, VideoQuality } from "./shared.js";
+import { videoBitrate } from "./video-bitrate.js";
 import { selectVideoRecorderProfile } from "./video-recorder-profile.js";
 
-const minimumVideoDimensionPx = 2;
 const millisecondsPerSecond = 1000;
 const supportedAudioMimeTypes = ["audio/webm;codecs=opus", "audio/webm"] as const;
 const hardwareVideoCodec = "avc";
-const hardwareAudioBitrate = 192_000;
 const hardwareKeyframeIntervalSeconds = 2;
 const hardwareFragmentDurationSeconds = 1;
+const hardwareOperationTimeoutMs = 15_000;
 
 type HardwareRecordingOutput = Output<Mp4OutputFormat, AppendOnlyStreamTarget>;
+type RecordingSessionErrorHandler = (error: unknown) => void;
 
 export interface RecordingSessionConfig {
   annotations: Annotation[];
@@ -38,6 +41,7 @@ export interface RecordingSessionConfig {
 
 export interface RecordingResult {
   audioTracks: RecordingAudioTrack[];
+  capturePipeline: CapturePipeline;
   durationSeconds: number;
   encoder: RecordingEncoder;
   mimeType: string;
@@ -53,8 +57,10 @@ interface AudioRecorder {
 
 interface VideoOutput {
   annotationCanvas: HTMLCanvasElement | null;
+  canvasCaptureTrack: CanvasCaptureMediaStreamTrack | null;
   canvas: HTMLCanvasElement | null;
   context: CanvasRenderingContext2D | null;
+  pipeline: CapturePipeline;
   stream: MediaStream;
 }
 
@@ -87,8 +93,13 @@ export class RecordingSession {
       }
 
       const sourceVideo = await createSourceVideo(sourceStream);
-      const outputSize = videoOutputSize(config.crop, config.quality, sourceVideo);
-      const bitrate = recordingVideoBitrate(config.quality, config.fps);
+      const outputSize = recordingOutputSize(
+        config.crop,
+        config.quality,
+        { height: sourceVideo.videoHeight, width: sourceVideo.videoWidth },
+        { height: window.innerHeight, width: window.innerWidth }
+      );
+      const bitrate = videoBitrate(outputSize.width, outputSize.height, config.fps);
       const profile = await selectVideoRecorderProfile(
         outputSize.width,
         outputSize.height,
@@ -117,6 +128,7 @@ export class RecordingSession {
       const recorder = hardwareRecording
         ? null
         : new MediaRecorder(videoOutput.stream, {
+          ...(embeddedAudioMix.track && { audioBitsPerSecond: recordingAudioBitrate }),
           mimeType: profile.mimeType,
           videoBitsPerSecond: bitrate
         });
@@ -127,9 +139,12 @@ export class RecordingSession {
       const session = new RecordingSession({
         audioRecorders,
         annotationCanvas: videoOutput.annotationCanvas,
+        canvasCaptureTrack: videoOutput.canvasCaptureTrack,
         crop: { ...config.crop },
+        capturePipeline: videoOutput.pipeline,
         embeddedAudioContext: embeddedAudioMix.context,
         encoder: profile.encoder,
+        fps: config.fps,
         hardwareCanvasSource: hardwareRecording?.canvasSource ?? null,
         hardwareOutput: hardwareRecording?.output ?? null,
         outputCanvas: videoOutput.canvas,
@@ -142,28 +157,50 @@ export class RecordingSession {
         sourceVideo,
         videoWriter
       });
-      session.connectRecorder();
       return session;
     } catch (error) {
       stopTracks(microphoneStream);
       stopTracks(sourceStream);
-      if (embeddedAudioContext?.state !== "closed") {
-        await embeddedAudioContext?.close();
+      const errors: [unknown, ...unknown[]] = [error];
+      try {
+        if (embeddedAudioContext?.state !== "closed") {
+          await embeddedAudioContext?.close();
+        }
+      } catch (cleanupError) {
+        errors.push(cleanupError);
       }
-      await discardWriters(videoWriter, audioRecorders);
-      throw error;
+
+      try {
+        await discardWriters(videoWriter, audioRecorders);
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+
+      return throwCollectedErrors(errors, "Could not prepare the recording.");
     }
   }
 
   private readonly annotationCanvas: HTMLCanvasElement | null;
   private readonly audioRecorders: AudioRecorder[];
+  private readonly canvasCaptureTrack: CanvasCaptureMediaStreamTrack | null;
   private readonly crop: Rect;
+  private readonly capturePipeline: CapturePipeline;
   private readonly embeddedAudioContext: AudioContext | null;
   private readonly encoder: RecordingEncoder;
-  private frameCallbackHandle: number | null = null;
+  private readonly errorHandlers = new Set<RecordingSessionErrorHandler>();
+  private hasRecordingError = false;
+  private recordingError: unknown = null;
+  private discardPromise: Promise<void> | null = null;
+  private frameEncodingError: unknown = null;
+  private readonly frameIntervalMs: number;
+  private nextFrameAtMs: number | null = null;
+  private frameTimerHandle: ReturnType<typeof setTimeout> | null = null;
+  private hasStarted = false;
   private readonly hardwareCanvasSource: CanvasSource | null;
   private readonly hardwareOutput: HardwareRecordingOutput | null;
   private isFinalized = false;
+  private isFrameDrawingActive = false;
+  private areWritersDiscarded = false;
   private readonly outputCanvas: HTMLCanvasElement | null;
   private readonly outputContext: CanvasRenderingContext2D | null;
   private readonly outputStream: MediaStream;
@@ -173,14 +210,18 @@ export class RecordingSession {
   private recordingStartedAtMs: number | null = null;
   private readonly sourceStream: MediaStream;
   private readonly sourceVideo: HTMLVideoElement;
+  private stopPromise: Promise<RecordingResult> | null = null;
   private readonly videoWriter: RecordingFileWriter;
 
   private constructor(config: {
     annotationCanvas: HTMLCanvasElement | null;
     audioRecorders: AudioRecorder[];
+    canvasCaptureTrack: CanvasCaptureMediaStreamTrack | null;
     crop: Rect;
+    capturePipeline: CapturePipeline;
     embeddedAudioContext: AudioContext | null;
     encoder: RecordingEncoder;
+    fps: VideoFps;
     hardwareCanvasSource: CanvasSource | null;
     hardwareOutput: HardwareRecordingOutput | null;
     outputCanvas: HTMLCanvasElement | null;
@@ -195,9 +236,12 @@ export class RecordingSession {
   }) {
     this.annotationCanvas = config.annotationCanvas;
     this.audioRecorders = config.audioRecorders;
+    this.canvasCaptureTrack = config.canvasCaptureTrack;
     this.crop = config.crop;
+    this.capturePipeline = config.capturePipeline;
     this.embeddedAudioContext = config.embeddedAudioContext;
     this.encoder = config.encoder;
+    this.frameIntervalMs = millisecondsPerSecond / config.fps;
     this.hardwareCanvasSource = config.hardwareCanvasSource;
     this.hardwareOutput = config.hardwareOutput;
     this.outputCanvas = config.outputCanvas;
@@ -209,24 +253,50 @@ export class RecordingSession {
     this.sourceStream = config.sourceStream;
     this.sourceVideo = config.sourceVideo;
     this.videoWriter = config.videoWriter;
+    const writers = [this.videoWriter, ...this.audioRecorders.map((audioRecorder) => audioRecorder.writer)];
+    for (const writer of writers) {
+      writer.onError((error): void => {
+        this.notifyError(error);
+      });
+    }
+
+    this.watchStreamTracks(this.sourceStream, "Desktop capture");
+    if (this.microphoneStream) {
+      this.watchStreamTracks(this.microphoneStream, "Microphone capture");
+    }
   }
 
-  private connectRecorder(): void {
-    if (!this.recorder) {
+  private watchStreamTracks(stream: MediaStream, label: string): void {
+    for (const track of stream.getTracks()) {
+      const reportEndedTrack = (): void => {
+        this.notifyError(new Error(`${label} ended unexpectedly.`));
+      };
+      track.addEventListener("ended", reportEndedTrack, { once: true });
+      if (track.readyState === "ended") {
+        reportEndedTrack();
+      }
+    }
+  }
+
+  private notifyError(error: unknown): void {
+    if (this.isFinalized || this.hasRecordingError) {
       return;
     }
 
-    this.recorder.addEventListener("start", () => {
-      this.startDrawingFrames();
-    });
+    this.recordingError = error;
+    this.hasRecordingError = true;
+    for (const handler of this.errorHandlers) {
+      handler(error);
+    }
   }
 
   private startDrawingFrames(): void {
-    if (!this.outputCanvas) {
+    if (!this.outputCanvas || this.isFrameDrawingActive) {
       return;
     }
 
-    this.drawFrame();
+    this.isFrameDrawingActive = true;
+    this.nextFrameAtMs = performance.now();
     this.queueNextFrame();
   }
 
@@ -252,12 +322,26 @@ export class RecordingSession {
     if (this.annotationCanvas) {
       this.outputContext.drawImage(this.annotationCanvas, 0, 0);
     }
+
+    if (this.recorder) {
+      this.canvasCaptureTrack?.requestFrame();
+    }
   }
 
   private queueNextFrame(): void {
-    this.frameCallbackHandle = this.sourceVideo.requestVideoFrameCallback((): void => {
-      void this.drawAndEncodeFrame();
-    });
+    if (this.nextFrameAtMs === null) {
+      throw new Error("The recording frame clock has not started.");
+    }
+
+    const delayMs = Math.max(0, this.nextFrameAtMs - performance.now());
+    this.frameTimerHandle = setTimeout((): void => {
+      this.frameTimerHandle = null;
+      void this.drawAndEncodeFrame().catch((error: unknown): void => {
+        this.frameEncodingError ??= error;
+        this.stopFrameDrawing();
+        this.notifyError(error);
+      });
+    }, delayMs);
   }
 
   private async drawAndEncodeFrame(): Promise<void> {
@@ -267,7 +351,9 @@ export class RecordingSession {
       await this.hardwareCanvasSource.add(timestamp);
     }
 
-    if (this.frameCallbackHandle !== null) {
+    if (this.isFrameDrawingActive) {
+      const currentDeadlineMs = this.nextFrameAtMs ?? performance.now();
+      this.nextFrameAtMs = nextRecordingFrameDeadline(currentDeadlineMs, performance.now(), this.frameIntervalMs);
       this.queueNextFrame();
     }
   }
@@ -283,9 +369,29 @@ export class RecordingSession {
   private async stopRecorderIfActive(): Promise<void> {
     if (this.hardwareOutput) {
       this.stopFrameDrawing();
-      this.hardwareCanvasSource?.close();
-      await this.hardwareOutput.finalize();
-      await this.videoWriter.finalize();
+      const errors: unknown[] = [];
+      try {
+        this.hardwareCanvasSource?.close();
+      } catch (error) {
+        errors.push(error);
+      }
+
+      try {
+        await withTimeout(
+          this.hardwareOutput.finalize(),
+          "Timed out finalizing the hardware video encoder."
+        );
+      } catch (error) {
+        errors.push(error);
+      }
+
+      try {
+        await this.videoWriter.finalize();
+      } catch (error) {
+        errors.push(error);
+      }
+
+      throwCollectedErrors(errors, "Could not finalize the video recording.");
       return;
     }
 
@@ -294,29 +400,14 @@ export class RecordingSession {
       throw new Error("The recording has no video encoder.");
     }
 
-    if (recorder.state === "inactive") {
-      await this.videoWriter.finalize();
-      return;
-    }
-
-    const stopped = new Promise<void>((resolve) => {
-      recorder.addEventListener(
-        "stop",
-        () => {
-          resolve();
-        },
-        { once: true }
-      );
-    });
-    recorder.stop();
-    await stopped;
-    await this.videoWriter.finalize();
+    await stopMediaRecorder(recorder, this.videoWriter);
   }
 
   private async stopAudioRecorders(): Promise<void> {
-    await Promise.all(this.audioRecorders.map(async (audioRecorder) => {
-      await stopRecorder(audioRecorder.recorder, audioRecorder.writer);
+    const results = await Promise.allSettled(this.audioRecorders.map(async (audioRecorder) => {
+      await stopMediaRecorder(audioRecorder.recorder, audioRecorder.writer);
     }));
+    throwCollectedErrors(rejectedReasons(results), "Could not finalize the recording audio.");
   }
 
   private async closeEmbeddedAudioContext(): Promise<void> {
@@ -328,45 +419,144 @@ export class RecordingSession {
   }
 
   private stopFrameDrawing(): void {
-    if (this.frameCallbackHandle === null) {
+    this.isFrameDrawingActive = false;
+    this.nextFrameAtMs = null;
+    if (this.frameTimerHandle === null) {
       return;
     }
 
-    this.sourceVideo.cancelVideoFrameCallback(this.frameCallbackHandle);
-    this.frameCallbackHandle = null;
+    clearTimeout(this.frameTimerHandle);
+    this.frameTimerHandle = null;
   }
 
-  async discard(): Promise<void> {
+  private async discardOnce(): Promise<void> {
+    const cleanupTasks: Array<Promise<void>> = [];
     if (this.hardwareOutput) {
       this.stopFrameDrawing();
       if (this.hardwareOutput.state !== "canceled" && this.hardwareOutput.state !== "finalized") {
-        await this.hardwareOutput.cancel();
+        cleanupTasks.push(withTimeout(
+          this.hardwareOutput.cancel(),
+          "Timed out canceling the hardware video encoder."
+        ));
       }
-    } else {
-      await this.stopRecorderIfActive();
+    } else if (this.recorder?.state !== "inactive") {
+      cleanupTasks.push(this.stopRecorderIfActive());
     }
 
-    await this.stopAudioRecorders();
-    await this.closeEmbeddedAudioContext();
+    for (const audioRecorder of this.audioRecorders) {
+      if (audioRecorder.recorder.state !== "inactive") {
+        cleanupTasks.push(stopMediaRecorder(audioRecorder.recorder, audioRecorder.writer));
+      }
+    }
+
+    cleanupTasks.push(this.closeEmbeddedAudioContext());
+    const cleanupResults = await Promise.allSettled(cleanupTasks);
     this.stopTracks();
+    this.isFinalized = true;
 
-    if (this.isFinalized) {
-      return;
+    const discardResults = await Promise.allSettled([
+      this.videoWriter.discard(),
+      ...this.audioRecorders.map(async (audioRecorder) => await audioRecorder.writer.discard())
+    ]);
+    const errors = [...rejectedReasons(cleanupResults), ...rejectedReasons(discardResults)];
+    if (discardResults.every((result) => result.status === "fulfilled")) {
+      this.areWritersDiscarded = true;
     }
 
-    await discardWriters(this.videoWriter, this.audioRecorders);
-    this.isFinalized = true;
+    throwCollectedErrors(errors, "Could not discard the recording cleanly.");
   }
 
-  async start(): Promise<void> {
-    this.drawFrame();
+  private startAudioRecorders(): void {
     for (const audioRecorder of this.audioRecorders) {
       audioRecorder.writer.start(audioRecorder.recorder);
     }
+  }
+
+  private async stopOnce(): Promise<RecordingResult> {
+    const durationSeconds = this.recordingDurationSeconds(performance.now());
+    const stopResults = await Promise.allSettled([
+      this.stopRecorderIfActive(),
+      this.stopAudioRecorders()
+    ]);
+    const contextResult = await Promise.allSettled([this.closeEmbeddedAudioContext()]);
+    this.stopTracks();
+    this.isFinalized = true;
+    const errors = [...rejectedReasons(stopResults), ...rejectedReasons(contextResult)];
+    if (this.frameEncodingError) {
+      errors.push(this.frameEncodingError);
+    }
+
+    throwCollectedErrors(errors, "Could not finalize the recording.");
+    return {
+      audioTracks: this.audioRecorders.map((audioRecorder) => ({
+        kind: audioRecorder.kind,
+        mimeType: audioRecorder.mimeType,
+        recordingId: audioRecorder.writer.recordingId
+      })),
+      capturePipeline: this.capturePipeline,
+      durationSeconds,
+      encoder: this.encoder,
+      mimeType: this.mimeType,
+      recordingId: this.videoWriter.recordingId
+    };
+  }
+
+  private stopTracks(): void {
+    this.stopFrameDrawing();
+
+    stopTracks(this.sourceStream);
+    stopTracks(this.microphoneStream);
+    stopTracks(this.outputStream);
+  }
+
+  async discard(): Promise<void> {
+    if (this.areWritersDiscarded) {
+      return;
+    }
+
+    if (this.discardPromise) {
+      await this.discardPromise;
+      return;
+    }
+
+    this.discardPromise = this.discardOnce();
+    try {
+      await this.discardPromise;
+    } finally {
+      this.discardPromise = null;
+    }
+  }
+
+  onError(handler: RecordingSessionErrorHandler): () => void {
+    this.errorHandlers.add(handler);
+    if (this.hasRecordingError) {
+      queueMicrotask((): void => {
+        if (this.errorHandlers.has(handler)) {
+          handler(this.recordingError);
+        }
+      });
+    }
+
+    return (): void => {
+      this.errorHandlers.delete(handler);
+    };
+  }
+
+  async start(): Promise<void> {
+    if (this.hasStarted || this.isFinalized) {
+      throw new Error("The recording session has already started.");
+    }
+
+    this.hasStarted = true;
+    this.drawFrame();
 
     if (this.hardwareOutput) {
-      await this.hardwareOutput.start();
+      await withTimeout(
+        this.hardwareOutput.start(),
+        "Timed out starting the hardware video encoder."
+      );
       this.recordingStartedAtMs = performance.now();
+      this.startAudioRecorders();
       this.startDrawingFrames();
       return;
     }
@@ -377,43 +567,25 @@ export class RecordingSession {
 
     this.recordingStartedAtMs = performance.now();
     this.videoWriter.start(this.recorder);
+    this.startAudioRecorders();
+    this.startDrawingFrames();
   }
 
   async stop(): Promise<RecordingResult> {
-    if (!this.hardwareOutput && this.recorder?.state === "inactive") {
-      return {
-        audioTracks: [],
-        durationSeconds: 0,
-        encoder: this.encoder,
-        mimeType: this.mimeType,
-        recordingId: this.videoWriter.recordingId
-      };
+    if (!this.hasStarted) {
+      throw new Error("The recording session has not started.");
     }
 
-    const durationSeconds = this.recordingDurationSeconds(performance.now());
-    await this.stopRecorderIfActive();
-    await this.stopAudioRecorders();
-    await this.closeEmbeddedAudioContext();
-    this.isFinalized = true;
-    return {
-      audioTracks: this.audioRecorders.map((audioRecorder) => ({
-        kind: audioRecorder.kind,
-        mimeType: audioRecorder.mimeType,
-        recordingId: audioRecorder.writer.recordingId
-      })),
-      durationSeconds,
-      encoder: this.encoder,
-      mimeType: this.mimeType,
-      recordingId: this.videoWriter.recordingId
-    };
-  }
+    if (this.stopPromise) {
+      return await this.stopPromise;
+    }
 
-  stopTracks(): void {
-    this.stopFrameDrawing();
+    if (this.isFinalized) {
+      throw new Error("The recording session has already finished.");
+    }
 
-    stopTracks(this.sourceStream);
-    stopTracks(this.microphoneStream);
-    stopTracks(this.outputStream);
+    this.stopPromise = this.stopOnce();
+    return await this.stopPromise;
   }
 }
 
@@ -422,7 +594,10 @@ async function audioRecorderFromTrack(kind: AudioSourceKind, track: MediaStreamT
   const mimeType = supportedAudioMimeType();
   const writer = await RecordingFileWriter.create("webm");
   try {
-    const recorder = new MediaRecorder(stream, { mimeType });
+    const recorder = new MediaRecorder(stream, {
+      audioBitsPerSecond: recordingAudioBitrate,
+      mimeType
+    });
     writer.connect(recorder);
     return {
       kind,
@@ -441,8 +616,11 @@ async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoEl
   sourceVideo.muted = true;
   sourceVideo.playsInline = true;
   sourceVideo.srcObject = sourceStream;
-  await sourceVideo.play();
-  await waitForVideoMetadata(sourceVideo);
+  await playMedia(sourceVideo);
+  await waitForMediaMetadata(sourceVideo);
+  if (sourceVideo.videoWidth < 1 || sourceVideo.videoHeight < 1) {
+    throw new Error("Desktop capture did not provide usable video dimensions.");
+  }
   return sourceVideo;
 }
 
@@ -456,10 +634,13 @@ async function createEmbeddedAudioMix(audioRecorders: AudioRecorder[]): Promise<
     return { context: null, track: tracks[0] };
   }
 
-  const context = new AudioContext();
+  const context = new AudioContext({ sampleRate: recordingAudioSampleRate });
   const destination = context.createMediaStreamDestination();
+  const gain = context.createGain();
+  gain.gain.value = audioMixGain(tracks.length);
+  gain.connect(destination);
   for (const track of tracks) {
-    context.createMediaStreamSource(new MediaStream([track])).connect(destination);
+    context.createMediaStreamSource(new MediaStream([track])).connect(gain);
   }
 
   await context.resume();
@@ -476,8 +657,10 @@ async function createVideoOutput(
     setVideoContentHint(directStream);
     return {
       annotationCanvas: null,
+      canvasCaptureTrack: null,
       canvas: null,
       context: null,
+      pipeline: "direct",
       stream: directStream
     };
   }
@@ -493,12 +676,20 @@ async function createVideoOutput(
     throw new Error("Could not create the recording canvas.");
   }
 
-  const stream = canvas.captureStream(config.fps);
+  const stream = canvas.captureStream(0);
+  const canvasCaptureTrack = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack | undefined;
+  if (!canvasCaptureTrack || typeof canvasCaptureTrack.requestFrame !== "function") {
+    stopTracks(stream);
+    throw new Error("This system does not support manually paced canvas recording frames.");
+  }
+
   setVideoContentHint(stream);
   return {
     annotationCanvas: createAnnotationCanvas(config.annotations, config.crop, outputSize),
+    canvasCaptureTrack,
     canvas,
     context,
+    pipeline: "composited",
     stream
   };
 }
@@ -541,17 +732,18 @@ function createHardwareRecording(
       throw new Error("Desktop capture did not provide a video track.");
     }
 
-    output.addVideoTrack(
-      new MediaStreamVideoTrackSource(videoTrack, encodingConfig, { frameRate: fps }),
-      { frameRate: fps }
-    );
+    const videoSource = new MediaStreamVideoTrackSource(videoTrack, encodingConfig, { frameRate: fps });
+    observeHardwareSourceErrors(videoSource.errorPromise, writer);
+    output.addVideoTrack(videoSource, { frameRate: fps });
   }
 
   if (audioTrack) {
-    output.addAudioTrack(new MediaStreamAudioTrackSource(audioTrack as MediaStreamAudioTrack, {
-      bitrate: hardwareAudioBitrate,
+    const audioSource = new MediaStreamAudioTrackSource(audioTrack as MediaStreamAudioTrack, {
+      bitrate: recordingAudioBitrate,
       codec: "aac"
-    }));
+    });
+    observeHardwareSourceErrors(audioSource.errorPromise, writer);
+    output.addAudioTrack(audioSource);
   }
 
   return { canvasSource, output };
@@ -577,8 +769,12 @@ async function directVideoStream(
       height: outputSize.height,
       width: outputSize.width
     });
-  } catch {
-    return null;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "OverconstrainedError") {
+      return null;
+    }
+
+    throw error;
   }
 
   const settings = track.getSettings();
@@ -631,12 +827,13 @@ function setVideoContentHint(stream: MediaStream): void {
 }
 
 async function discardWriters(videoWriter: RecordingFileWriter | null, audioRecorders: AudioRecorder[]): Promise<void> {
-  await Promise.all([
+  const results = await Promise.allSettled([
     videoWriter?.discard(),
     ...audioRecorders.map(async (audioRecorder) => {
       await audioRecorder.writer.discard();
     })
   ]);
+  throwCollectedErrors(rejectedReasons(results), "Could not discard temporary recording files.");
 }
 
 async function getMicrophoneStream(deviceId: string | null): Promise<MediaStream | null> {
@@ -659,26 +856,6 @@ function microphoneAudioTrack(microphoneStream: MediaStream): MediaStreamTrack {
   return tracks[0];
 }
 
-async function stopRecorder(recorder: MediaRecorder, writer: RecordingFileWriter): Promise<void> {
-  if (recorder.state === "inactive") {
-    await writer.finalize();
-    return;
-  }
-
-  const stopped = new Promise<void>((resolve) => {
-    recorder.addEventListener(
-      "stop",
-      () => {
-        resolve();
-      },
-      { once: true }
-    );
-  });
-  recorder.stop();
-  await stopped;
-  await writer.finalize();
-}
-
 function systemAudioTrack(sourceStream: MediaStream): MediaStreamTrack {
   const tracks = sourceStream.getAudioTracks();
   if (tracks.length === 0) {
@@ -697,29 +874,42 @@ function supportedAudioMimeType(): string {
   return supported;
 }
 
-function videoOutputSize(rect: Rect, selectedQuality: VideoQuality, sourceVideo: HTMLVideoElement): { height: number; width: number } {
-  const targetHeight = selectedQuality === "720p" ? videoQualityHeights.low : videoQualityHeights.high;
-  const sourceWidth = rect.width * sourceVideo.videoWidth / window.innerWidth;
-  const sourceHeight = rect.height * sourceVideo.videoHeight / window.innerHeight;
-  const outputScale = Math.min(1, targetHeight / sourceHeight);
-  return {
-    height: evenVideoDimension(sourceHeight * outputScale),
-    width: evenVideoDimension(sourceWidth * outputScale)
-  };
+function rejectedReasons(results: Array<PromiseSettledResult<void>>): unknown[] {
+  const reasons: unknown[] = [];
+  for (const result of results) {
+    if (result.status === "rejected") {
+      reasons.push(result.reason as unknown);
+    }
+  }
+
+  return reasons;
 }
 
-function evenVideoDimension(value: number): number {
-  return Math.max(minimumVideoDimensionPx, Math.round(value / minimumVideoDimensionPx) * minimumVideoDimensionPx);
+function observeHardwareSourceErrors(errorPromise: Promise<void>, writer: RecordingFileWriter): void {
+  void errorPromise.catch((error: unknown): void => {
+    writer.reportEncoderError(error);
+  });
 }
 
-async function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
-  if (video.videoWidth > 0 && video.videoHeight > 0) {
+function throwCollectedErrors(errors: [unknown, ...unknown[]], message: string): never;
+function throwCollectedErrors(errors: unknown[], message: string): void;
+function throwCollectedErrors(errors: unknown[], message: string): void {
+  if (errors.length === 0) {
     return;
   }
 
-  await new Promise<void>((resolve) => {
-    video.addEventListener("loadedmetadata", () => {
-      resolve();
-    }, { once: true });
-  });
+  const details = errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n");
+  throw new AggregateError(errors, `${message}\n${details}`);
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMessage: string): Promise<T> {
+  const { promise: timeout, reject } = Promise.withResolvers<never>();
+  const timeoutHandle = setTimeout((): void => {
+    reject(new Error(timeoutMessage));
+  }, hardwareOperationTimeoutMs);
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }

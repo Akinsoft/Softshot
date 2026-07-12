@@ -1,4 +1,5 @@
 import type { Annotation, ArrowAnnotation, PenAnnotation, Point } from "./overlay-model.js";
+import { minimumPenPointCount } from "./overlay-model.js";
 import type { Rect } from "./shared.js";
 
 const arrowHeadLengthPx = 16;
@@ -6,7 +7,6 @@ const arrowHeadWidthPx = 10;
 const arrowLineWidthPx = 4;
 const halfTurnDivisor = 2;
 const penLineWidthPx = 4;
-const minimumPenPointCount = 2;
 const selectionDashGapPx = 7;
 const selectionDashLengthPx = 8;
 const selectionLineInsetPx = 1;

@@ -1,22 +1,23 @@
-import type { VideoFps, VideoQuality } from "./shared.js";
-import { videoFpsOptions, videoQualityHeights } from "./shared.js";
+import type { VideoFps } from "./shared.js";
+import { videoFpsOptions } from "./shared.js";
 
-const highQualityVideoBitrate = 8_000_000;
-const standardQualityVideoBitrate = 4_500_000;
+const referenceVideoBitrate = 4_500_000;
+const referenceVideoHeight = 720;
+const referenceVideoWidth = 1280;
+const minimumVideoBitrate = 1_000_000;
+const maximumVideoBitrate = 20_000_000;
 const highFpsBitrateMultiplier = 1.25;
 
-export function exportedVideoBitrate(height: number, selectedFps: VideoFps): number {
-  const baseBitrate = height <= videoQualityHeights.low
-    ? standardQualityVideoBitrate
-    : highQualityVideoBitrate;
-  return fpsAdjustedVideoBitrate(baseBitrate, selectedFps);
-}
+export function videoBitrate(width: number, height: number, selectedFps: VideoFps): number {
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+    throw new RangeError("Video dimensions must be positive finite numbers.");
+  }
 
-export function recordingVideoBitrate(selectedQuality: VideoQuality, selectedFps: VideoFps): number {
-  const baseBitrate = selectedQuality === "720p"
-    ? standardQualityVideoBitrate
-    : highQualityVideoBitrate;
-  return fpsAdjustedVideoBitrate(baseBitrate, selectedFps);
+  const pixelCount = width * height;
+  const referencePixelCount = referenceVideoWidth * referenceVideoHeight;
+  const resolutionAdjustedBitrate = referenceVideoBitrate * pixelCount / referencePixelCount;
+  const adjustedBitrate = fpsAdjustedVideoBitrate(resolutionAdjustedBitrate, selectedFps);
+  return Math.round(Math.min(maximumVideoBitrate, Math.max(minimumVideoBitrate, adjustedBitrate)));
 }
 
 function fpsAdjustedVideoBitrate(baseBitrate: number, selectedFps: VideoFps): number {

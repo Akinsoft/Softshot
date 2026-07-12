@@ -105,9 +105,15 @@ class SettingsController {
 
   private renderMicrophoneOptions(): void {
     const selectedDeviceId = this.settings?.microphoneDeviceId ?? null;
+    const isSavedDeviceUnavailable = selectedDeviceId !== null
+      && selectedDeviceId !== defaultDeviceId
+      && this.microphoneDevices.every((device) => device.deviceId !== selectedDeviceId);
     const options = [
       microphoneOption("Off", null, selectedDeviceId),
       microphoneOption("Default", defaultDeviceId, selectedDeviceId),
+      ...(isSavedDeviceUnavailable
+        ? [microphoneOption("Unavailable microphone", selectedDeviceId, selectedDeviceId)]
+        : []),
       ...this.microphoneDevices.map((device, index) =>
         microphoneOption(displayMicrophoneLabel(device, index), device.deviceId, selectedDeviceId)
       )
@@ -168,6 +174,10 @@ class SettingsController {
 
     softshotApi().onSettingsKeybindEvent((event): void => {
       this.handleSettingsKeybindEvent(event);
+    });
+    softshotApi().onSettingsChanged((settings): void => {
+      this.settings = settings;
+      this.render();
     });
   }
 
@@ -306,5 +316,9 @@ function softshotApi(): SoftshotApi {
 }
 
 void new SettingsController().start().catch(async (error: unknown): Promise<void> => {
-  await softshotApi().showError(errorMessage(error));
+  try {
+    await softshotApi().showError(errorMessage(error));
+  } finally {
+    await softshotApi().closeSettings();
+  }
 });

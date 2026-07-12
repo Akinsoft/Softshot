@@ -1,3 +1,4 @@
+import { recordingAudioBitrate, recordingAudioChannelCount, recordingAudioSampleRate } from "./audio-quality.js";
 import type { RecordingEncoder, VideoFileExtension, VideoFps } from "./shared.js";
 import { hardwareVideoCodecs } from "./video-codecs.js";
 
@@ -8,12 +9,16 @@ export interface VideoRecorderProfile {
   mimeType: string;
 }
 
-const audioBitrate = 192_000;
-const audioChannelCount = 2;
-const audioSampleRate = 48_000;
-
-const compatibilityMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
-const compatibilityAudioMimeTypes = [
+export const supportedMp4MimeTypes = [
+  ...hardwareVideoCodecs.map((codec) => `video/mp4;codecs=${codec}`),
+  "video/mp4;codecs=avc1.42E01E"
+] as const;
+export const supportedAudioVideoMp4MimeTypes = [
+  ...hardwareVideoCodecs.map((codec) => `video/mp4;codecs=${codec},mp4a.40.2`),
+  "video/mp4;codecs=avc1.42E01E,mp4a.40.2"
+] as const;
+export const supportedWebmMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
+export const supportedAudioVideoWebmMimeTypes = [
   "video/webm;codecs=vp8,opus",
   "video/webm;codecs=vp9,opus",
   "video/webm"
@@ -31,10 +36,10 @@ export async function selectVideoRecorderProfile(
     let isAudioSupported = !hasAudio;
     if (hasAudio && typeof AudioEncoder !== "undefined") {
       const audioSupport = await AudioEncoder.isConfigSupported({
-        bitrate: audioBitrate,
+        bitrate: recordingAudioBitrate,
         codec: "mp4a.40.2",
-        numberOfChannels: audioChannelCount,
-        sampleRate: audioSampleRate
+        numberOfChannels: recordingAudioChannelCount,
+        sampleRate: recordingAudioSampleRate
       });
       isAudioSupported = audioSupport.supported ?? false;
     }
@@ -49,7 +54,9 @@ export async function selectVideoRecorderProfile(
     }
   }
 
-  const mimeTypes = hasAudio ? compatibilityAudioMimeTypes : compatibilityMimeTypes;
+  const mimeTypes = hasAudio
+    ? [...supportedAudioVideoMp4MimeTypes, ...supportedAudioVideoWebmMimeTypes]
+    : [...supportedMp4MimeTypes, ...supportedWebmMimeTypes];
   const mimeType = mimeTypes.find((candidate) => MediaRecorder.isTypeSupported(candidate));
   if (!mimeType) {
     throw new Error("This system does not support screen recording through MediaRecorder.");
@@ -57,7 +64,7 @@ export async function selectVideoRecorderProfile(
 
   return {
     encoder: "compatibility",
-    fileExtension: "webm",
+    fileExtension: mimeType.startsWith("video/mp4") ? "mp4" : "webm",
     hardwareVideoCodec: null,
     mimeType
   };

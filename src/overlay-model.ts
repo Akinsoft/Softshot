@@ -5,6 +5,7 @@ export const defaultDrawingTool = "select";
 export const defaultPenColor = "#38bdf8";
 export const defaultVideoQuality = "1080p";
 export const minimumArrowLengthPx = 6;
+export const minimumPenPointCount = 2;
 export const minimumSelectionSizePx = 8;
 
 export interface Point {

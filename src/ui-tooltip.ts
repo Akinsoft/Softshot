@@ -38,6 +38,11 @@ export class TooltipController {
   private showForEvent(event: Event): void {
     const target = this.tooltipTargetFromEvent(event);
     if (!target) {
+      this.hide();
+      return;
+    }
+
+    if (target === this.activeTarget) {
       return;
     }
 
@@ -82,10 +87,6 @@ export class TooltipController {
 
     const target = event.target.closest<HTMLElement>(tooltipSelector);
     if (!target || !this.root.contains(target)) {
-      return null;
-    }
-
-    if (target === this.activeTarget) {
       return null;
     }
 

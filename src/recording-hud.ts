@@ -47,7 +47,10 @@ export class RecordingHudController {
     }
 
     const hudLeft = Math.min(
-      this.selection.x + this.selection.width - hudSelectionPaddingPx,
+      Math.max(
+        this.selection.x + this.selection.width - hudSelectionPaddingPx,
+        this.hud.offsetWidth + hudViewportInsetPx
+      ),
       window.innerWidth - hudViewportInsetPx
     );
     const hudTop = Math.max(this.selection.y + hudSelectionPaddingPx, hudViewportInsetPx);

@@ -8,7 +8,7 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 
 - Fast capture flow: press `PrintScreen`, select an area, and save with `Enter` or copy with `Ctrl+C`.
 - Built-in markup: add quick pen strokes and arrows before you save the shot.
-- Cursor-free region recording: switch the same selection into video mode, then record just that part of the screen.
+- Cursor-free region recording: switch the same selection into video mode, then record just that part of the screen with desktop audio and an optional microphone.
 - Simple quality controls: choose `720p` or `1080p` and `30fps` or `60fps`.
 - Trim before sharing: recordings open in a focused editor so you can keep only the useful part.
 - Local-first sharing: no account, cloud workspace, or project library between the capture and your clipboard.
@@ -28,7 +28,7 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 4. Save the screenshot, copy it, or switch to video mode.
 5. When a recording finishes, trim it in the editor and save or copy the result.
 
-If Windows or another app has already taken `PrintScreen`, Softshot falls back to `Ctrl+Shift+PrintScreen` or `Ctrl+Alt+S` and explains what happened.
+If Windows or another app has already taken your capture shortcut, Softshot explains the conflict and keeps Capture available from the tray menu. You can choose another shortcut in Settings.
 
 ## Install From Source
 
@@ -53,6 +53,8 @@ The packaged Windows installer is written to `release/`.
 ```powershell
 npm run build
 npm run lint
+npm test
+npm run test:media
 ```
 
 ## License

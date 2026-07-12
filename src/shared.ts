@@ -1,19 +1,22 @@
 const standardVideoFps = 30;
 const highVideoFps = 60;
 const lowVideoHeight = 720;
+const lowVideoWidth = 1280;
 const highVideoHeight = 1080;
+const highVideoWidth = 1920;
 
 export const videoFpsOptions = {
   standard: standardVideoFps,
   high: highVideoFps
 } as const;
 
-export const videoQualityHeights = {
-  low: lowVideoHeight,
-  high: highVideoHeight
+export const videoQualityDimensions = {
+  low: { height: lowVideoHeight, width: lowVideoWidth },
+  high: { height: highVideoHeight, width: highVideoWidth }
 } as const;
 
 export type CaptureMode = "screenshot" | "video";
+export type CapturePipeline = "composited" | "direct";
 export type DrawingTool = "select" | "pen" | "arrow";
 export type AudioSourceKind = "microphone" | "system";
 export type VideoQuality = "720p" | "1080p";
@@ -29,13 +32,12 @@ export interface Rect {
 }
 
 export interface OverlayBootstrap {
-  imageDataUrl: string;
-  displayBounds: Rect;
-  scaleFactor: number;
+  imageBytes: Uint8Array;
 }
 
 export interface EditorBootstrap {
   audioTracks: EditorAudioTrack[];
+  capturePipeline: CapturePipeline;
   durationSeconds: number;
   encoder: RecordingEncoder;
   fps: VideoFps;
@@ -94,6 +96,7 @@ export type SettingsKeybindEvent =
   | { settings: AppSettings; type: "saved" };
 
 export type SettingsKeybindEventHandler = (event: SettingsKeybindEvent) => void;
+export type SettingsChangedEventHandler = (settings: AppSettings) => void;
 
 export type StopRecordingRequestHandler = () => void;
 
@@ -102,19 +105,21 @@ export interface SoftshotApi {
   createRecordingFile(fileExtension: VideoFileExtension): Promise<RecordingFile>;
   discardRecordingFile(recordingId: string): Promise<void>;
   getBootstrap(): Promise<OverlayBootstrap>;
-  saveScreenshot(dataUrl: string): Promise<SaveDialogResult>;
-  copyScreenshot(dataUrl: string): Promise<void>;
+  saveScreenshot(bytes: Uint8Array): Promise<SaveDialogResult>;
+  copyScreenshot(bytes: Uint8Array): Promise<void>;
   openVideoEditor(
     recordingId: string,
     fps: VideoFps,
     durationSeconds: number,
     mimeType: string,
     encoder: RecordingEncoder,
+    capturePipeline: CapturePipeline,
     audioTracks: RecordingAudioTrack[]
   ): Promise<void>;
   getEditorBootstrap(): Promise<EditorBootstrap>;
   chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
-  prepareEditorVideoFile(bytes: Uint8Array): Promise<PreparedVideoFile>;
+  completeEditorVideoFile(recordingId: string, mimeType: string): Promise<PreparedVideoFile>;
+  trimEditorVideoEnd(endSeconds: number): Promise<PreparedVideoFile>;
   savePreparedEditorVideo(preparedFilePath: string, targetFilePath: string): Promise<SaveResult>;
   copyPreparedEditorVideo(filePath: string): Promise<void>;
   closeEditor(): Promise<void>;
@@ -129,6 +134,7 @@ export interface SoftshotApi {
   endSettingsKeybindRecording(): Promise<void>;
   getSettings(): Promise<AppSettings>;
   onSettingsKeybindEvent(handler: SettingsKeybindEventHandler): () => void;
+  onSettingsChanged(handler: SettingsChangedEventHandler): () => void;
   settingsReadyToShow(): Promise<void>;
   updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
 }

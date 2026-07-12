@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppSettings,
   AppSettingsUpdate,
+  CapturePipeline,
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
@@ -11,6 +12,7 @@ import type {
   RecordingFile,
   SaveDialogResult,
   SaveResult,
+  SettingsChangedEventHandler,
   SettingsKeybindEvent,
   SettingsKeybindEventHandler,
   SoftshotApi,
@@ -21,6 +23,7 @@ import type {
 
 const stopRecordingRequestChannel = "overlay:stop-recording";
 const settingsKeybindEventChannel = "settings:keybind-event";
+const settingsChangedEventChannel = "settings:changed";
 
 const api: SoftshotApi = {
   appendRecordingFileChunk: async (recordingId: string, bytes: Uint8Array) =>
@@ -30,22 +33,34 @@ const api: SoftshotApi = {
   discardRecordingFile: async (recordingId: string) =>
     ipcRenderer.invoke("recording:discard-file", recordingId) as Promise<void>,
   getBootstrap: async () => ipcRenderer.invoke("overlay:get-bootstrap") as Promise<OverlayBootstrap>,
-  saveScreenshot: async (dataUrl: string) =>
-    ipcRenderer.invoke("capture:save-screenshot", dataUrl) as Promise<SaveDialogResult>,
-  copyScreenshot: async (dataUrl: string) => ipcRenderer.invoke("capture:copy-screenshot", dataUrl) as Promise<void>,
+  saveScreenshot: async (bytes: Uint8Array) =>
+    ipcRenderer.invoke("capture:save-screenshot", bytes) as Promise<SaveDialogResult>,
+  copyScreenshot: async (bytes: Uint8Array) => ipcRenderer.invoke("capture:copy-screenshot", bytes) as Promise<void>,
   openVideoEditor: async (
     recordingId: string,
     fps: VideoFps,
     durationSeconds: number,
     mimeType: string,
     encoder: RecordingEncoder,
+    capturePipeline: CapturePipeline,
     audioTracks: RecordingAudioTrack[]
   ) =>
-    ipcRenderer.invoke("recording:open-editor", recordingId, fps, durationSeconds, mimeType, encoder, audioTracks) as Promise<void>,
+    ipcRenderer.invoke(
+      "recording:open-editor",
+      recordingId,
+      fps,
+      durationSeconds,
+      mimeType,
+      encoder,
+      capturePipeline,
+      audioTracks
+    ) as Promise<void>,
   getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
   chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
-  prepareEditorVideoFile: async (bytes: Uint8Array) =>
-    ipcRenderer.invoke("editor:prepare-video-file", bytes) as Promise<PreparedVideoFile>,
+  completeEditorVideoFile: async (recordingId: string, mimeType: string) =>
+    ipcRenderer.invoke("editor:complete-video-file", recordingId, mimeType) as Promise<PreparedVideoFile>,
+  trimEditorVideoEnd: async (endSeconds: number) =>
+    ipcRenderer.invoke("editor:trim-video-end", endSeconds) as Promise<PreparedVideoFile>,
   savePreparedEditorVideo: async (preparedFilePath: string, targetFilePath: string) =>
     ipcRenderer.invoke("editor:save-prepared-video", preparedFilePath, targetFilePath) as Promise<SaveResult>,
   copyPreparedEditorVideo: async (filePath: string) => ipcRenderer.invoke("editor:copy-prepared-video", filePath) as Promise<void>,
@@ -79,6 +94,16 @@ const api: SoftshotApi = {
     ipcRenderer.on(settingsKeybindEventChannel, listener);
     return (): void => {
       ipcRenderer.removeListener(settingsKeybindEventChannel, listener);
+    };
+  },
+  onSettingsChanged: (handler: SettingsChangedEventHandler) => {
+    const listener = (...listenerArguments: [Electron.IpcRendererEvent, AppSettings]): void => {
+      handler(listenerArguments[1]);
+    };
+
+    ipcRenderer.on(settingsChangedEventChannel, listener);
+    return (): void => {
+      ipcRenderer.removeListener(settingsChangedEventChannel, listener);
     };
   },
   settingsReadyToShow: async () => ipcRenderer.invoke("settings:ready-to-show") as Promise<void>,

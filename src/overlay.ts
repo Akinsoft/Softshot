@@ -8,6 +8,7 @@ import {
   normalizeMicrophoneDeviceId
 } from "./audio-devices.js";
 import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
+import { recordingAudioSampleRate } from "./audio-quality.js";
 import { getCanvasContext, getRequiredElement, loadImage } from "./overlay-dom.js";
 import { drawAnnotations, drawArrow, drawSelectionFrame } from "./overlay-drawing.js";
 import type {
@@ -27,6 +28,7 @@ import {
   eventPoint,
   isPointInRect,
   minimumArrowLengthPx,
+  minimumPenPointCount,
   minimumSelectionSizePx,
   normalizeArrow,
   normalizeRect
@@ -97,16 +99,19 @@ class OverlayApp {
   private readonly videoToolButtons: HTMLButtonElement[] = [this.microphoneButton, this.systemAudioButton];
   private activeTool = defaultDrawingTool;
   private annotations: Annotation[] = [];
-  private bootstrap: OverlayBootstrap | null = null;
   private captureMode: CaptureMode = defaultCaptureMode;
   private countdownRunId = 0;
   private dragState: DragState = null;
   private fps: VideoFps = videoFpsOptions.high;
   private isCountingDown = false;
+  private isCompletingScreenshot = false;
   private isLiveCapture = false;
   private isLiveCaptureMousePassthrough = false;
+  private isPrepared = false;
+  private captureReadyPromise: Promise<void> | null = null;
   private isRecording = false;
   private isRenderQueued = false;
+  private isStoppingRecording = false;
   private microphoneAnalyser: AnalyserNode | null = null;
   private microphoneAudioContext: AudioContext | null = null;
   private microphoneDeviceId: string | null = null;
@@ -114,9 +119,12 @@ class OverlayApp {
   private microphoneLevelData: Uint8Array<ArrayBuffer> | null = null;
   private microphoneLevelFrame: number | null = null;
   private microphoneMonitorStream: MediaStream | null = null;
+  private microphoneMonitorRunId = 0;
   private microphoneSource: MediaStreamAudioSourceNode | null = null;
   private quality: VideoQuality = defaultVideoQuality;
   private recordingSession: RecordingSession | null = null;
+  private removeRecordingErrorHandler: (() => void) | null = null;
+  private removeSettingsChangedHandler: (() => void) | null = null;
   private removeStopRecordingRequestHandler: (() => void) | null = null;
   private selectedColor = defaultPenColor;
   private selection: Rect | null = null;
@@ -158,7 +166,9 @@ class OverlayApp {
         return;
       }
 
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === copyShortcutKey) {
+      if ((event.ctrlKey || event.metaKey)
+        && event.key.toLowerCase() === copyShortcutKey
+        && this.captureMode === "screenshot") {
         event.preventDefault();
         this.runAsync(this.copyScreenshot(), "Could not copy the screenshot.");
         return;
@@ -189,8 +199,15 @@ class OverlayApp {
   }
 
   private bindMainEvents(): void {
+    if (this.removeStopRecordingRequestHandler) {
+      return;
+    }
+
     this.removeStopRecordingRequestHandler = getSoftshotApi().onStopRecordingRequest((): void => {
       this.runAsync(this.handleStopRecordingRequest(), "Could not stop the recording.");
+    });
+    this.removeSettingsChangedHandler = getSoftshotApi().onSettingsChanged((settings): void => {
+      this.runAsync(this.applyAppSettings(settings), "Could not apply updated settings.");
     });
   }
 
@@ -308,6 +325,10 @@ class OverlayApp {
   }
 
   private cancelDrag(): void {
+    if (this.dragState?.kind === "pen") {
+      this.removePenAnnotation(this.dragState.annotation);
+    }
+
     this.dragState = null;
     this.requestRender();
   }
@@ -404,9 +425,15 @@ class OverlayApp {
   }
 
   private renderMicrophoneMenu(): void {
+    const isSavedDeviceUnavailable = this.microphoneDeviceId !== null
+      && this.microphoneDeviceId !== defaultDeviceId
+      && this.microphoneDevices.every((device) => device.deviceId !== this.microphoneDeviceId);
     const buttons = [
       this.microphoneChoiceButton("Off", null),
       this.microphoneChoiceButton("Default", defaultDeviceId),
+      ...(isSavedDeviceUnavailable
+        ? [this.microphoneChoiceButton("Unavailable microphone", this.microphoneDeviceId)]
+        : []),
       ...this.microphoneDevices.map((device, index) =>
         this.microphoneChoiceButton(displayMicrophoneLabel(device, index), device.deviceId)
       )
@@ -442,31 +469,48 @@ class OverlayApp {
     });
   }
 
-  private async startMicrophoneMonitor(): Promise<void> {
+  private async startMicrophoneMonitor(runId: number): Promise<void> {
     const deviceId = this.microphoneDeviceId;
     if (deviceId === null || !this.shouldMonitorMicrophone()) {
       this.setMicrophoneLevel(0);
       return;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: microphoneConstraints(deviceId),
-      video: false
-    });
-    const audioContext = new AudioContext();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = audioAnalyzerFftSize;
-    this.microphoneSource = audioContext.createMediaStreamSource(stream);
-    this.microphoneSource.connect(analyser);
-    this.microphoneMonitorStream = stream;
-    this.microphoneAudioContext = audioContext;
-    this.microphoneAnalyser = analyser;
-    this.microphoneLevelData = new Uint8Array(analyser.fftSize);
-    this.startMicrophoneLevelLoop();
-    await this.refreshMicrophoneDevices();
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: microphoneConstraints(deviceId),
+        video: false
+      });
+      audioContext = new AudioContext({ sampleRate: recordingAudioSampleRate });
+      await audioContext.resume();
+      await this.refreshMicrophoneDevices();
+      if (runId !== this.microphoneMonitorRunId
+        || deviceId !== this.microphoneDeviceId
+        || !this.shouldMonitorMicrophone()) {
+        stopMicrophoneResources(stream, audioContext);
+        return;
+      }
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = audioAnalyzerFftSize;
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      this.microphoneSource = source;
+      this.microphoneMonitorStream = stream;
+      this.microphoneAudioContext = audioContext;
+      this.microphoneAnalyser = analyser;
+      this.microphoneLevelData = new Uint8Array(analyser.fftSize);
+      this.startMicrophoneLevelLoop();
+    } catch (error) {
+      stopMicrophoneResources(stream, audioContext);
+      throw error;
+    }
   }
 
   private stopMicrophoneMonitor(): void {
+    this.microphoneMonitorRunId += runIdIncrement;
     if (this.microphoneLevelFrame !== null) {
       cancelAnimationFrame(this.microphoneLevelFrame);
       this.microphoneLevelFrame = null;
@@ -487,8 +531,9 @@ class OverlayApp {
       return;
     }
 
+    const runId = this.microphoneMonitorRunId;
     try {
-      await this.startMicrophoneMonitor();
+      await this.startMicrophoneMonitor(runId);
     } catch (error) {
       await this.reportError("Could not start microphone monitoring.", error);
     }
@@ -508,12 +553,9 @@ class OverlayApp {
   }
 
   private async copyScreenshot(): Promise<void> {
-    const dataUrl = this.renderSelectionDataUrl();
-    if (!dataUrl) {
-      return;
-    }
-
-    await getSoftshotApi().copyScreenshot(dataUrl);
+    await this.completeScreenshot(async (bytes): Promise<void> => {
+      await getSoftshotApi().copyScreenshot(bytes);
+    });
   }
 
   private drawCurrentArrow(): void {
@@ -565,31 +607,61 @@ class OverlayApp {
       return;
     }
 
+    await getSoftshotApi().setLiveCapture(false);
     this.isLiveCapture = false;
     this.isLiveCaptureMousePassthrough = false;
     document.documentElement.classList.remove(liveCaptureClassName);
     this.requestRender();
-    await getSoftshotApi().setLiveCapture(false);
   }
 
   private async finishRecording(result: RecordingResult): Promise<void> {
-    this.recordingSession?.stopTracks();
+    this.removeRecordingErrorHandler?.();
+    this.removeRecordingErrorHandler = null;
     this.recordingSession = null;
     this.isRecording = false;
     this.recordingHud.stopRecording();
     this.syncToolbar();
-    await this.exitLiveCapture();
+    const cleanupErrors: unknown[] = [];
+    try {
+      await this.exitLiveCapture();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+
     this.unbindMainEvents();
     this.stopMicrophoneMonitor();
+    if (cleanupErrors.length > 0) {
+      try {
+        await this.reportError(
+          "The recording finished, but Softshot could not fully restore the capture overlay.",
+          combinedError("Capture overlay cleanup failed.", [cleanupErrors[0], ...cleanupErrors.slice(1)])
+        );
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
 
-    await getSoftshotApi().openVideoEditor(
-      result.recordingId,
-      this.fps,
-      result.durationSeconds,
-      result.mimeType,
-      result.encoder,
-      result.audioTracks
-    );
+    try {
+      await getSoftshotApi().openVideoEditor(
+        result.recordingId,
+        this.fps,
+        result.durationSeconds,
+        result.mimeType,
+        result.encoder,
+        result.capturePipeline,
+        result.audioTracks
+      );
+    } catch (error) {
+      this.bindMainEvents();
+      const errors: [unknown, ...unknown[]] = [error, ...cleanupErrors];
+      try {
+        await this.syncMicrophoneMonitor();
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+
+      throw combinedError("Could not open the completed recording.", errors);
+    }
   }
 
   private async handleStopRecordingRequest(): Promise<void> {
@@ -647,7 +719,7 @@ class OverlayApp {
 
     const point = eventPoint(event);
     if (this.dragState.kind === "select") {
-      this.dragState.current = point;
+      this.dragState.current = clampPointToViewport(point);
     } else if (this.dragState.kind === "pen") {
       this.dragState.annotation.points.push(clampPointToRect(point, this.selection));
     } else {
@@ -671,6 +743,10 @@ class OverlayApp {
   }
 
   private onScreenshotButtonClick(): void {
+    if (this.isRecording || this.isCountingDown) {
+      return;
+    }
+
     this.captureMode = "screenshot";
     this.activeTool = "select";
     this.stopMicrophoneMonitor();
@@ -752,7 +828,7 @@ class OverlayApp {
     drawSelectionFrame(this.context, activeSelection, this.isRecording || this.isCountingDown);
   }
 
-  private renderSelectionDataUrl(): string | null {
+  private async renderSelectionPng(): Promise<Uint8Array | null> {
     if (!this.selection) {
       this.pulseToolbar();
       return null;
@@ -784,7 +860,8 @@ class OverlayApp {
         y: output.height / this.selection.height
       }
     });
-    return output.toDataURL("image/png");
+    const blob = await canvasToPngBlob(output);
+    return new Uint8Array(await blob.arrayBuffer());
   }
 
   private async reportError(message: string, error: unknown): Promise<void> {
@@ -814,12 +891,26 @@ class OverlayApp {
   }
 
   private async saveScreenshot(): Promise<void> {
-    const dataUrl = this.renderSelectionDataUrl();
-    if (!dataUrl) {
+    await this.completeScreenshot(async (bytes): Promise<void> => {
+      await getSoftshotApi().saveScreenshot(bytes);
+    });
+  }
+
+  private async completeScreenshot(action: (bytes: Uint8Array) => Promise<void>): Promise<void> {
+    if (this.isCompletingScreenshot) {
       return;
     }
 
-    await getSoftshotApi().saveScreenshot(dataUrl);
+    this.isCompletingScreenshot = true;
+    try {
+      await this.waitForCaptureReady();
+      const bytes = await this.renderSelectionPng();
+      if (bytes) {
+        await action(bytes);
+      }
+    } finally {
+      this.isCompletingScreenshot = false;
+    }
   }
 
   private runScreenshotAction(action: string | undefined): void {
@@ -834,7 +925,8 @@ class OverlayApp {
   }
 
   private async prepareRecordingSession(): Promise<RecordingSessionPreparation> {
-    if (!this.bootstrap || !this.selection) {
+    await this.waitForCaptureReady();
+    if (!this.selection) {
       return {
         error: new Error("A selected screen region is required before recording."),
         kind: "failed"
@@ -909,7 +1001,7 @@ class OverlayApp {
   }
 
   private async startRecording(session: RecordingSession): Promise<void> {
-    if (!this.bootstrap || !this.selection || this.isRecording) {
+    if (!this.isPrepared || !this.selection || this.isRecording) {
       await session.discard();
       return;
     }
@@ -924,15 +1016,14 @@ class OverlayApp {
       this.requestRender();
       await session.start();
       this.recordingHud.startRecordingTimer();
+      this.removeRecordingErrorHandler = session.onError((): void => {
+        if (this.recordingSession === session) {
+          this.runAsync(this.stopRecording(), "Recording failed.");
+        }
+      });
     } catch (error) {
-      this.isRecording = false;
-      await session.discard();
-      this.recordingSession = null;
-      this.recordingHud.stopRecording();
-      this.syncToolbar();
-      await this.exitLiveCapture();
-      await this.syncMicrophoneMonitor();
-      await this.reportError("Could not start the recording.", error);
+      const errors = await this.resetFailedRecording(session, error);
+      await this.reportError("Could not start the recording.", combinedError("Recording startup failed.", errors));
     }
   }
 
@@ -1002,9 +1093,20 @@ class OverlayApp {
       this.recordingHud.clearCountdown();
       this.recordingHud.stopRecording();
       this.syncToolbar();
-      await this.exitLiveCapture();
-      await this.syncMicrophoneMonitor();
-      await this.reportError("Could not start the recording.", error);
+      const errors: [unknown, ...unknown[]] = [error];
+      try {
+        await this.exitLiveCapture();
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+
+      try {
+        await this.syncMicrophoneMonitor();
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+
+      await this.reportError("Could not start the recording.", combinedError("Recording preparation failed.", errors));
     }
   }
 
@@ -1015,13 +1117,57 @@ class OverlayApp {
   }
 
   private async stopRecording(): Promise<void> {
-    if (!this.recordingSession) {
+    if (!this.recordingSession || this.isStoppingRecording) {
       return;
     }
 
     const session = this.recordingSession;
-    const result = await session.stop();
-    await this.finishRecording(result);
+    this.isStoppingRecording = true;
+    try {
+      let result: RecordingResult;
+      try {
+        result = await session.stop();
+      } catch (error) {
+        const errors = await this.resetFailedRecording(session, error);
+        throw combinedError("Could not stop the recording cleanly.", errors);
+      }
+
+      await this.finishRecording(result);
+    } finally {
+      this.isStoppingRecording = false;
+    }
+  }
+
+  private async resetFailedRecording(
+    session: RecordingSession,
+    error: unknown
+  ): Promise<[unknown, ...unknown[]]> {
+    const errors: [unknown, ...unknown[]] = [error];
+    try {
+      await session.discard();
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+
+    this.removeRecordingErrorHandler?.();
+    this.removeRecordingErrorHandler = null;
+    this.recordingSession = null;
+    this.isRecording = false;
+    this.recordingHud.stopRecording();
+    this.syncToolbar();
+    try {
+      await this.exitLiveCapture();
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+
+    try {
+      await this.syncMicrophoneMonitor();
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+
+    return errors;
   }
 
   private syncToolbar(): void {
@@ -1114,6 +1260,8 @@ class OverlayApp {
   private unbindMainEvents(): void {
     this.removeStopRecordingRequestHandler?.();
     this.removeStopRecordingRequestHandler = null;
+    this.removeSettingsChangedHandler?.();
+    this.removeSettingsChangedHandler = null;
   }
 
   private updateLiveCaptureMousePassthrough(event: MouseEvent): void {
@@ -1177,6 +1325,14 @@ class OverlayApp {
       this.finishSelectionDrag(completedDrag.start, completedDrag.current);
     } else if (completedDrag.kind === "arrow") {
       this.finishArrowDrag(completedDrag);
+    } else if (completedDrag.annotation.points.length < minimumPenPointCount) {
+      this.removePenAnnotation(completedDrag.annotation);
+    }
+  }
+
+  private removePenAnnotation(annotation: PenAnnotation): void {
+    if (this.annotations.at(-1) === annotation) {
+      this.annotations.pop();
     }
   }
 
@@ -1193,7 +1349,7 @@ class OverlayApp {
   }
 
   private finishSelectionDrag(start: Point, current: Point): void {
-    const nextSelection = normalizeRect(start, current);
+    const nextSelection = normalizeRect(clampPointToViewport(start), clampPointToViewport(current));
     if (nextSelection.width < minimumSelectionSizePx || nextSelection.height < minimumSelectionSizePx) {
       return;
     }
@@ -1218,23 +1374,49 @@ class OverlayApp {
       && !this.isRecording;
   }
 
+  private async prepareFrozenScreen(bootstrapPromise: Promise<OverlayBootstrap>): Promise<void> {
+    const bootstrap = await bootstrapPromise;
+    const screenImageUrl = URL.createObjectURL(new Blob([Uint8Array.from(bootstrap.imageBytes)], { type: "image/png" }));
+    try {
+      await loadImage(this.screenImage, screenImageUrl, "Timed out loading the frozen screen image.");
+    } finally {
+      URL.revokeObjectURL(screenImageUrl);
+    }
+    this.isPrepared = true;
+    document.documentElement.classList.add("capture-ready");
+  }
+
+  private async waitForCaptureReady(): Promise<void> {
+    if (this.isPrepared) {
+      return;
+    }
+
+    if (!this.captureReadyPromise) {
+      throw new Error("The frozen screen capture has not started loading.");
+    }
+
+    await this.captureReadyPromise;
+  }
+
   async initialize(): Promise<void> {
     try {
-      const [bootstrap, settings] = await Promise.all([
-        getSoftshotApi().getBootstrap(),
-        getSoftshotApi().getSettings()
-      ]);
-      this.bootstrap = bootstrap;
+      this.bindMainEvents();
+      const bootstrapPromise = getSoftshotApi().getBootstrap();
+      const settings = await getSoftshotApi().getSettings();
       await this.applyAppSettings(settings);
-      await loadImage(this.screenImage, this.bootstrap.imageDataUrl, "Timed out loading the frozen screen image.");
       this.resizeCanvas();
       this.bindEvents();
       this.syncToolbar();
+      this.captureReadyPromise = this.prepareFrozenScreen(bootstrapPromise);
       await this.renderOnce();
       await getSoftshotApi().readyToShow();
+      await this.captureReadyPromise;
     } catch (error) {
-      await this.reportError("Could not prepare the capture overlay.", error);
-      await this.closeOverlay();
+      try {
+        await this.reportError("Could not prepare the capture overlay.", error);
+      } finally {
+        await this.closeOverlay();
+      }
     }
   }
 }
@@ -1242,6 +1424,19 @@ class OverlayApp {
 async function delay(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
+  });
+}
+
+async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob): void => {
+      if (!blob) {
+        reject(new Error("Could not encode the screenshot as PNG."));
+        return;
+      }
+
+      resolve(blob);
+    }, "image/png");
   });
 }
 
@@ -1255,6 +1450,18 @@ function stopMicrophoneResources(stream: MediaStream | null, audioContext: Audio
   if (audioContext) {
     void audioContext.close();
   }
+}
+
+function combinedError(message: string, errors: [unknown, ...unknown[]]): AggregateError {
+  const details = errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n");
+  return new AggregateError(errors, `${message}\n${details}`);
+}
+
+function clampPointToViewport(point: Point): Point {
+  return {
+    x: Math.min(Math.max(point.x, 0), window.innerWidth),
+    y: Math.min(Math.max(point.y, 0), window.innerHeight)
+  };
 }
 
 const overlayApp = new OverlayApp();

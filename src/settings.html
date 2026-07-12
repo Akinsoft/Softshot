@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Softshot</title>
     <link rel="stylesheet" href="./shared-ui.css" />
     <link rel="stylesheet" href="./settings.css" />
@@ -58,6 +59,6 @@
       </label>
     </main>
 
-    <script type="module" src="../dist/settings.js"></script>
+    <script type="module" src="../dist/browser/settings.js"></script>
   </body>
 </html>

@@ -17,9 +17,14 @@ body {
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: #050506;
+  background: transparent;
   font-family: "Segoe UI", system-ui, sans-serif;
   user-select: none;
+}
+
+html.capture-ready,
+html.capture-ready body {
+  background: #050506;
 }
 
 html.live-capture,

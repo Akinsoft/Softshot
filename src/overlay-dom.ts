@@ -1,4 +1,4 @@
-const imageLoadTimeoutMs = 2000;
+const imageLoadTimeoutMs = 10_000;
 
 type ElementConstructor<TElement extends HTMLElement> = new() => TElement;
 
