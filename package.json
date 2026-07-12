@@ -1,6 +1,6 @@
 {
   "name": "softshot",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A lightweight screenshot and screen recording tool.",
   "main": "dist/main/main.js",
   "author": "Akinsoft",
