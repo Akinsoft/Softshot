@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { appendFile, copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, link, mkdir, open, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -1713,6 +1713,82 @@ class SoftshotApp {
     return editorAudioTracks;
   }
 
+  private editorAudioTrack(webContentsId: number, kind: AudioSourceKind): EditorAudioTrack {
+    const editorData = this.editorDataByWebContents.get(webContentsId);
+    const audioTrack = editorData?.audioTracks.find((candidate) => candidate.kind === kind);
+    if (!audioTrack) {
+      throw new Error("The requested audio track does not belong to this editor.");
+    }
+
+    return audioTrack;
+  }
+
+  private async editorAudioFileSize(webContentsId: number, kind: AudioSourceKind): Promise<number> {
+    const fileStats = await stat(this.editorAudioTrack(webContentsId, kind).sourceFilePath);
+    return fileStats.size;
+  }
+
+  private editorVideoFilePath(webContentsId: number): string {
+    const editorData = this.editorDataByWebContents.get(webContentsId);
+    if (!editorData) {
+      throw new Error(missingEditorRecordingDataMessage);
+    }
+
+    return editorData.sourceFilePath;
+  }
+
+  private async editorVideoFileSize(webContentsId: number): Promise<number> {
+    const fileStats = await stat(this.editorVideoFilePath(webContentsId));
+    return fileStats.size;
+  }
+
+  private async readEditorFile(
+    filePath: string,
+    start: number,
+    end: number,
+    sourceLabel: string
+  ): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) {
+      throw new RangeError(`The ${sourceLabel} file byte range is invalid.`);
+    }
+
+    const file = await open(filePath, "r");
+    try {
+      const fileStats = await file.stat();
+      if (end > fileStats.size) {
+        throw new RangeError(`The ${sourceLabel} file byte range exceeds the source file.`);
+      }
+
+      const bytes = new Uint8Array(end - start);
+      const { bytesRead } = await file.read(bytes, 0, bytes.length, start);
+      if (bytesRead !== bytes.length) {
+        throw new Error(`The ${sourceLabel} source returned an incomplete byte range.`);
+      }
+
+      return bytes;
+    } finally {
+      await file.close();
+    }
+  }
+
+  private async readEditorVideoFile(
+    webContentsId: number,
+    start: number,
+    end: number
+  ): Promise<Uint8Array> {
+    return await this.readEditorFile(this.editorVideoFilePath(webContentsId), start, end, "video");
+  }
+
+  private async readEditorAudioFile(
+    webContentsId: number,
+    kind: AudioSourceKind,
+    start: number,
+    end: number
+  ): Promise<Uint8Array> {
+    const audioTrack = this.editorAudioTrack(webContentsId, kind);
+    return await this.readEditorFile(audioTrack.sourceFilePath, start, end, "audio");
+  }
+
   private async openVideoEditor(
     event: Electron.IpcMainInvokeEvent,
     recordingId: string,
@@ -2044,6 +2120,29 @@ class SoftshotApp {
     );
   }
 
+  private registerEditorVideoSourceIpcHandlers(): void {
+    ipcMain.handle("editor:get-video-file-size", async (event): Promise<number> => {
+      return await this.runEditorOperation(
+        event.sender.id,
+        async () => await this.editorVideoFileSize(event.sender.id)
+      );
+    });
+
+    ipcMain.handle(
+      "editor:read-video-file",
+      async (event, start: unknown, end: unknown): Promise<Uint8Array> => {
+        if (typeof start !== "number" || typeof end !== "number") {
+          throw new TypeError("The video file byte range must contain numbers.");
+        }
+
+        return await this.runEditorOperation(
+          event.sender.id,
+          async () => await this.readEditorVideoFile(event.sender.id, start, end)
+        );
+      }
+    );
+  }
+
   private registerEditorIpcHandlers(): void {
     ipcMain.handle("editor:get-bootstrap", (event): EditorBootstrap => {
       const data = this.editorDataByWebContents.get(event.sender.id);
@@ -2053,6 +2152,34 @@ class SoftshotApp {
 
       return data;
     });
+
+    this.registerEditorVideoSourceIpcHandlers();
+
+    ipcMain.handle("editor:get-audio-file-size", async (event, kind: unknown): Promise<number> => {
+      return await this.runEditorOperation(
+        event.sender.id,
+        async () => await this.editorAudioFileSize(event.sender.id, audioSourceKindFromUnknown(kind))
+      );
+    });
+
+    ipcMain.handle(
+      "editor:read-audio-file",
+      async (event, kind: unknown, start: unknown, end: unknown): Promise<Uint8Array> => {
+        if (typeof start !== "number" || typeof end !== "number") {
+          throw new TypeError("The audio file byte range must contain numbers.");
+        }
+
+        return await this.runEditorOperation(
+          event.sender.id,
+          async () => await this.readEditorAudioFile(
+            event.sender.id,
+            audioSourceKindFromUnknown(kind),
+            start,
+            end
+          )
+        );
+      }
+    );
 
     ipcMain.handle("editor:choose-save-path", async (event): Promise<SaveDialogResult> => {
       return await this.runEditorOperation(event.sender.id, async () => await this.chooseEditorVideoSavePath(event));
@@ -2518,11 +2645,15 @@ function recordingAudioTrackFromUnknown(value: unknown): RecordingAudioTrack {
 }
 
 function recordingAudioTrackKindFromUnknown(value: Record<string, unknown>): AudioSourceKind {
-  if (value.kind === "microphone" || value.kind === "system") {
-    return value.kind;
+  return audioSourceKindFromUnknown(value.kind);
+}
+
+function audioSourceKindFromUnknown(value: unknown): AudioSourceKind {
+  if (value === "microphone" || value === "system") {
+    return value;
   }
 
-  throw new TypeError("Recording audio track kind must be microphone or system.");
+  throw new TypeError("Audio track kind must be microphone or system.");
 }
 
 function recordingAudioTracksFromUnknown(value: unknown): RecordingAudioTrack[] {

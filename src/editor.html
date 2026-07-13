@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' file: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' file: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Softshot</title>
     <link rel="stylesheet" href="./shared-ui.css" />
     <link rel="stylesheet" href="./editor.css" />
@@ -45,10 +45,16 @@
         <video id="editor-video" class="editor-video" playsinline></video>
       </section>
 
-      <div class="time-row">
-        <span id="current-time">00:00.00</span>
-        <span class="time-separator">/</span>
-        <span id="total-time">00:00.00</span>
+      <div class="editor-tools" role="toolbar" aria-label="Editing tools">
+        <button id="cut-button" class="cut-button" type="button" data-tooltip="Cut at playhead" aria-label="Cut at playhead">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="6" cy="6" r="3" />
+            <circle cx="6" cy="18" r="3" />
+            <path d="m8.1 8.1 3.9 3.9" />
+            <path d="M20 4 8.1 15.9" />
+            <path d="m14.8 14.8 5.2 5.2" />
+          </svg>
+        </button>
       </div>
 
       <section class="transport">
@@ -67,19 +73,33 @@
         </button>
 
         <div id="timeline" class="timeline" style="--playhead: 0%; --trim-start: 0%; --trim-end: 100%">
-          <div id="timeline-track" class="timeline-track" aria-hidden="true">
+          <div id="timeline-track" class="timeline-track" role="group" aria-label="Video timeline">
             <div class="timeline-base"></div>
             <div class="timeline-selection"></div>
+            <div id="timeline-segments" class="timeline-segments"></div>
             <div class="timeline-playhead"></div>
           </div>
           <input id="trim-start" class="trim-range trim-start" type="range" min="0" value="0" aria-label="Trim start" />
           <input id="trim-end" class="trim-range trim-end" type="range" min="0" value="0" aria-label="Trim end" />
+        </div>
+
+        <div class="timeline-time" aria-label="Playback time">
+          <span id="current-time">00:00.00</span>
+          <span class="time-separator">/</span>
+          <span id="total-time">00:00.00</span>
         </div>
       </section>
 
       <section id="audio-tracks" class="audio-tracks" aria-label="Audio tracks" hidden></section>
     </main>
 
+    <script type="importmap">
+      {
+        "imports": {
+          "mediabunny": "../node_modules/mediabunny/dist/bundles/mediabunny.min.mjs"
+        }
+      }
+    </script>
     <script type="module" src="../dist/browser/editor.js"></script>
   </body>
 </html>

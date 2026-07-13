@@ -117,6 +117,10 @@ export interface SoftshotApi {
     audioTracks: RecordingAudioTrack[]
   ): Promise<void>;
   getEditorBootstrap(): Promise<EditorBootstrap>;
+  getEditorVideoFileSize(): Promise<number>;
+  readEditorVideoFile(start: number, end: number): Promise<Uint8Array>;
+  getEditorAudioFileSize(kind: AudioSourceKind): Promise<number>;
+  readEditorAudioFile(kind: AudioSourceKind, start: number, end: number): Promise<Uint8Array>;
   chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
   completeEditorVideoFile(recordingId: string, mimeType: string): Promise<PreparedVideoFile>;
   trimEditorVideoEnd(endSeconds: number): Promise<PreparedVideoFile>;

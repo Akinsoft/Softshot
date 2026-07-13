@@ -2,6 +2,7 @@ import {
   ALL_FORMATS,
   AppendOnlyStreamTarget,
   BlobSource,
+  EncodedPacketSink,
   Input,
   MediaStreamAudioTrackSource,
   MediaStreamVideoTrackSource,
@@ -33,11 +34,89 @@ const mimeTypes = [
 ];
 
 globalThis.runMediaSmoke = async function runMediaSmoke() {
+  const compatibility = await runCompatibilitySmoke();
+  const hardware = await runHardwareSmoke();
+  const editedSource = hardware.supported ? hardware : compatibility;
   return {
-    compatibility: await runCompatibilitySmoke(),
-    hardware: await runHardwareSmoke()
+    compatibility,
+    editedCut: await runEditedCutSmoke(editedSource),
+    hardware
   };
 };
+
+async function runEditedCutSmoke(source) {
+  const sourceBytes = Uint8Array.from(source.bytes);
+  const outputChunks = [];
+  const recordingId = "edited-cut";
+  globalThis.softshot = {
+    appendRecordingFileChunk: async (id, bytes) => {
+      if (id !== recordingId) {
+        throw new Error("The edited-cut smoke test received an unexpected recording identifier.");
+      }
+
+      outputChunks.push(bytes.slice());
+    },
+    createRecordingFile: async () => ({ id: recordingId }),
+    discardRecordingFile: async (id) => {
+      if (id === recordingId) {
+        outputChunks.length = 0;
+      }
+    },
+    getEditorVideoFileSize: async () => sourceBytes.length,
+    readEditorVideoFile: async (start, end) => sourceBytes.slice(start, end),
+    getEditorAudioFileSize: async () => sourceBytes.length,
+    readEditorAudioFile: async (kind, start, end) => {
+      if (kind !== "system" && kind !== "microphone") {
+        throw new Error("The media smoke test received an unexpected audio track type.");
+      }
+
+      return sourceBytes.slice(start, end);
+    }
+  };
+
+  try {
+    const { audioWaveformPeaks } = await import("../dist/browser/audio-waveform.js");
+    const waveformPeaks = await audioWaveformPeaks("system", source.durationSeconds, 64);
+    const maximumWaveformPeak = Math.max(...waveformPeaks);
+    if (waveformPeaks.length !== 64 || maximumWaveformPeak <= 0 || maximumWaveformPeak > 1) {
+      throw new Error("The audio waveform smoke test did not produce normalized peaks.");
+    }
+
+    const { exportEditedVideo } = await import("../dist/browser/editor-export.js");
+    const exportStartedAtMs = performance.now();
+    const exportedVideo = await exportEditedVideo(
+      source.mimeType,
+      frameRate,
+      [
+        { end: 0.35, start: 0 },
+        { end: 1.15, start: 0.8 }
+      ],
+      [{ kind: "system" }, { kind: "microphone" }]
+    );
+    const exportElapsedMs = Math.round(performance.now() - exportStartedAtMs);
+    const outputBlob = new Blob(outputChunks, { type: exportedVideo.mimeType });
+    const inspection = await inspectMediaBlob(outputBlob, exportedVideo.mimeType);
+    const maximumDurationSeconds = 0.85 + source.videoPacketGapSeconds;
+    const maximumVideoPacketGapSeconds = Math.max(0.1, source.videoPacketGapSeconds + 0.05);
+    const maximumAudioPacketGapSeconds = source.audioPacketGapSeconds + 0.05;
+    if (inspection.durationSeconds < 0.55 || inspection.durationSeconds > maximumDurationSeconds) {
+      throw new Error(`The edited-cut smoke test produced an unexpected ${String(inspection.durationSeconds)} second duration.`);
+    }
+
+    if (inspection.videoPacketGapSeconds > maximumVideoPacketGapSeconds
+      || inspection.audioPacketGapSeconds > maximumAudioPacketGapSeconds) {
+      throw new Error("The edited-cut smoke test introduced a gap between retained segments.");
+    }
+
+    return {
+      ...inspection,
+      exportElapsedMs,
+      waveformPeakCount: waveformPeaks.length
+    };
+  } finally {
+    delete globalThis.softshot;
+  }
+}
 
 async function runCompatibilitySmoke() {
   const mimeType = mimeTypes.find((candidate) => MediaRecorder.isTypeSupported(candidate));
@@ -163,8 +242,10 @@ async function runHardwareSmoke() {
   }
 
   const mimeType = `video/mp4;codecs=${fullCodecString},mp4a.40.2`;
+  const blob = new Blob(chunks, { type: mimeType });
   return {
-    ...await inspectMediaBlob(new Blob(chunks, { type: mimeType }), mimeType),
+    ...await inspectMediaBlob(blob, mimeType),
+    bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
     supported: true
   };
 }
@@ -273,10 +354,12 @@ async function inspectMediaBlob(blob, mimeType) {
     const [audioTrack] = audioTracks;
     const audioChannels = await audioTrack.getNumberOfChannels();
     const audioCodec = await audioTrack.getCodec();
+    const audioPacketGapSeconds = await maximumPacketGap(audioTrack);
     const encodedAudioSampleRate = await audioTrack.getSampleRate();
     const durationSeconds = await input.computeDuration();
     const videoCodec = await videoTrack.getCodec();
     const videoPacketStats = await videoTrack.computePacketStats();
+    const videoPacketGapSeconds = await maximumPacketGap(videoTrack);
     if (!audioCodec
       || !videoCodec
       || audioChannels < 1
@@ -289,16 +372,34 @@ async function inspectMediaBlob(blob, mimeType) {
     return {
       audioChannels,
       audioCodec,
+      audioPacketGapSeconds,
       audioSampleRate: encodedAudioSampleRate,
       byteLength: blob.size,
       durationSeconds,
       mimeType,
       videoCodec,
+      videoPacketGapSeconds,
       videoPacketCount: videoPacketStats.packetCount
     };
   } finally {
     input.dispose();
   }
+}
+
+async function maximumPacketGap(track) {
+  const packetTimestamps = [];
+  const sink = new EncodedPacketSink(track);
+  for await (const packet of sink.packets()) {
+    packetTimestamps.push(packet.timestamp);
+  }
+
+  packetTimestamps.sort((left, right) => left - right);
+  let maximumGap = 0;
+  for (let index = 1; index < packetTimestamps.length; index += 1) {
+    maximumGap = Math.max(maximumGap, packetTimestamps[index] - packetTimestamps[index - 1]);
+  }
+
+  return maximumGap;
 }
 
 function stopStream(stream) {

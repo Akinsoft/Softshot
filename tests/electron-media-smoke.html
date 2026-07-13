@@ -2,10 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; media-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'" />
     <title>Softshot media smoke test</title>
   </head>
   <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "mediabunny": "../node_modules/mediabunny/dist/bundles/mediabunny.min.mjs"
+        }
+      }
+    </script>
     <script type="module" src="./electron-media-smoke.js"></script>
   </body>
 </html>

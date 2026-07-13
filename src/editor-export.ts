@@ -1,20 +1,40 @@
-import { audioMixGain, recordingAudioBitrate, recordingAudioSampleRate } from "./audio-quality.js";
-import { mediaElementError, mediaElementOperationTimeoutMs, playMedia, waitForMediaMetadata } from "./media-element.js";
-import { RecordingFileWriter, stopMediaRecorder } from "./recording-file-writer.js";
-import type { VideoFileExtension, VideoFps } from "./shared.js";
-import { videoBitrate } from "./video-bitrate.js";
 import {
-  supportedAudioVideoMp4MimeTypes,
-  supportedAudioVideoWebmMimeTypes,
-  supportedMp4MimeTypes,
-  supportedWebmMimeTypes
-} from "./video-recorder-profile.js";
+  ALL_FORMATS,
+  AppendOnlyStreamTarget,
+  AudioBufferSource,
+  type AudioSample,
+  AudioSampleSink,
+  canEncodeAudio,
+  canEncodeVideo,
+  CustomSource,
+  Input,
+  type InputAudioTrack,
+  type InputVideoTrack,
+  Mp4OutputFormat,
+  Output,
+  type VideoSample,
+  VideoSampleSink,
+  VideoSampleSource,
+  WebMOutputFormat
+} from "mediabunny";
 
-const minimumOutputDimensionPx = 2;
-const seekToleranceSeconds = 0.001;
-const minimumPlaybackTimeoutMs = 30_000;
-const playbackTimeoutMultiplier = 2;
-const millisecondsPerSecond = 1000;
+import {
+  audioMixGain,
+  recordingAudioBitrate,
+  recordingAudioChannelCount,
+  recordingAudioSampleRate
+} from "./audio-quality.js";
+import { RecordingFileWriter } from "./recording-file-writer.js";
+import type { AudioSourceKind, VideoFileExtension, VideoFps } from "./shared.js";
+import { getSoftshotApi } from "./softshot-api.js";
+import { videoBitrate } from "./video-bitrate.js";
+
+const audioRenderChunkSeconds = 5;
+const keyframeIntervalSeconds = 2;
+const minimumSampleDurationSeconds = 1e-6;
+const mp4MimeType = "video/mp4";
+const preferredHardwareAcceleration = "prefer-hardware";
+const webmMimeType = "video/webm";
 
 export interface TrimRange {
   end: number;
@@ -22,7 +42,7 @@ export interface TrimRange {
 }
 
 export interface ExportAudioTrack {
-  sourceUrl: string;
+  kind: AudioSourceKind;
 }
 
 export interface ExportedVideo {
@@ -30,357 +50,343 @@ export interface ExportedVideo {
   recordingId: string;
 }
 
-interface AudioMix {
-  context: AudioContext;
-  sources: MediaElementAudioSourceNode[];
-  stream: MediaStream;
+interface EditorByteSource {
+  getSize(): Promise<number>;
+  read(start: number, end: number): Promise<Uint8Array>;
 }
 
-export async function exportTrimmedVideo(
-  sourceUrl: string,
+interface LoadedAudioInput {
+  input: Input;
+  track: InputAudioTrack;
+}
+
+interface LoadedVideoInput {
+  input: Input;
+  track: InputVideoTrack;
+}
+
+export async function exportEditedVideo(
   preferredMimeType: string,
   fps: VideoFps,
-  trimRange: TrimRange,
-  audioTracks: ExportAudioTrack[]
+  trimRanges: readonly TrimRange[],
+  audioTracks: readonly ExportAudioTrack[]
 ): Promise<ExportedVideo> {
-  const video = await createLoadedVideo(sourceUrl);
-  const audioElements = await createLoadedAudioElements(audioTracks);
-  return await recordVideoSegment(video, audioElements, preferredMimeType, fps, trimRange);
-}
-
-async function createLoadedVideo(sourceUrl: string): Promise<HTMLVideoElement> {
-  const video = document.createElement("video");
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.src = sourceUrl;
-  await waitForMediaMetadata(video);
-  if (video.videoWidth < 1 || video.videoHeight < 1) {
-    throw new Error("The source recording does not contain a usable video track.");
-  }
-
-  return video;
-}
-
-async function createLoadedAudioElements(audioTracks: ExportAudioTrack[]): Promise<HTMLAudioElement[]> {
-  return await Promise.all(audioTracks.map(async (audioTrack): Promise<HTMLAudioElement> => {
-    const audio = new Audio();
-    audio.preload = "auto";
-    audio.src = audioTrack.sourceUrl;
-    await waitForMediaMetadata(audio);
-    return audio;
-  }));
-}
-
-function createAudioMix(audioElements: HTMLAudioElement[]): AudioMix | null {
-  if (audioElements.length === 0) {
-    return null;
-  }
-
-  const context = new AudioContext({ sampleRate: recordingAudioSampleRate });
-  const destination = context.createMediaStreamDestination();
-  const gain = context.createGain();
-  gain.gain.value = audioMixGain(audioElements.length);
-  gain.connect(destination);
-  const sources = audioElements.map((audioElement) => {
-    const source = context.createMediaElementSource(audioElement);
-    source.connect(gain);
-    return source;
-  });
-  return {
-    context,
-    sources,
-    stream: destination.stream
-  };
-}
-
-async function prepareSegment(
-  video: HTMLVideoElement,
-  audioElements: HTMLAudioElement[],
-  context: CanvasRenderingContext2D,
-  trimRange: TrimRange,
-  width: number,
-  height: number
-): Promise<void> {
-  await Promise.all([
-    seekMedia(video, trimRange.start),
-    ...audioElements.map(async (audioElement) => await seekMedia(audioElement, trimRange.start))
-  ]);
-  context.drawImage(video, 0, 0, width, height);
-}
-
-async function playSegment(
-  video: HTMLVideoElement,
-  audioElements: HTMLAudioElement[],
-  context: CanvasRenderingContext2D,
-  writer: RecordingFileWriter,
-  trimRange: TrimRange,
-  width: number,
-  height: number
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let frameHandle: number | null = null;
-    let isSettled = false;
-    let removeWriterErrorHandler: (() => void) | null = null;
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    const segmentDurationSeconds = Math.max(0, trimRange.end - trimRange.start);
-    const playbackTimeoutMs = Math.max(
-      minimumPlaybackTimeoutMs,
-      Math.ceil(segmentDurationSeconds * playbackTimeoutMultiplier * millisecondsPerSecond)
-    );
-    function cleanup(): void {
-      if (timeoutHandle !== null) {
-        clearTimeout(timeoutHandle);
-      }
-
-      if (frameHandle !== null) {
-        video.cancelVideoFrameCallback(frameHandle);
-      }
-
-      removeWriterErrorHandler?.();
-      removeWriterErrorHandler = null;
-
-      video.removeEventListener("ended", finish);
-      video.removeEventListener("error", onError);
-      video.removeEventListener("timeupdate", finishAtTrimEnd);
-      for (const audioElement of audioElements) {
-        audioElement.removeEventListener("error", onAudioError);
-      }
-    }
-    function didSettle(): boolean {
-      if (isSettled) {
-        return false;
-      }
-
-      isSettled = true;
-      cleanup();
-      video.pause();
-      pauseMediaElements(audioElements);
-      return true;
-    }
-    function finish(): void {
-      if (didSettle()) {
-        resolve();
-      }
-    }
-    function fail(error: unknown): void {
-      if (didSettle()) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    }
-    function finishAtTrimEnd(): void {
-      if (video.currentTime >= trimRange.end || video.ended) {
-        finish();
-      }
-    }
-    function onError(): void {
-      fail(mediaElementError(video, "playing the source recording"));
-    }
-    function onAudioError(event: Event): void {
-      if (event.currentTarget instanceof HTMLMediaElement) {
-        fail(mediaElementError(event.currentTarget, "playing a recording audio track"));
-      }
-    }
-    function drawFrame(): void {
-      frameHandle = null;
-      context.drawImage(video, 0, 0, width, height);
-      if (video.currentTime >= trimRange.end || video.ended) {
-        finish();
-        return;
-      }
-
-      frameHandle = video.requestVideoFrameCallback(drawFrame);
-    }
-
-    video.addEventListener("ended", finish, { once: true });
-    video.addEventListener("error", onError, { once: true });
-    video.addEventListener("timeupdate", finishAtTrimEnd);
-    for (const audioElement of audioElements) {
-      audioElement.addEventListener("error", onAudioError, { once: true });
-    }
-    frameHandle = video.requestVideoFrameCallback(drawFrame);
-    timeoutHandle = setTimeout((): void => {
-      fail(new Error("Timed out while exporting the selected video segment."));
-    }, playbackTimeoutMs);
-    removeWriterErrorHandler = writer.onError((error): void => {
-      fail(new Error("The video encoder failed during export.", { cause: error }));
-    });
-    void Promise.all([
-      playMedia(video),
-      ...audioElements.map(async (audioElement) => await playMedia(audioElement))
-    ]).catch(fail);
-  });
-}
-
-async function recordVideoSegment(
-  video: HTMLVideoElement,
-  audioElements: HTMLAudioElement[],
-  preferredMimeType: string,
-  fps: VideoFps,
-  trimRange: TrimRange
-): Promise<ExportedVideo> {
-  const width = Math.max(minimumOutputDimensionPx, video.videoWidth);
-  const height = Math.max(minimumOutputDimensionPx, video.videoHeight);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext("2d", { alpha: false, desynchronized: true });
-  if (!context) {
-    throw new Error("Could not create the video export canvas.");
-  }
-
-  const stream = canvas.captureStream(fps);
-  for (const videoTrack of stream.getVideoTracks()) {
-    videoTrack.contentHint = "detail";
-  }
-
-  const audioMix = createAudioMix(audioElements);
-  const mixedAudioTracks = audioMix?.stream.getAudioTracks() ?? [];
-  for (const audioTrack of mixedAudioTracks) {
-    stream.addTrack(audioTrack);
-  }
-
-  const mimeType = supportedVideoMimeType(preferredMimeType, audioElements.length > 0);
-  let recorder: MediaRecorder | null = null;
+  validateTrimRanges(trimRanges);
+  const videoInput = createVideoInput();
+  const audioInputs = audioTracks.map((audioTrack) => createAudioInput(audioTrack.kind));
   let writer: RecordingFileWriter | null = null;
-  const errors: unknown[] = [];
+  let output: Output | null = null;
   try {
-    await prepareSegment(video, audioElements, context, trimRange, width, height);
-    if (audioMix?.context.state === "suspended") {
-      await audioMix.context.resume();
-    }
+    const loadedVideo = await loadVideoInput(videoInput);
+    const loadedAudioInputs = await Promise.all(audioInputs.map(async (input) => await loadAudioInput(input)));
+    const isMp4 = preferredMimeType.startsWith(mp4MimeType);
+    const fileExtension: VideoFileExtension = isMp4 ? "mp4" : "webm";
+    const mimeType = isMp4 ? mp4MimeType : webmMimeType;
+    const videoCodec = isMp4 ? "avc" : "vp9";
+    const audioCodec = isMp4 ? "aac" : "opus";
+    const width = await loadedVideo.track.getCodedWidth();
+    const height = await loadedVideo.track.getCodedHeight();
+    const bitrate = videoBitrate(width, height, fps);
+    await assertEncodingSupport(videoCodec, audioCodec, bitrate, width, height, loadedAudioInputs.length > 0);
 
-    writer = await RecordingFileWriter.create(videoFileExtension(mimeType));
-    recorder = new MediaRecorder(stream, {
-      ...((audioElements.length > 0) && { audioBitsPerSecond: recordingAudioBitrate }),
-      mimeType,
-      videoBitsPerSecond: videoBitrate(width, height, fps)
+    writer = await RecordingFileWriter.create(fileExtension);
+    output = new Output({
+      format: isMp4
+        ? new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 1 })
+        : new WebMOutputFormat(),
+      target: new AppendOnlyStreamTarget(writer.writableStream())
     });
-    writer.connect(recorder);
-    writer.start(recorder);
-    await playSegment(video, audioElements, context, writer, trimRange, width, height);
-    await stopMediaRecorder(recorder, writer);
+    const videoSource = new VideoSampleSource({
+      bitrate,
+      codec: videoCodec,
+      contentHint: "detail",
+      hardwareAcceleration: preferredHardwareAcceleration,
+      keyFrameInterval: keyframeIntervalSeconds
+    });
+    const audioSource = loadedAudioInputs.length > 0
+      ? new AudioBufferSource({ bitrate: recordingAudioBitrate, codec: audioCodec })
+      : null;
+    output.addVideoTrack(videoSource, {
+      frameRate: fps,
+      rotation: await loadedVideo.track.getRotation()
+    });
+    if (audioSource) {
+      output.addAudioTrack(audioSource);
+    }
+
+    await output.start();
+    await Promise.all([
+      encodeVideoRanges(loadedVideo.track, videoSource, trimRanges),
+      ...(audioSource
+        ? [encodeAudioRanges(loadedAudioInputs, audioSource, trimRanges)]
+        : [])
+    ]);
+    await output.finalize();
+    await writer.finalize();
+    return { mimeType, recordingId: writer.recordingId };
   } catch (error) {
-    errors.push(error);
-    if (recorder && writer && recorder.state !== "inactive") {
-      try {
-        await stopMediaRecorder(recorder, writer);
-      } catch (stopError) {
-        errors.push(stopError);
-      }
+    return await discardFailedExport(output, writer, error);
+  } finally {
+    videoInput.dispose();
+    for (const audioInput of audioInputs) {
+      audioInput.dispose();
     }
-  }
-
-  stopTracks(stream);
-  pauseMediaElements(audioElements);
-  try {
-    await closeAudioMix(audioMix);
-  } catch (error) {
-    errors.push(error);
-  }
-
-  if (errors.length > 0 || !writer || !recorder) {
-    if (writer) {
-      try {
-        await writer.discard();
-      } catch (discardError) {
-        errors.push(discardError);
-      }
-    }
-
-    throwExportErrors(errors);
-  }
-
-  return {
-    mimeType: recorder.mimeType.length > 0 ? recorder.mimeType : mimeType,
-    recordingId: writer.recordingId
-  };
-}
-
-async function closeAudioMix(audioMix: AudioMix | null): Promise<void> {
-  if (!audioMix) {
-    return;
-  }
-
-  for (const source of audioMix.sources) {
-    source.disconnect();
-  }
-
-  if (audioMix.context.state !== "closed") {
-    await audioMix.context.close();
   }
 }
 
-function pauseMediaElements(elements: HTMLMediaElement[]): void {
-  for (const element of elements) {
-    element.pause();
+async function discardFailedExport(
+  output: Output | null,
+  writer: RecordingFileWriter | null,
+  exportError: unknown
+): Promise<never> {
+  const errors = [exportError];
+  if (output && output.state !== "canceled" && output.state !== "finalized") {
+    try {
+      await output.cancel();
+    } catch (error) {
+      errors.push(error);
+    }
   }
+
+  if (writer) {
+    try {
+      await writer.discard();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Could not export or clean up the edited recording.");
+  }
+
+  throw exportError;
 }
 
-async function seekMedia(media: HTMLMediaElement, timeSeconds: number): Promise<void> {
-  if (Math.abs(media.currentTime - timeSeconds) <= seekToleranceSeconds) {
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-    function cleanup(): void {
-      if (timeoutHandle !== null) {
-        clearTimeout(timeoutHandle);
-      }
-
-      media.removeEventListener("seeked", onSeeked);
-      media.removeEventListener("error", onError);
-    }
-    function onSeeked(): void {
-      cleanup();
-      resolve();
-    }
-    function onError(): void {
-      cleanup();
-      reject(mediaElementError(media, "seeking the recording"));
-    }
-
-    media.addEventListener("seeked", onSeeked, { once: true });
-    media.addEventListener("error", onError, { once: true });
-    timeoutHandle = setTimeout((): void => {
-      cleanup();
-      reject(new Error("Timed out seeking the recording."));
-    }, mediaElementOperationTimeoutMs);
-    media.currentTime = timeSeconds;
+function createEditorInput(source: EditorByteSource): Input {
+  return new Input({
+    formats: ALL_FORMATS,
+    source: new CustomSource(source)
   });
 }
 
-function stopTracks(stream: MediaStream): void {
-  for (const track of stream.getTracks()) {
-    track.stop();
+function createVideoInput(): Input {
+  const api = getSoftshotApi();
+  return createEditorInput({
+    getSize: async (): Promise<number> => await api.getEditorVideoFileSize(),
+    read: async (start, end): Promise<Uint8Array> => await api.readEditorVideoFile(start, end)
+  });
+}
+
+function createAudioInput(kind: AudioSourceKind): Input {
+  const api = getSoftshotApi();
+  return createEditorInput({
+    getSize: async (): Promise<number> => await api.getEditorAudioFileSize(kind),
+    read: async (start, end): Promise<Uint8Array> => await api.readEditorAudioFile(kind, start, end)
+  });
+}
+
+async function loadVideoInput(input: Input): Promise<LoadedVideoInput> {
+  if (!await input.canRead()) {
+    throw new Error("The source recording could not be read for export.");
+  }
+
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) {
+    throw new Error("The source recording does not contain a video track.");
+  }
+
+  if (!await track.canDecode()) {
+    throw new Error("This system cannot decode the source recording for export.");
+  }
+
+  return { input, track };
+}
+
+async function loadAudioInput(input: Input): Promise<LoadedAudioInput> {
+  if (!await input.canRead()) {
+    throw new Error("A recording audio track could not be read for export.");
+  }
+
+  const track = await input.getPrimaryAudioTrack();
+  if (!track) {
+    throw new Error("A recording audio source does not contain an audio track.");
+  }
+
+  if (!await track.canDecode()) {
+    throw new Error("This system cannot decode a recording audio track for export.");
+  }
+
+  return { input, track };
+}
+
+async function assertEncodingSupport(
+  videoCodec: "avc" | "vp9",
+  audioCodec: "aac" | "opus",
+  bitrate: number,
+  width: number,
+  height: number,
+  hasAudio: boolean
+): Promise<void> {
+  const supportsVideo = await canEncodeVideo(videoCodec, {
+    bitrate,
+    hardwareAcceleration: preferredHardwareAcceleration,
+    height,
+    width
+  });
+  if (!supportsVideo) {
+    throw new Error(`This system cannot encode edited ${videoCodec.toUpperCase()} video.`);
+  }
+
+  if (hasAudio && !await canEncodeAudio(audioCodec, {
+    bitrate: recordingAudioBitrate,
+    numberOfChannels: recordingAudioChannelCount,
+    sampleRate: recordingAudioSampleRate
+  })) {
+    throw new Error(`This system cannot encode edited ${audioCodec.toUpperCase()} audio.`);
   }
 }
 
-function supportedVideoMimeType(preferredMimeType: string, hasAudio: boolean): string {
-  const isMp4 = preferredMimeType.startsWith("video/mp4");
-  let mimeTypes: readonly string[];
-  if (isMp4) {
-    mimeTypes = hasAudio ? supportedAudioVideoMp4MimeTypes : supportedMp4MimeTypes;
-  } else {
-    mimeTypes = hasAudio ? supportedAudioVideoWebmMimeTypes : supportedWebmMimeTypes;
+async function encodeVideoRanges(
+  inputTrack: InputVideoTrack,
+  outputSource: VideoSampleSource,
+  trimRanges: readonly TrimRange[]
+): Promise<void> {
+  let outputOffset = 0;
+  for (const trimRange of trimRanges) {
+    const sink = new VideoSampleSink(inputTrack, { hardwareAcceleration: preferredHardwareAcceleration });
+    let isFirstSample = true;
+    for await (const sample of sink.samples(trimRange.start, trimRange.end)) {
+      if (await encodeVideoSample(sample, outputSource, trimRange, outputOffset, isFirstSample)) {
+        isFirstSample = false;
+      }
+    }
+
+    if (isFirstSample) {
+      throw new Error("A retained video section did not contain any frames.");
+    }
+
+    outputOffset += trimRange.end - trimRange.start;
   }
 
-  const supported = mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
-  if (!supported) {
-    throw new Error(`This system does not support ${isMp4 ? "MP4" : "WebM"} video export.`);
+  outputSource.close();
+}
+
+async function encodeVideoSample(
+  sample: VideoSample,
+  outputSource: VideoSampleSource,
+  trimRange: TrimRange,
+  outputOffset: number,
+  isFirstSample: boolean
+): Promise<boolean> {
+  try {
+    const visibleStart = Math.max(sample.timestamp, trimRange.start);
+    const visibleEnd = Math.min(sample.timestamp + sample.duration, trimRange.end);
+    if (visibleEnd - visibleStart < minimumSampleDurationSeconds) {
+      return false;
+    }
+
+    sample.setTimestamp(outputOffset + (isFirstSample ? 0 : visibleStart - trimRange.start));
+    sample.setDuration(visibleEnd - visibleStart);
+    if (isFirstSample) {
+      await outputSource.add(sample, { keyFrame: true });
+    } else {
+      await outputSource.add(sample);
+    }
+
+    return true;
+  } finally {
+    sample.close();
+  }
+}
+
+async function encodeAudioRanges(
+  inputs: readonly LoadedAudioInput[],
+  outputSource: AudioBufferSource,
+  trimRanges: readonly TrimRange[]
+): Promise<void> {
+  for (const trimRange of trimRanges) {
+    let chunkStart = trimRange.start;
+    while (chunkStart < trimRange.end) {
+      const chunkEnd = Math.min(chunkStart + audioRenderChunkSeconds, trimRange.end);
+      const buffer = await renderAudioChunk(inputs, chunkStart, chunkEnd);
+      await outputSource.add(buffer);
+      chunkStart = chunkEnd;
+    }
   }
 
-  return supported;
+  outputSource.close();
 }
 
-function videoFileExtension(mimeType: string): VideoFileExtension {
-  return mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+async function renderAudioChunk(
+  inputs: readonly LoadedAudioInput[],
+  start: number,
+  end: number
+): Promise<AudioBuffer> {
+  const frameCount = Math.max(1, Math.round((end - start) * recordingAudioSampleRate));
+  const context = new OfflineAudioContext(
+    recordingAudioChannelCount,
+    frameCount,
+    recordingAudioSampleRate
+  );
+  const gain = context.createGain();
+  gain.gain.value = audioMixGain(inputs.length);
+  gain.connect(context.destination);
+  for (const input of inputs) {
+    const sink = new AudioSampleSink(input.track);
+    for await (const sample of sink.samples(start, end)) {
+      scheduleAudioSample(context, gain, sample, start, end);
+    }
+  }
+
+  return await context.startRendering();
 }
 
-function throwExportErrors(errors: unknown[]): never {
-  const actualErrors = errors.length > 0 ? errors : [new Error("The video export did not create an output file.")];
-  const details = actualErrors.map((error) => error instanceof Error ? error.message : String(error)).join("\n");
-  throw new AggregateError(actualErrors, `Could not export the recording.\n${details}`);
+function scheduleAudioSample(
+  context: OfflineAudioContext,
+  gain: GainNode,
+  sample: AudioSample,
+  start: number,
+  end: number
+): void {
+  let activeSample = sample;
+  try {
+    const startFrame = activeSample.timestamp < start
+      ? Math.min(activeSample.numberOfFrames, Math.round((start - activeSample.timestamp) * activeSample.sampleRate))
+      : 0;
+    const endFrame = activeSample.timestamp + activeSample.duration > end
+      ? Math.max(0, Math.round((end - activeSample.timestamp) * activeSample.sampleRate))
+      : activeSample.numberOfFrames;
+    if (endFrame <= startFrame) {
+      return;
+    }
+
+    if (startFrame > 0 || endFrame < activeSample.numberOfFrames) {
+      const trimmedSample = activeSample.trim(startFrame, endFrame);
+      activeSample.close();
+      activeSample = trimmedSample;
+    }
+
+    const source = context.createBufferSource();
+    source.buffer = activeSample.toAudioBuffer();
+    source.connect(gain);
+    source.start(Math.max(0, activeSample.timestamp - start));
+  } finally {
+    activeSample.close();
+  }
+}
+
+function validateTrimRanges(trimRanges: readonly TrimRange[]): void {
+  if (trimRanges.length === 0) {
+    throw new RangeError("Edited video exports require at least one retained section.");
+  }
+
+  for (const trimRange of trimRanges) {
+    if (!Number.isFinite(trimRange.start)
+      || !Number.isFinite(trimRange.end)
+      || trimRange.start < 0
+      || trimRange.end <= trimRange.start) {
+      throw new RangeError("Edited video sections must contain valid positive durations.");
+    }
+  }
 }

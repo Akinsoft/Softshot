@@ -20,13 +20,14 @@ async function run() {
   const result = await window.webContents.executeJavaScript("globalThis.runMediaSmoke()");
   const compatibilityBytes = result.compatibility.bytes;
   delete result.compatibility.bytes;
-  result.endTrim = await runEndTrimSmoke(compatibilityBytes);
+  delete result.hardware.bytes;
+  result.endTrim = await runEndTrimSmoke(compatibilityBytes, result.compatibility.videoPacketGapSeconds);
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   window.destroy();
   app.exit(0);
 }
 
-async function runEndTrimSmoke(sourceBytes) {
+async function runEndTrimSmoke(sourceBytes, sourceVideoPacketGapSeconds) {
   const directory = await mkdtemp(path.join(tmpdir(), "softshot-remux-"));
   const sourceFilePath = path.join(directory, "source.mp4");
   const targetFilePath = path.join(directory, "trimmed.mp4");
@@ -47,8 +48,14 @@ async function runEndTrimSmoke(sourceBytes) {
     const durationSeconds = await input.computeDuration();
     const videoTracks = await input.getVideoTracks();
     const audioTracks = await input.getAudioTracks();
-    if (durationSeconds < 0.5 || durationSeconds > 0.7 || videoTracks.length !== 1 || audioTracks.length !== 1) {
-      throw new Error("The end-trim smoke test did not preserve the expected media tracks and duration.");
+    const maximumDurationSeconds = 0.7 + sourceVideoPacketGapSeconds;
+    if (durationSeconds < 0.5
+      || durationSeconds > maximumDurationSeconds
+      || videoTracks.length !== 1
+      || audioTracks.length !== 1) {
+      throw new Error(
+        `The end-trim smoke test produced ${durationSeconds.toFixed(3)} seconds with a ${maximumDurationSeconds.toFixed(3)} second maximum, ${videoTracks.length} video tracks, and ${audioTracks.length} audio tracks.`
+      );
     }
 
     return {

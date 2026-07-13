@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   AppSettings,
   AppSettingsUpdate,
+  AudioSourceKind,
   CapturePipeline,
   EditorBootstrap,
   OverlayBootstrap,
@@ -56,6 +57,13 @@ const api: SoftshotApi = {
       audioTracks
     ) as Promise<void>,
   getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
+  getEditorVideoFileSize: async () => ipcRenderer.invoke("editor:get-video-file-size") as Promise<number>,
+  readEditorVideoFile: async (start: number, end: number) =>
+    ipcRenderer.invoke("editor:read-video-file", start, end) as Promise<Uint8Array>,
+  getEditorAudioFileSize: async (kind: AudioSourceKind) =>
+    ipcRenderer.invoke("editor:get-audio-file-size", kind) as Promise<number>,
+  readEditorAudioFile: async (kind: AudioSourceKind, start: number, end: number) =>
+    ipcRenderer.invoke("editor:read-audio-file", kind, start, end) as Promise<Uint8Array>,
   chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
   completeEditorVideoFile: async (recordingId: string, mimeType: string) =>
     ipcRenderer.invoke("editor:complete-video-file", recordingId, mimeType) as Promise<PreparedVideoFile>,
