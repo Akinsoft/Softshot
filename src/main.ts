@@ -640,13 +640,21 @@ class SoftshotApp {
     return this.settings;
   }
 
+  private loginItemSettingsOptions(): Electron.LoginItemSettingsOptions {
+    return {
+      path: app.getPath("exe"),
+      args: app.isPackaged ? [] : [app.getAppPath()]
+    };
+  }
+
   private applyLaunchAtStartup(isEnabled: boolean): void {
+    const options = this.loginItemSettingsOptions();
     app.setLoginItemSettings({
-      openAtLogin: isEnabled,
-      path: app.getPath("exe")
+      ...options,
+      openAtLogin: isEnabled
     });
 
-    const loginItemSettings = app.getLoginItemSettings();
+    const loginItemSettings = app.getLoginItemSettings(options);
     if (loginItemSettings.openAtLogin !== isEnabled) {
       throw new Error("Could not update launch at startup.");
     }
@@ -851,7 +859,10 @@ class SoftshotApp {
       await app.whenReady();
       app.setName(appName);
       app.setAppUserModelId(appId);
-      this.settings = await loadAppSettings(app.getPath("userData"), app.getLoginItemSettings().openAtLogin);
+      this.settings = await loadAppSettings(
+        app.getPath("userData"),
+        app.getLoginItemSettings(this.loginItemSettingsOptions()).openAtLogin
+      );
       this.applyLaunchAtStartup(this.settings.launchAtStartup);
       this.registerPermissionRequestHandler();
       this.registerDisplayMediaRequestHandler();
