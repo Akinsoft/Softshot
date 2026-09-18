@@ -9,6 +9,7 @@ import {
 
 import { combinedError, rejectedReasons, throwCollectedErrors } from "./async-errors.js";
 import { recordingAudioBitrate } from "./audio-quality.js";
+import { desktopBounds, displaysInViewport, intersectRects } from "./capture-layout.js";
 import { getCursorlessDesktopStream, stopTracks } from "./desktop-capture.js";
 import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { drawAnnotations } from "./overlay-drawing.js";
@@ -17,7 +18,7 @@ import { RecordingAudio } from "./recording-audio.js";
 import { RecordingFileWriter, stopMediaRecorder } from "./recording-file-writer.js";
 import { nextRecordingFrameDeadline } from "./recording-frame-clock.js";
 import { recordingOutputSize } from "./recording-output-size.js";
-import type { CapturePipeline, RecordingAudioTrack, RecordingEncoder, Rect, VideoFps, VideoQuality } from "./shared.js";
+import type { CaptureDisplay, CapturePipeline, RecordingAudioTrack, RecordingEncoder, Rect, VideoFps, VideoQuality } from "./shared.js";
 import { videoBitrate } from "./video-bitrate.js";
 import { selectVideoRecorderProfile } from "./video-recorder-profile.js";
 
@@ -33,6 +34,7 @@ type RecordingSessionErrorHandler = (error: unknown) => void;
 export interface RecordingSessionConfig {
   annotations: Annotation[];
   crop: Rect;
+  displays: CaptureDisplay[];
   fps: VideoFps;
   microphoneDeviceId: string | null;
   quality: VideoQuality;
@@ -46,6 +48,12 @@ export interface RecordingResult {
   encoder: RecordingEncoder;
   mimeType: string;
   recordingId: string;
+}
+
+interface RecordingSource {
+  bounds: Rect;
+  stream: MediaStream;
+  video: HTMLVideoElement;
 }
 
 interface VideoOutput {
@@ -67,20 +75,22 @@ export class RecordingSession {
     let audio: RecordingAudio | null = null;
     let videoWriter: RecordingFileWriter | null = null;
     let videoOutput: VideoOutput | null = null;
-    let sourceStream: MediaStream | null = null;
+    const sources: RecordingSource[] = [];
     try {
-      sourceStream = await getCursorlessDesktopStream(config.fps, config.systemAudioEnabled);
+      await prepareRecordingSources(sources, config);
+      if (sources.length === 0) {
+        throw new Error("The selected region does not include a monitor.");
+      }
+
       audio = await RecordingAudio.create(
-        sourceStream,
+        sources[0].stream,
         config.microphoneDeviceId,
         config.systemAudioEnabled
       );
-
-      const sourceVideo = await createSourceVideo(sourceStream);
       const outputSize = recordingOutputSize(
         config.crop,
         config.quality,
-        { height: sourceVideo.videoHeight, width: sourceVideo.videoWidth },
+        desktopBounds(config.displays),
         { height: window.innerHeight, width: window.innerWidth }
       );
       const bitrate = videoBitrate(outputSize.width, outputSize.height, config.fps);
@@ -92,7 +102,7 @@ export class RecordingSession {
         audio.hasAudio()
       );
       videoWriter = await RecordingFileWriter.create(profile.fileExtension);
-      videoOutput = await createVideoOutput(sourceStream, config, outputSize);
+      videoOutput = await createVideoOutput(sources, config, outputSize);
       if (audio.mixedTrack) {
         videoOutput.stream.addTrack(audio.mixedTrack);
       }
@@ -133,13 +143,12 @@ export class RecordingSession {
         outputStream: videoOutput.stream,
         mimeType: profile.mimeType,
         recorder,
-        sourceStream,
-        sourceVideo,
+        sources,
         videoWriter
       });
     } catch (error) {
       stopTracks(videoOutput?.stream ?? null);
-      stopTracks(sourceStream);
+      stopRecordingSources(sources);
       const cleanupResults = await Promise.allSettled([
         audio?.close(),
         videoWriter?.discard(),
@@ -175,8 +184,7 @@ export class RecordingSession {
   private readonly mimeType: string;
   private readonly recorder: MediaRecorder | null;
   private recordingStartedAtMs: number | null = null;
-  private readonly sourceStream: MediaStream;
-  private readonly sourceVideo: HTMLVideoElement;
+  private readonly sources: RecordingSource[];
   private stopPromise: Promise<RecordingResult> | null = null;
   private readonly videoWriter: RecordingFileWriter;
 
@@ -195,8 +203,7 @@ export class RecordingSession {
     outputStream: MediaStream;
     mimeType: string;
     recorder: MediaRecorder | null;
-    sourceStream: MediaStream;
-    sourceVideo: HTMLVideoElement;
+    sources: RecordingSource[];
     videoWriter: RecordingFileWriter;
   }) {
     this.annotationCanvas = config.annotationCanvas;
@@ -213,8 +220,7 @@ export class RecordingSession {
     this.outputStream = config.outputStream;
     this.mimeType = config.mimeType;
     this.recorder = config.recorder;
-    this.sourceStream = config.sourceStream;
-    this.sourceVideo = config.sourceVideo;
+    this.sources = config.sources;
     this.videoWriter = config.videoWriter;
     this.videoWriter.onError((error): void => {
       this.notifyError(error);
@@ -222,7 +228,9 @@ export class RecordingSession {
     this.audio.onError((error): void => {
       this.notifyError(error);
     });
-    this.watchStreamTracks(this.sourceStream, "Desktop capture");
+    for (const source of this.sources) {
+      this.watchStreamTracks(source.stream, "Desktop capture");
+    }
   }
 
   private watchStreamTracks(stream: MediaStream, label: string): void {
@@ -264,20 +272,29 @@ export class RecordingSession {
       return;
     }
 
-    const sourceScaleX = this.sourceVideo.videoWidth / window.innerWidth;
-    const sourceScaleY = this.sourceVideo.videoHeight / window.innerHeight;
+    const outputScaleX = this.outputCanvas.width / this.crop.width;
+    const outputScaleY = this.outputCanvas.height / this.crop.height;
     this.outputContext.clearRect(0, 0, this.outputCanvas.width, this.outputCanvas.height);
-    this.outputContext.drawImage(
-      this.sourceVideo,
-      this.crop.x * sourceScaleX,
-      this.crop.y * sourceScaleY,
-      this.crop.width * sourceScaleX,
-      this.crop.height * sourceScaleY,
-      0,
-      0,
-      this.outputCanvas.width,
-      this.outputCanvas.height
-    );
+    for (const source of this.sources) {
+      const intersection = intersectRects(this.crop, source.bounds);
+      if (!intersection) {
+        continue;
+      }
+
+      const sourceScaleX = source.video.videoWidth / source.bounds.width;
+      const sourceScaleY = source.video.videoHeight / source.bounds.height;
+      this.outputContext.drawImage(
+        source.video,
+        (intersection.x - source.bounds.x) * sourceScaleX,
+        (intersection.y - source.bounds.y) * sourceScaleY,
+        intersection.width * sourceScaleX,
+        intersection.height * sourceScaleY,
+        (intersection.x - this.crop.x) * outputScaleX,
+        (intersection.y - this.crop.y) * outputScaleY,
+        intersection.width * outputScaleX,
+        intersection.height * outputScaleY
+      );
+    }
     if (this.annotationCanvas) {
       this.outputContext.drawImage(this.annotationCanvas, 0, 0);
     }
@@ -436,7 +453,7 @@ export class RecordingSession {
   private stopTracks(): void {
     this.stopFrameDrawing();
 
-    stopTracks(this.sourceStream);
+    stopRecordingSources(this.sources);
     stopTracks(this.outputStream);
   }
 
@@ -520,8 +537,29 @@ export class RecordingSession {
   }
 }
 
-async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoElement> {
-  const sourceVideo = document.createElement("video");
+async function prepareRecordingSources(sources: RecordingSource[], config: RecordingSessionConfig): Promise<void> {
+  const displays = displaysInViewport(config.displays, { width: innerWidth, height: innerHeight });
+  for (const display of displays) {
+    if (!intersectRects(config.crop, display.bounds)) {
+      continue;
+    }
+
+    const stream = await getCursorlessDesktopStream(display.id, config.fps, sources.length === 0 && config.systemAudioEnabled);
+    const video = document.createElement("video");
+    sources.push({ bounds: display.bounds, stream, video });
+    await prepareSourceVideo(video, stream);
+  }
+}
+
+function stopRecordingSources(sources: RecordingSource[]): void {
+  for (const source of sources) {
+    stopTracks(source.stream);
+    source.video.pause();
+    source.video.srcObject = null;
+  }
+}
+
+async function prepareSourceVideo(sourceVideo: HTMLVideoElement, sourceStream: MediaStream): Promise<void> {
   sourceVideo.muted = true;
   sourceVideo.playsInline = true;
   sourceVideo.srcObject = sourceStream;
@@ -530,15 +568,14 @@ async function createSourceVideo(sourceStream: MediaStream): Promise<HTMLVideoEl
   if (sourceVideo.videoWidth < 1 || sourceVideo.videoHeight < 1) {
     throw new Error("Desktop capture did not provide usable video dimensions.");
   }
-  return sourceVideo;
 }
 
 async function createVideoOutput(
-  sourceStream: MediaStream,
+  sources: RecordingSource[],
   config: RecordingSessionConfig,
   outputSize: { height: number; width: number }
 ): Promise<VideoOutput> {
-  const directStream = await directVideoStream(sourceStream, config, outputSize);
+  const directStream = sources.length === 1 ? await directVideoStream(sources[0], config, outputSize) : null;
   if (directStream) {
     setVideoContentHint(directStream);
     return {
@@ -636,15 +673,15 @@ function createHardwareRecording(
 }
 
 async function directVideoStream(
-  sourceStream: MediaStream,
+  source: RecordingSource,
   config: RecordingSessionConfig,
   outputSize: { height: number; width: number }
 ): Promise<MediaStream | null> {
-  if (config.annotations.length > 0 || !isFullViewportCrop(config.crop)) {
+  if (config.annotations.length > 0 || !isFullDisplayCrop(config.crop, source.bounds)) {
     return null;
   }
 
-  const track = sourceStream.getVideoTracks().at(0);
+  const track = source.stream.getVideoTracks().at(0);
   if (!track) {
     throw new Error("Desktop capture did not provide a video track.");
   }
@@ -699,11 +736,11 @@ function createAnnotationCanvas(
   return canvas;
 }
 
-function isFullViewportCrop(crop: Rect): boolean {
-  return crop.x <= 0
-    && crop.y <= 0
-    && crop.width >= window.innerWidth
-    && crop.height >= window.innerHeight;
+function isFullDisplayCrop(crop: Rect, bounds: Rect): boolean {
+  return crop.x === bounds.x
+    && crop.y === bounds.y
+    && crop.width === bounds.width
+    && crop.height === bounds.height;
 }
 
 function setVideoContentHint(stream: MediaStream): void {

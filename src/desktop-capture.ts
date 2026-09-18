@@ -1,5 +1,6 @@
 import { recordingAudioConstraints } from "./audio-quality.js";
 import type { VideoFps } from "./shared.js";
+import { getSoftshotApi } from "./softshot-api.js";
 
 interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
   cursor: "never";
@@ -12,7 +13,11 @@ interface DisplayCaptureOptions extends DisplayMediaStreamOptions {
   video: DisplayCaptureVideoConstraints;
 }
 
-export async function getCursorlessDesktopStream(fps: VideoFps, shouldCaptureSystemAudio: boolean): Promise<MediaStream> {
+export async function getCursorlessDesktopStream(
+  displayId: number,
+  fps: VideoFps,
+  shouldCaptureSystemAudio: boolean
+): Promise<MediaStream> {
   const options: DisplayCaptureOptions = {
     audio: shouldCaptureSystemAudio && recordingAudioConstraints(),
     video: {
@@ -22,7 +27,10 @@ export async function getCursorlessDesktopStream(fps: VideoFps, shouldCaptureSys
     }
   };
 
-  return await navigator.mediaDevices.getDisplayMedia(options);
+  return await navigator.locks.request("softshot-display-capture", async (): Promise<MediaStream> => {
+    await getSoftshotApi().selectCaptureDisplay(displayId);
+    return await navigator.mediaDevices.getDisplayMedia(options);
+  });
 }
 
 export function stopTracks(stream: MediaStream | null): void {

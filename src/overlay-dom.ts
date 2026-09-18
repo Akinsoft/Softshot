@@ -1,5 +1,3 @@
-const imageLoadTimeoutMs = 10_000;
-
 type ElementConstructor<TElement extends HTMLElement> = new() => TElement;
 
 export async function canvasToBlob(canvas: HTMLCanvasElement, mimeType: string, quality?: number): Promise<Blob> {
@@ -33,45 +31,4 @@ export function getCanvasContext(canvas: HTMLCanvasElement, errorMessage: string
   }
 
   return value;
-}
-
-export async function loadImage(image: HTMLImageElement, source: string, timeoutMessage: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-
-    function cleanup(): void {
-      image.removeEventListener("load", onLoad);
-      image.removeEventListener("error", onError);
-
-      if (timeoutHandle !== null) {
-        clearTimeout(timeoutHandle);
-      }
-    }
-
-    function complete(): void {
-      cleanup();
-      resolve();
-    }
-
-    function onLoad(): void {
-      complete();
-    }
-
-    function onError(): void {
-      cleanup();
-      reject(new Error("Could not load the frozen screen image."));
-    }
-
-    image.addEventListener("load", onLoad);
-    image.addEventListener("error", onError);
-    timeoutHandle = setTimeout(() => {
-      cleanup();
-      reject(new Error(timeoutMessage));
-    }, imageLoadTimeoutMs);
-    image.src = source;
-
-    if (image.complete && image.naturalWidth > 0) {
-      complete();
-    }
-  });
 }

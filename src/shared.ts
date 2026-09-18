@@ -31,8 +31,18 @@ export interface Rect {
   height: number;
 }
 
-export interface OverlayBootstrap {
+export interface CaptureDisplay {
+  id: number;
+  bounds: Rect;
+}
+
+export interface CapturedDisplay extends CaptureDisplay {
   imageBytes: Uint8Array;
+}
+
+export interface OverlayBootstrap {
+  displays: CapturedDisplay[];
+  toolbarDisplayId: number;
 }
 
 export interface EditorBootstrap {
@@ -128,6 +138,7 @@ export interface SoftshotApi {
   copyPreparedEditorVideo(filePath: string): Promise<void>;
   closeEditor(): Promise<void>;
   readyToShow(): Promise<void>;
+  selectCaptureDisplay(displayId: number): Promise<void>;
   setLiveCapture(isLive: boolean): Promise<void>;
   setLiveCaptureMousePassthrough(isPassthrough: boolean): Promise<void>;
   onStopRecordingRequest(handler: StopRecordingRequestHandler): () => void;

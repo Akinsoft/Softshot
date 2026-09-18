@@ -26,10 +26,14 @@ import {
 
 import { loadAppSettings, saveAppSettings, validateCaptureShortcut } from "./app-settings";
 import { startUpdateChecks } from "./app-updater";
+import { errorMessage } from "./async-errors";
+import { desktopBounds } from "./capture-layout";
 import { remuxVideoEnd } from "./editor-remux";
 import type {
   AppSettings,
   AudioSourceKind,
+  CapturedDisplay,
+  CaptureDisplay,
   CapturePipeline,
   EditorAudioTrack,
   EditorBootstrap,
@@ -249,6 +253,8 @@ class SoftshotApp {
 
   private readonly displayMediaDisplayIdsByWebContents = new Map<number, number>();
 
+  private readonly captureDisplaysByWebContents = new Map<number, CaptureDisplay[]>();
+
   private isCaptureShortcutUnavailable = false;
 
   private isQuitting = false;
@@ -258,10 +264,6 @@ class SoftshotApp {
   private readonly overlayDataByWebContents = new Map<number, OverlayBootstrap>();
 
   private readonly overlayBootstrapConsumedWebContents = new Set<number>();
-
-  private readonly overlayLoadPromisesByWebContents = new Map<number, Promise<void>>();
-
-  private readonly overlayReadyWebContentsIds = new Set<number>();
 
   private overlayOpenPromise: Promise<boolean> | null = null;
 
@@ -518,19 +520,17 @@ class SoftshotApp {
     }
   }
 
-  private createOverlayWindow(display: Display): BrowserWindow {
-    return new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
+  private createOverlayWindow(): BrowserWindow {
+    const overlay = new BrowserWindow({
       frame: false,
+      thickFrame: false,
+      roundedCorners: false,
       resizable: false,
       movable: false,
       minimizable: false,
       maximizable: false,
-      fullscreen: true,
-      fullscreenable: true,
+      fullscreen: false,
+      fullscreenable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
       show: false,
@@ -544,10 +544,27 @@ class SoftshotApp {
         nodeIntegration: false
       }
     });
+    this.positionOverlayWindow(overlay, this.availableCaptureDisplays());
+    overlay.setAlwaysOnTop(true, "screen-saver");
+    overlay.setContentProtection(true);
+    return overlay;
   }
 
-  private createEditorWindow(): BrowserWindow {
+  private availableCaptureDisplays(): CaptureDisplay[] {
+    return screen.getAllDisplays().map((display) => ({
+      id: display.id,
+      bounds: screen.dipToScreenRect(null, display.bounds)
+    }));
+  }
+
+  private positionOverlayWindow(overlay: BrowserWindow, displays: CaptureDisplay[]): void {
+    overlay.setBounds(screen.screenToDipRect(null, desktopBounds(displays)));
+  }
+
+  private createEditorWindow(display: Display): BrowserWindow {
     return new BrowserWindow({
+      x: display.workArea.x,
+      y: display.workArea.y,
       width: editorWindowWidthPx,
       height: editorWindowHeightPx,
       minWidth: editorWindowMinWidthPx,
@@ -668,14 +685,11 @@ class SoftshotApp {
     process.stdout.write(`[softshot] ${message}\n`);
   }
 
-  private async getDesktopSourceForDisplay(
-    displayId: number,
-    thumbnailSize?: Electron.Size
-  ): Promise<Electron.DesktopCapturerSource> {
+  private async getDesktopSourceForDisplay(displayId: number): Promise<Electron.DesktopCapturerSource> {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
       fetchWindowIcons: false,
-      thumbnailSize: thumbnailSize ?? { height: 0, width: 0 }
+      thumbnailSize: { height: 0, width: 0 }
     });
 
     const source = sources.find((candidate) => candidate.display_id === String(displayId));
@@ -687,16 +701,45 @@ class SoftshotApp {
     throw new Error(`Could not match display ${String(displayId)} to a screen source. Available display ids: ${availableIds}.`);
   }
 
-  private async captureFrozenScreenBytes(display: Display): Promise<Uint8Array> {
-    const source = await this.getDesktopSourceForDisplay(display.id, {
-      height: Math.round(display.bounds.height * display.scaleFactor),
-      width: Math.round(display.bounds.width * display.scaleFactor)
-    });
-    if (source.thumbnail.isEmpty()) {
-      throw new Error("Desktop capture did not provide a frozen screen image.");
+  private async captureFrozenDisplays(displays: CaptureDisplay[]): Promise<CapturedDisplay[]> {
+    const groups = Object.groupBy(displays, (display) => `${String(display.bounds.width)}x${String(display.bounds.height)}`);
+    const captures = await Promise.all(Object.values(groups).map(async (group): Promise<CapturedDisplay[]> => {
+      if (!group?.length) {
+        throw new Error("No monitors are available to capture.");
+      }
+
+      const { width, height } = group[0].bounds;
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        fetchWindowIcons: false,
+        thumbnailSize: { width, height }
+      });
+      const sourcesByDisplayId = new Map(sources.map((source) => [source.display_id, source]));
+      return group.map((display) => {
+        const source = sourcesByDisplayId.get(String(display.id));
+        if (!source || source.thumbnail.isEmpty()) {
+          throw new Error(`Could not capture monitor ${String(display.id)}.`);
+        }
+
+        const size = source.thumbnail.getSize();
+        if (size.width !== width || size.height !== height) {
+          throw new Error("The monitor resolution changed. Please capture again.");
+        }
+
+        return { ...display, imageBytes: source.thumbnail.toBitmap() };
+      });
+    }));
+    return captures.flat();
+  }
+
+  private selectCaptureDisplay(event: Electron.IpcMainInvokeEvent, displayId: unknown): void {
+    this.getSenderOverlay(event);
+    if (typeof displayId !== "number"
+      || !this.captureDisplaysByWebContents.get(event.sender.id)?.some((display) => display.id === displayId)) {
+      throw new TypeError("The selected monitor is not part of this capture.");
     }
 
-    return source.thumbnail.toPNG();
+    this.displayMediaDisplayIdsByWebContents.set(event.sender.id, displayId);
   }
 
   private getDisplayMediaDisplayId(request: Electron.DisplayMediaRequestHandlerHandlerRequest): number {
@@ -808,9 +851,7 @@ class SoftshotApp {
   }
 
   private loadOverlayWindow(overlay: BrowserWindow): void {
-    const overlayWebContentsId = overlay.webContents.id;
     const loadPromise = this.loadOverlayWindowFile(overlay);
-    this.overlayLoadPromisesByWebContents.set(overlayWebContentsId, loadPromise);
     void loadPromise.catch(async (error: unknown): Promise<void> => {
       this.debugLog(`prepared overlay load failed: ${errorMessage(error)}`);
       this.isOverlayPreparationUnavailable = true;
@@ -835,8 +876,7 @@ class SoftshotApp {
       return;
     }
 
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    const overlay = this.createOverlayWindow(display);
+    const overlay = this.createOverlayWindow();
     this.preparedOverlay = overlay;
     this.trackOverlayWindow(overlay);
     this.wireOverlayDiagnostics(overlay);
@@ -1060,7 +1100,7 @@ class SoftshotApp {
     });
   }
 
-  private preparedOverlayForCapture(display: Display): BrowserWindow {
+  private preparedOverlayForCapture(displays: CaptureDisplay[]): BrowserWindow {
     if (!this.preparedOverlay || this.preparedOverlay.isDestroyed()) {
       this.isOverlayPreparationUnavailable = false;
       this.prepareNextOverlay();
@@ -1071,8 +1111,7 @@ class SoftshotApp {
       throw new Error("Could not prepare the capture overlay.");
     }
 
-    overlay.setFullScreen(false);
-    overlay.setBounds(display.bounds);
+    this.positionOverlayWindow(overlay, displays);
     this.preparedOverlay = null;
     return overlay;
   }
@@ -1094,8 +1133,7 @@ class SoftshotApp {
       this.overlayDataByWebContents.delete(overlayWebContentsId);
       this.overlayBootstrapConsumedWebContents.delete(overlayWebContentsId);
       this.displayMediaDisplayIdsByWebContents.delete(overlayWebContentsId);
-      this.overlayLoadPromisesByWebContents.delete(overlayWebContentsId);
-      this.overlayReadyWebContentsIds.delete(overlayWebContentsId);
+      this.captureDisplaysByWebContents.delete(overlayWebContentsId);
       this.rejectOverlayBootstrap(overlayWebContentsId, new Error("The overlay closed before capture started."));
       void this.cleanupAbandonedRecordingFiles(overlayWebContentsId, true).catch((error: unknown): void => {
         this.reportBackgroundError("Could not clean up an abandoned recording.", error);
@@ -1211,17 +1249,13 @@ class SoftshotApp {
     }
 
     this.debugLog("creating overlay");
-    const cursor = screen.getCursorScreenPoint();
-    const display = screen.getDisplayNearestPoint(cursor);
-    const overlay = this.preparedOverlayForCapture(display);
-    overlay.setFullScreen(true);
-    overlay.setAlwaysOnTop(true, "screen-saver");
-    overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    overlay.setContentProtection(true);
-
+    const startedAt = performance.now();
+    const displays = this.availableCaptureDisplays();
+    const toolbarDisplayId = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id;
+    const overlay = this.preparedOverlayForCapture(displays);
     this.activeOverlay = overlay;
     const overlayWebContentsId = overlay.webContents.id;
-    this.displayMediaDisplayIdsByWebContents.set(overlayWebContentsId, display.id);
+    this.captureDisplaysByWebContents.set(overlayWebContentsId, displays);
     const readinessTimeout = setTimeout((): void => {
       this.handleOverlayReadinessTimeout(overlay);
     }, overlayReadyTimeoutMs);
@@ -1233,17 +1267,15 @@ class SoftshotApp {
       clearTimeout(readinessTimeout);
     });
 
-    if (this.overlayReadyWebContentsIds.has(overlayWebContentsId)) {
-      this.showOverlayWindow(overlay);
-    }
-
     try {
-      const imageBytes = await this.captureFrozenScreenBytes(display);
+      const capturedDisplays = await this.captureFrozenDisplays(displays);
       if (overlay.isDestroyed() || this.activeOverlay !== overlay) {
         return;
       }
 
-      this.provideOverlayBootstrap(overlayWebContentsId, { imageBytes });
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      this.debugLog(`desktop pixels ready in ${String(elapsedMs)} ms`);
+      this.provideOverlayBootstrap(overlayWebContentsId, { displays: capturedDisplays, toolbarDisplayId });
     } catch (error) {
       this.rejectOverlayBootstrap(
         overlayWebContentsId,
@@ -1327,8 +1359,6 @@ class SoftshotApp {
       overlay.show();
     }
 
-    overlay.setFullScreen(true);
-    overlay.setAlwaysOnTop(true, "screen-saver");
     overlay.focus();
   }
 
@@ -1831,7 +1861,8 @@ class SoftshotApp {
 
       const editorAudioTracks = await this.editorAudioTracksFromRecordingFiles(audioTrackFiles);
       const overlay = BrowserWindow.fromWebContents(event.sender);
-      const editor = this.createEditorWindow();
+      const editorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+      const editor = this.createEditorWindow(editorDisplay);
       const editorWebContentsId = editor.webContents.id;
       this.activeEditorWindows.add(editor);
       this.editorDataByWebContents.set(editorWebContentsId, {
@@ -2032,8 +2063,11 @@ class SoftshotApp {
       const overlay = this.getOverlayWindowSender(event);
 
       this.debugLog("overlay ready to show");
-      this.overlayReadyWebContentsIds.add(event.sender.id);
       this.showOverlayWindow(overlay);
+    });
+
+    ipcMain.handle("overlay:select-capture-display", (event, displayId: unknown): void => {
+      this.selectCaptureDisplay(event, displayId);
     });
 
     ipcMain.handle("overlay:set-live-capture", (event, isLive: boolean): void => {
@@ -2953,10 +2987,6 @@ function powershellClipboardErrorMessage(error: Error, standardOutput: string, s
   }
 
   return `Could not put the recording file on the clipboard.\n${output}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 const softshotApp = new SoftshotApp();

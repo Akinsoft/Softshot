@@ -9,13 +9,16 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <img id="screen-image" alt="" draggable="false" />
+    <canvas id="screen-canvas" aria-hidden="true"></canvas>
     <canvas id="annotation-canvas"></canvas>
     <div id="recording-hud" class="recording-hud" hidden>
       <span class="recording-spinner" aria-hidden="true"></span>
       <span id="recording-timer" class="recording-timer">00:00</span>
     </div>
     <div id="countdown-badge" class="countdown-badge" hidden>3</div>
+    <div class="editor-loading-indicator" role="status" aria-label="Opening video editor">
+      <span class="editor-loading-spinner" aria-hidden="true"></span>
+    </div>
 
     <div id="capture-toolbar" class="toolbar" role="toolbar" aria-label="Softshot capture tools">
       <button id="screenshot-button" class="tool-button dropdown-button active" type="button" data-tooltip="Screenshot" aria-label="Screenshot">

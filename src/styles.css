@@ -32,7 +32,12 @@ html.live-capture body {
   background: transparent;
 }
 
-#screen-image,
+html.editor-loading,
+html.editor-loading body {
+  background: transparent;
+}
+
+#screen-canvas,
 #annotation-canvas {
   position: fixed;
   inset: 0;
@@ -40,12 +45,11 @@ html.live-capture body {
   height: 100vh;
 }
 
-#screen-image {
-  object-fit: fill;
+#screen-canvas {
   pointer-events: none;
 }
 
-html.live-capture #screen-image {
+html.live-capture #screen-canvas {
   display: none;
 }
 
@@ -55,6 +59,38 @@ html.live-capture #screen-image {
 }
 
 html.live-capture #annotation-canvas {
+  pointer-events: none;
+}
+
+.editor-loading-indicator {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: none;
+  place-items: center;
+  pointer-events: none;
+}
+
+.editor-loading-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #fff;
+  border-radius: 999px;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.72));
+  animation: recording-spin 780ms linear infinite;
+}
+
+html.editor-loading .editor-loading-indicator {
+  display: grid;
+}
+
+html.editor-loading #screen-canvas,
+html.editor-loading #annotation-canvas,
+html.editor-loading .recording-hud,
+html.editor-loading .countdown-badge,
+html.editor-loading .toolbar {
+  visibility: hidden;
   pointer-events: none;
 }
 

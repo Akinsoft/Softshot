@@ -17,6 +17,7 @@ export class RecordingHudController {
   private isRecording = false;
   private recordingStartedAt: number | null = null;
   private selection: Rect | null = null;
+  private viewport: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
   private timerHandle: ReturnType<typeof setInterval> | null = null;
 
   private clearTimer(): void {
@@ -49,18 +50,31 @@ export class RecordingHudController {
     const hudLeft = Math.min(
       Math.max(
         this.selection.x + this.selection.width - hudSelectionPaddingPx,
-        this.hud.offsetWidth + hudViewportInsetPx
+        this.viewport.x + this.hud.offsetWidth + hudViewportInsetPx
       ),
-      window.innerWidth - hudViewportInsetPx
+      this.viewport.x + this.viewport.width - hudViewportInsetPx
     );
-    const hudTop = Math.max(this.selection.y + hudSelectionPaddingPx, hudViewportInsetPx);
+    const hudTop = Math.min(
+      Math.max(this.selection.y + hudSelectionPaddingPx, this.viewport.y + hudViewportInsetPx),
+      this.viewport.y + this.viewport.height - this.hud.offsetHeight - hudViewportInsetPx
+    );
     this.hud.style.left = `${String(hudLeft)}px`;
     this.hud.style.top = `${String(hudTop)}px`;
 
     if (this.countdownValue !== null) {
       this.countdown.textContent = String(this.countdownValue);
-      this.countdown.style.left = `${String(this.selection.x + this.selection.width / timePartLength)}px`;
-      this.countdown.style.top = `${String(this.selection.y + this.selection.height / timePartLength)}px`;
+      const horizontalInset = this.countdown.offsetWidth / timePartLength + hudViewportInsetPx;
+      const verticalInset = this.countdown.offsetHeight / timePartLength + hudViewportInsetPx;
+      const left = Math.min(
+        Math.max(this.selection.x + this.selection.width / timePartLength, this.viewport.x + horizontalInset),
+        this.viewport.x + this.viewport.width - horizontalInset
+      );
+      const top = Math.min(
+        Math.max(this.selection.y + this.selection.height / timePartLength, this.viewport.y + verticalInset),
+        this.viewport.y + this.viewport.height - verticalInset
+      );
+      this.countdown.style.left = `${String(left)}px`;
+      this.countdown.style.top = `${String(top)}px`;
     }
   }
 
@@ -77,6 +91,11 @@ export class RecordingHudController {
   setCountdown(value: number): void {
     this.isCountingDown = true;
     this.countdownValue = value;
+    this.update();
+  }
+
+  setViewport(viewport: Rect): void {
+    this.viewport = viewport;
     this.update();
   }
 
