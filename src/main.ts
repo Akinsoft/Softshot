@@ -26,7 +26,7 @@ import {
 
 import { loadAppSettings, saveAppSettings, validateCaptureShortcut } from "./app-settings";
 import { startUpdateChecks } from "./app-updater";
-import { errorMessage } from "./async-errors";
+import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
 import { remuxVideoEnd } from "./editor-remux";
 import type {
@@ -500,7 +500,10 @@ class SoftshotApp {
   }
 
   private async cleanupAbandonedRecordingFiles(ownerWebContentsId: number, shouldPreserveData: boolean): Promise<void> {
-    const files = this.takeRecordingTempFilesForOwner(ownerWebContentsId);
+    await this.cleanupRecordingFiles(this.takeRecordingTempFilesForOwner(ownerWebContentsId), shouldPreserveData);
+  }
+
+  private async cleanupRecordingFiles(files: RecordingTemporaryFile[], shouldPreserveData: boolean): Promise<void> {
     const cleanupResults = await Promise.allSettled(files.map(async (file): Promise<void> => {
       if (shouldPreserveData && file.byteLength > 0) {
         if (!this.isQuitting) {
@@ -512,12 +515,7 @@ class SoftshotApp {
 
       await rm(file.filePath, { force: true });
     }));
-    const errors = cleanupResults.flatMap((result): unknown[] =>
-      result.status === "rejected" ? [result.reason as unknown] : []
-    );
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Could not clean up all abandoned recording files.");
-    }
+    throwCollectedErrors(rejectedReasons(cleanupResults), "Could not clean up all abandoned recording files.");
   }
 
   private createOverlayWindow(): BrowserWindow {
@@ -1731,15 +1729,6 @@ class SoftshotApp {
     return isRegistered;
   }
 
-  private async deleteRecordingFiles(recordingFile: RecordingTemporaryFile, audioTrackFiles: RecordingAudioTrackFile[]): Promise<void> {
-    await Promise.all([
-      rm(recordingFile.filePath, { force: true }),
-      ...audioTrackFiles.map(async (audioTrackFile) => {
-        await rm(audioTrackFile.file.filePath, { force: true });
-      })
-    ]);
-  }
-
   private async editorAudioTracksFromRecordingFiles(audioTrackFiles: RecordingAudioTrackFile[]): Promise<EditorAudioTrack[]> {
     const editorAudioTracks: EditorAudioTrack[] = [];
     for (const audioTrackFile of audioTrackFiles) {
@@ -1933,7 +1922,11 @@ class SoftshotApp {
       }
     } catch (error) {
       if (!isRecordingFileOwnedByEditor) {
-        await this.deleteRecordingFiles(recordingFile, audioTrackFiles);
+        const cleanupResults = await Promise.allSettled([this.cleanupRecordingFiles(recordingFiles, true)]);
+        const cleanupErrors = rejectedReasons(cleanupResults);
+        if (cleanupErrors.length > 0) {
+          throw combinedError("Could not open the editor or preserve its recording files.", [error, ...cleanupErrors]);
+        }
       }
 
       throw error;
