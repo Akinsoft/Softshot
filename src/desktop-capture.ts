@@ -1,3 +1,4 @@
+import { recordingAudioConstraints } from "./audio-quality.js";
 import type { VideoFps } from "./shared.js";
 
 interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
@@ -7,13 +8,13 @@ interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
 }
 
 interface DisplayCaptureOptions extends DisplayMediaStreamOptions {
-  audio: boolean;
+  audio: false | MediaTrackConstraints;
   video: DisplayCaptureVideoConstraints;
 }
 
 export async function getCursorlessDesktopStream(fps: VideoFps, shouldCaptureSystemAudio: boolean): Promise<MediaStream> {
   const options: DisplayCaptureOptions = {
-    audio: shouldCaptureSystemAudio,
+    audio: shouldCaptureSystemAudio && recordingAudioConstraints(),
     video: {
       cursor: "never",
       displaySurface: "monitor",
