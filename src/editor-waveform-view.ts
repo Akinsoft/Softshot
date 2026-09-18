@@ -1,6 +1,6 @@
 import {
   timelineDuration,
-  timelineLocationAt,
+  timelineLocationsAt,
   type TimelineSegment
 } from "./editor-timeline.js";
 
@@ -28,9 +28,11 @@ export function timelineWaveformPeaks(
 
   const editedDurationSeconds = timelineDuration(segments);
   const outputIndexes = Array.from({ length: outputPeakCount }).keys();
-  return Array.from(outputIndexes, (outputIndex) => {
-    const timelineTime = ((outputIndex + half) / outputPeakCount) * editedDurationSeconds;
-    const { sourceTime } = timelineLocationAt(segments, timelineTime);
+  const timelineTimes = Array.from(
+    outputIndexes,
+    (outputIndex) => ((outputIndex + half) / outputPeakCount) * editedDurationSeconds
+  );
+  return timelineLocationsAt(segments, timelineTimes).map(({ sourceTime }) => {
     const sourceIndex = Math.min(
       Math.floor((sourceTime / sourceDurationSeconds) * sourcePeaks.length),
       sourcePeaks.length - 1

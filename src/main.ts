@@ -1282,6 +1282,10 @@ class SoftshotApp {
       return;
     }
 
+    if (!editor.isMaximized()) {
+      editor.maximize();
+    }
+
     if (!editor.isVisible()) {
       editor.show();
     }

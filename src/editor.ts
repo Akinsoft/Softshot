@@ -3,8 +3,16 @@ import { audioMixGain, recordingAudioSampleRate } from "./audio-quality.js";
 import { audioWaveformPeaks } from "./audio-waveform.js";
 import { type ExportAudioTrack, exportEditedVideo, type ExportedVideo, type TrimRange } from "./editor-export.js";
 import {
+  captureVideoTimelineThumbnails,
+  releaseTimelineThumbnailUrls,
+  type TimelineThumbnail,
+  timelineThumbnailsForSegment
+} from "./editor-thumbnails.js";
+import {
   deleteTimelineSegment,
-  sourceRangesForTimelineRange,
+  moveTimelineSegment,
+  resizeTimelineSegment,
+  sourceRangesForTimeline,
   splitTimelineAt,
   timelineDuration,
   type TimelineLocation,
@@ -12,6 +20,7 @@ import {
   type TimelineSegment,
   timelineSegmentBounds,
   timelineSegmentDuration,
+  type TimelineSegmentEdge,
   timelineTimeAfterDeletion
 } from "./editor-timeline.js";
 import { drawTimelineWaveform } from "./editor-waveform-view.js";
@@ -19,17 +28,21 @@ import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, PreparedVideoFile, VideoFps } from "./shared.js";
 import { videoFpsOptions } from "./shared.js";
-import { getSoftshotApi } from "./softshot-api.js";
+import { getSoftshotApi, reportAsyncError, reportError } from "./softshot-api.js";
 import { setTooltipLabel, TooltipController } from "./ui-tooltip.js";
 
 const defaultMimeType = "video/webm";
 const audioLevelCssProperty = "--audio-level";
 const audioWaveformPeakCount = 640;
 const minimumTrimDurationSeconds = 0.05;
-const rangeStepSeconds = 0.01;
 const halfDivisor = 2;
-const fullTrimToleranceSeconds = rangeStepSeconds / halfDivisor;
-const playbackBoundaryToleranceSeconds = fullTrimToleranceSeconds;
+const fullSourceRangeToleranceSeconds = 0.005;
+const playbackBoundaryToleranceSeconds = fullSourceRangeToleranceSeconds;
+const timelineMoveThresholdPx = 6;
+const timelineThumbnailImageWidthPx = 160;
+const timelineThumbnailMaximumCount = 14;
+const timelineThumbnailMinimumIntervalSeconds = 1.5;
+const timelineThumbnailTargetWidthPx = 120;
 const secondsPerMinute = 60;
 const secondsTextLength = 5;
 const spaceKey = " ";
@@ -39,7 +52,7 @@ const keyboardDeleteKey = "Delete";
 const initialSegmentId = 1;
 const timePartLength = 2;
 const timePrecisionDigits = 2;
-const trimKeyPrecisionDigits = 3;
+const timelineKeyPrecisionDigits = 3;
 const timelinePercent = 100;
 const trimToleranceSeconds = 0.04;
 const transientStatusDurationMs = 1400;
@@ -47,6 +60,8 @@ const timelineReflowDurationMs = 220;
 const timelineReflowEasing = "cubic-bezier(0.22, 1, 0.36, 1)";
 const zeroSeconds = 0;
 const noPointerId = -1;
+const ariaHiddenAttributeName = "aria-hidden";
+const reducedMotionMediaQuery = "(prefers-reduced-motion: reduce)";
 
 interface PreparedVideo {
   filePath: string;
@@ -61,6 +76,28 @@ interface AudioMeter {
   source: MediaElementAudioSourceNode;
 }
 
+interface TimelineResize {
+  edge: TimelineSegmentEdge;
+  hasChanged: boolean;
+  initialClientX: number;
+  initialSegments: TimelineSegment[];
+  initialTrackWidth: number;
+  playbackSegmentId: number;
+  playbackSourceTime: number;
+  pointerId: number;
+  segmentId: number;
+}
+
+interface TimelineMove {
+  hasMoved: boolean;
+  initialClientX: number;
+  isDragging: boolean;
+  playbackSegmentId: number;
+  playbackSourceTime: number;
+  pointerId: number;
+  segmentId: number;
+}
+
 class VideoEditorApp {
   private readonly closeButton = getRequiredElement("editor-close-button", HTMLButtonElement);
   private readonly copyButton = getRequiredElement("editor-copy-button", HTMLButtonElement);
@@ -70,10 +107,8 @@ class VideoEditorApp {
   private readonly audioWaveformResizeObserver = new ResizeObserver((): void => {
     this.renderAudioWaveforms();
   });
-  private readonly endRange = getRequiredElement("trim-end", HTMLInputElement);
   private readonly playButton = getRequiredElement("play-button", HTMLButtonElement);
   private readonly saveButton = getRequiredElement("editor-save-button", HTMLButtonElement);
-  private readonly startRange = getRequiredElement("trim-start", HTMLInputElement);
   private readonly statusText = getRequiredElement("editor-status", HTMLSpanElement);
   private readonly timeline = getRequiredElement("timeline", HTMLDivElement);
   private readonly timelineTrack = getRequiredElement("timeline-track", HTMLDivElement);
@@ -81,7 +116,9 @@ class VideoEditorApp {
   private readonly totalTimeText = getRequiredElement("total-time", HTMLSpanElement);
   private readonly tooltips = new TooltipController(document.body);
   private readonly video = getRequiredElement("editor-video", HTMLVideoElement);
+  private activeTimelineMove: TimelineMove | null = null;
   private activeTimelinePointerId = noPointerId;
+  private activeTimelineResize: TimelineResize | null = null;
   private audioMeterFrame: number | null = null;
   private audioPreviewContext: AudioContext | null = null;
   private audioReady: Promise<void> = Promise.resolve();
@@ -101,12 +138,11 @@ class VideoEditorApp {
   private sourceFilePath = "";
   private sourceUrl = "";
   private statusHandle: ReturnType<typeof setTimeout> | null = null;
-  private trimEndSeconds = zeroSeconds;
-  private trimStartSeconds = zeroSeconds;
   private activeSegmentId: number | null = null;
   private nextSegmentId = initialSegmentId + 1;
   private readonly timelineSegmentElements = new Map<number, HTMLButtonElement>();
   private timelineSegments: TimelineSegment[] = [];
+  private timelineThumbnails: TimelineThumbnail[] = [];
   private readonly mutedAudioKinds = new Set<AudioSourceKind>();
 
   private bindEvents(): void {
@@ -138,23 +174,20 @@ class VideoEditorApp {
 
       this.toggleAudioTrackMute(audioSourceKindFromString(button.dataset.audioKind));
     });
-    this.startRange.addEventListener("input", (): void => {
-      this.updateTrimStart(Number(this.startRange.value));
-    });
-    this.endRange.addEventListener("input", (): void => {
-      this.updateTrimEnd(Number(this.endRange.value));
-    });
     this.timelineTrack.addEventListener("pointerdown", (event): void => {
-      this.beginTimelineScrub(event);
+      this.beginTimelineInteraction(event);
     });
     this.timelineTrack.addEventListener("pointermove", (event): void => {
-      this.updateTimelineScrub(event);
+      this.updateTimelineInteraction(event);
     });
     this.timelineTrack.addEventListener("pointerup", (event): void => {
-      this.endTimelineScrub(event);
+      this.endTimelineInteraction(event);
     });
     this.timelineTrack.addEventListener("pointercancel", (event): void => {
-      this.endTimelineScrub(event);
+      this.endTimelineInteraction(event);
+    });
+    this.timelineTrack.addEventListener("lostpointercapture", (event): void => {
+      this.endTimelineInteraction(event);
     });
     this.video.addEventListener("timeupdate", (): void => {
       this.syncPlaybackTime();
@@ -217,34 +250,33 @@ class VideoEditorApp {
     }
   }
 
-  private async reportAsyncError(task: Promise<void>, message: string): Promise<void> {
-    try {
-      await task;
-    } catch (error) {
-      await this.reportError(message, error);
-    }
-  }
-
   private runAsync(task: Promise<void>, message: string): void {
-    void this.reportAsyncError(task, message);
+    void reportAsyncError(task, message);
   }
 
   private run(task: () => void, message: string): void {
     try {
       task();
     } catch (error) {
-      const actualError = error instanceof Error ? error : new Error(String(error));
-      this.runAsync(Promise.reject(actualError), message);
+      void reportError(message, error);
     }
   }
 
+  private get isInteractionLocked(): boolean {
+    return this.isBusy || this.isClosing
+      || this.activeTimelineMove !== null
+      || this.activeTimelineResize !== null
+      || this.activeTimelinePointerId !== noPointerId;
+  }
+
   private async closeEditor(): Promise<void> {
-    if (this.isBusy || this.isClosing) {
+    if (this.isInteractionLocked) {
       return;
     }
 
     this.isClosing = true;
     this.audioWaveformResizeObserver.disconnect();
+    this.releaseTimelineThumbnails();
     try {
       try {
         await this.disposeAudioPreview();
@@ -257,11 +289,79 @@ class VideoEditorApp {
     }
   }
 
-  private beginTimelineScrub(event: PointerEvent): void {
-    if (this.isBusy) {
+  private beginTimelineInteraction(event: PointerEvent): void {
+    if (event.button !== 0 || this.isInteractionLocked) {
       return;
     }
 
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    const resizeHandle = target?.closest<HTMLElement>("[data-timeline-edge]");
+    if (resizeHandle) {
+      this.beginTimelineResize(event, resizeHandle);
+      return;
+    }
+
+    const segmentElement = target?.closest<HTMLButtonElement>(".timeline-segment");
+    if (segmentElement && this.timelineSegments.length > 1) {
+      this.beginTimelineMove(event, segmentElement);
+      return;
+    }
+
+    this.beginTimelineScrub(event);
+  }
+
+  private beginTimelineMove(event: PointerEvent, segmentElement: HTMLButtonElement): void {
+    const segmentId = timelineSegmentIdFromString(segmentElement.dataset.segmentId);
+    timelineSegmentById(this.timelineSegments, segmentId);
+    const timelineTime = this.timelineTimeAtClientX(event.clientX);
+    const playbackLocation = timelineLocationAt(this.timelineSegments, timelineTime);
+    this.video.pause();
+    this.selectedSegmentId = segmentId;
+    this.seekTo(timelineTime);
+    this.activeTimelineMove = {
+      hasMoved: false,
+      initialClientX: event.clientX,
+      isDragging: false,
+      playbackSegmentId: playbackLocation.segment.id,
+      playbackSourceTime: playbackLocation.sourceTime,
+      pointerId: event.pointerId,
+      segmentId
+    };
+    this.timelineTrack.setPointerCapture(event.pointerId);
+    this.renderTimelineSegments();
+    event.preventDefault();
+  }
+
+  private beginTimelineResize(event: PointerEvent, resizeHandle: HTMLElement): void {
+    const edge = timelineSegmentEdgeFromString(resizeHandle.dataset.timelineEdge);
+    const segmentId = timelineSegmentIdFromString(resizeHandle.dataset.segmentId);
+    timelineSegmentById(this.timelineSegments, segmentId);
+    const trackBounds = this.timelineTrack.getBoundingClientRect();
+    if (trackBounds.width <= 0) {
+      throw new Error("The editor timeline has no usable width.");
+    }
+
+    const playbackLocation = timelineLocationAt(this.timelineSegments, this.playheadSeconds);
+    this.video.pause();
+    this.selectedSegmentId = segmentId;
+    this.activeTimelineResize = {
+      edge,
+      hasChanged: false,
+      initialClientX: event.clientX,
+      initialSegments: this.timelineSegments.map((segment) => ({ ...segment })),
+      initialTrackWidth: trackBounds.width,
+      playbackSegmentId: playbackLocation.segment.id,
+      playbackSourceTime: playbackLocation.sourceTime,
+      pointerId: event.pointerId,
+      segmentId
+    };
+    this.timeline.classList.add("resizing-clip");
+    this.timelineTrack.setPointerCapture(event.pointerId);
+    this.renderTimelineSegments();
+    event.preventDefault();
+  }
+
+  private beginTimelineScrub(event: PointerEvent): void {
     this.activeTimelinePointerId = event.pointerId;
     this.timelineTrack.setPointerCapture(event.pointerId);
     const timelineTime = this.timelineTimeAtClientX(event.clientX);
@@ -271,7 +371,7 @@ class VideoEditorApp {
   }
 
   private clampedPlaybackTime(value: number): number {
-    return clamp(value, this.trimStartSeconds, this.trimEndSeconds);
+    return clamp(value, zeroSeconds, this.editedDurationSeconds());
   }
 
   private editedDurationSeconds(): number {
@@ -285,7 +385,7 @@ class VideoEditorApp {
     }
 
     const progress = clamp((clientX - rect.left) / rect.width, zeroSeconds, 1);
-    return progress * this.editedDurationSeconds();
+    return Math.min(progress * this.durationSeconds, this.editedDurationSeconds());
   }
 
   private selectSegmentAt(timelineTime: number): void {
@@ -293,8 +393,14 @@ class VideoEditorApp {
     this.renderTimelineSegments();
   }
 
+  private timelineTimeForSegmentSourceTime(segmentId: number, sourceTime: number): number {
+    const segment = timelineSegmentById(this.timelineSegments, segmentId);
+    const { timelineStart } = timelineSegmentBounds(this.timelineSegments, segmentId);
+    return timelineStart + clamp(sourceTime, segment.sourceStart, segment.sourceEnd) - segment.sourceStart;
+  }
+
   private cutAtPlayhead(): void {
-    if (this.isBusy) {
+    if (this.isInteractionLocked) {
       return;
     }
 
@@ -327,7 +433,7 @@ class VideoEditorApp {
   }
 
   private deleteSelectedSegment(): void {
-    if (this.isBusy || this.selectedSegmentId === null) {
+    if (this.isInteractionLocked || this.selectedSegmentId === null) {
       return;
     }
 
@@ -348,10 +454,7 @@ class VideoEditorApp {
     const removingElement = selectedElement.cloneNode(true) as HTMLButtonElement;
     this.video.pause();
     this.timelineSegments = deleteTimelineSegment(this.timelineSegments, selectedSegmentId);
-    this.trimStartSeconds = timelineTimeAfterDeletion(this.trimStartSeconds, deletedRange);
-    this.trimEndSeconds = timelineTimeAfterDeletion(this.trimEndSeconds, deletedRange);
     this.playheadSeconds = timelineTimeAfterDeletion(this.playheadSeconds, deletedRange);
-    this.normalizeTrimRange();
 
     const nextSelectedIndex = Math.min(selectedSegmentIndex, this.timelineSegments.length - 1);
     this.selectedSegmentId = this.timelineSegments[nextSelectedIndex]?.id ?? null;
@@ -363,21 +466,14 @@ class VideoEditorApp {
     this.showStatus("Segment deleted");
   }
 
-  private normalizeTrimRange(): void {
-    const editedDuration = this.editedDurationSeconds();
-    const minimumDuration = Math.min(minimumTrimDurationSeconds, editedDuration);
-    this.trimStartSeconds = clamp(this.trimStartSeconds, zeroSeconds, editedDuration - minimumDuration);
-    this.trimEndSeconds = clamp(this.trimEndSeconds, this.trimStartSeconds + minimumDuration, editedDuration);
-  }
-
   private async copyVideo(): Promise<void> {
-    if (this.isBusy) {
+    if (this.isInteractionLocked) {
       return;
     }
 
     this.setBusy(true);
     try {
-      const preparedVideo = await this.preparedVideoForCurrentTrim();
+      const preparedVideo = await this.preparedVideoForCurrentEdit();
       await getSoftshotApi().copyPreparedEditorVideo(preparedVideo.filePath);
       this.showStatus("Copied");
     } finally {
@@ -387,7 +483,9 @@ class VideoEditorApp {
 
   private async createPreparedVideo(key: string, sourceRanges: readonly TrimRange[]): Promise<PreparedVideo> {
     const singleSourceRange = sourceRanges.length === 1 ? sourceRanges[0] : null;
-    if (this.mutedAudioKinds.size === 0 && singleSourceRange && singleSourceRange.start <= fullTrimToleranceSeconds) {
+    if (this.mutedAudioKinds.size === 0
+      && singleSourceRange
+      && singleSourceRange.start <= fullSourceRangeToleranceSeconds) {
       if (this.isFullSourceRange(singleSourceRange)) {
         return {
           filePath: this.sourceFilePath,
@@ -467,6 +565,63 @@ class VideoEditorApp {
     }
   }
 
+  private endTimelineInteraction(event: PointerEvent): void {
+    if (this.activeTimelineResize?.pointerId === event.pointerId) {
+      this.endTimelineResize(event);
+      return;
+    }
+
+    if (this.activeTimelineMove?.pointerId === event.pointerId) {
+      this.endTimelineMove(event);
+      return;
+    }
+
+    this.endTimelineScrub(event);
+  }
+
+  private endTimelineMove(event: PointerEvent): void {
+    const move = this.activeTimelineMove;
+    if (move?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    this.activeTimelineMove = null;
+    this.timeline.classList.remove("moving-clip");
+    if (this.timelineTrack.hasPointerCapture(event.pointerId)) {
+      this.timelineTrack.releasePointerCapture(event.pointerId);
+    }
+
+    this.renderTimelineSegments();
+    if (move.hasMoved) {
+      this.showStatus("Clip moved");
+    }
+
+    event.preventDefault();
+  }
+
+  private endTimelineResize(event: PointerEvent): void {
+    const resize = this.activeTimelineResize;
+    if (resize?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const previousSegmentRects = this.timelineSegmentRects();
+    this.activeTimelineResize = null;
+    this.timeline.classList.remove("resizing-clip");
+    if (this.timelineTrack.hasPointerCapture(event.pointerId)) {
+      this.timelineTrack.releasePointerCapture(event.pointerId);
+    }
+
+    this.syncTimeline();
+    this.animateTimelineReflow(previousSegmentRects);
+    this.seekTo(this.playheadSeconds);
+    if (resize.hasChanged) {
+      this.showStatus("Clip trimmed");
+    }
+
+    event.preventDefault();
+  }
+
   private async exportVideoForSourceRanges(sourceRanges: readonly TrimRange[]): Promise<ExportedVideo> {
     return await exportEditedVideo(this.mimeType, this.fps, sourceRanges, this.audioTracksForExport());
   }
@@ -484,7 +639,7 @@ class VideoEditorApp {
     this.renderAudioTracks();
     const encoderLabel = bootstrap.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding";
     const pipelineLabel = bootstrap.capturePipeline === "direct" ? "Direct capture" : "Composited capture";
-    this.showStatus(`${encoderLabel} · ${pipelineLabel}`);
+    this.showStatus(`${encoderLabel}, ${pipelineLabel}`);
   }
 
   private async loadAudioWaveforms(): Promise<void> {
@@ -498,23 +653,47 @@ class VideoEditorApp {
     }
   }
 
-  private async preparedVideoForCurrentTrim(): Promise<PreparedVideo> {
-    const key = this.trimKey();
+  private async loadTimelineThumbnails(): Promise<void> {
+    const trackWidth = this.timelineTrack.getBoundingClientRect().width;
+    const widthBasedCount = Math.ceil(trackWidth / timelineThumbnailTargetWidthPx);
+    const durationBasedCount = Math.ceil(this.durationSeconds / timelineThumbnailMinimumIntervalSeconds);
+    const thumbnailCount = Math.max(
+      1,
+      Math.min(timelineThumbnailMaximumCount, widthBasedCount, durationBasedCount)
+    );
+    const thumbnails = await captureVideoTimelineThumbnails(
+      this.sourceUrl,
+      this.durationSeconds,
+      thumbnailCount,
+      timelineThumbnailImageWidthPx
+    );
+    if (this.isClosing) {
+      releaseTimelineThumbnailUrls(thumbnails);
+      return;
+    }
+
+    this.releaseTimelineThumbnails();
+    this.timelineThumbnails = thumbnails;
+    this.renderTimelineSegments();
+  }
+
+  private async preparedVideoForCurrentEdit(): Promise<PreparedVideo> {
+    const key = this.editKey();
     if (this.preparedVideo?.key === key) {
       return this.preparedVideo;
     }
 
     const preparedVideo = await this.createPreparedVideo(key, this.sourceRangesForExport());
-    if (key === this.trimKey()) {
+    if (key === this.editKey()) {
       this.preparedVideo = preparedVideo;
     }
 
     return preparedVideo;
   }
 
-  private async reportError(message: string, error: unknown): Promise<void> {
-    const detail = error instanceof Error ? `${message}\n\n${error.message}` : message;
-    await getSoftshotApi().showError(detail);
+  private releaseTimelineThumbnails(): void {
+    releaseTimelineThumbnailUrls(this.timelineThumbnails);
+    this.timelineThumbnails = [];
   }
 
   private renderAudioTracks(): void {
@@ -528,6 +707,7 @@ class VideoEditorApp {
       return;
     }
 
+    const waveformWidth = `${String(percentOf(this.editedDurationSeconds(), this.durationSeconds))}%`;
     for (const canvas of this.audioTracksElement.querySelectorAll<HTMLCanvasElement>("canvas[data-audio-kind]")) {
       const kind = audioSourceKindFromString(canvas.dataset.audioKind);
       if (this.audioTracks.every((candidate) => candidate.kind !== kind)) {
@@ -539,6 +719,7 @@ class VideoEditorApp {
         throw new Error("The audio waveform data is missing.");
       }
 
+      canvas.style.width = waveformWidth;
       drawTimelineWaveform(
         canvas,
         waveformPeaks,
@@ -592,7 +773,7 @@ class VideoEditorApp {
   }
 
   private async saveVideo(): Promise<void> {
-    if (this.isBusy) {
+    if (this.isInteractionLocked) {
       return;
     }
 
@@ -603,7 +784,7 @@ class VideoEditorApp {
         return;
       }
 
-      const preparedVideo = await this.preparedVideoForCurrentTrim();
+      const preparedVideo = await this.preparedVideoForCurrentEdit();
       await getSoftshotApi().savePreparedEditorVideo(preparedVideo.filePath, result.filePath);
       this.showStatus("Saved");
     } finally {
@@ -632,8 +813,6 @@ class VideoEditorApp {
     this.closeButton.disabled = isBusy;
     this.cutButton.disabled = isBusy;
     this.saveButton.disabled = isBusy;
-    this.startRange.disabled = isBusy;
-    this.endRange.disabled = isBusy;
     this.playButton.disabled = isBusy;
     for (const button of this.audioTracksElement.querySelectorAll<HTMLButtonElement>("[data-audio-kind]")) {
       button.disabled = isBusy;
@@ -770,7 +949,6 @@ class VideoEditorApp {
   }
 
   private renderTimelineSegments(): void {
-    const editedDuration = this.editedDurationSeconds();
     let timelineStart = zeroSeconds;
     const renderedSegmentIds = new Set<number>();
     const elements = this.timelineSegments.map((segment, segmentIndex) => {
@@ -781,18 +959,28 @@ class VideoEditorApp {
         element.type = "button";
         element.tabIndex = -1;
         element.dataset.segmentId = String(segment.id);
+        element.append(
+          timelineThumbnailStrip(),
+          timelineResizeHandle(segment.id, "start"),
+          timelineResizeHandle(segment.id, "end")
+        );
         this.timelineSegmentElements.set(segment.id, element);
       }
 
       const segmentDuration = timelineSegmentDuration(segment);
       const isSelected = segment.id === this.selectedSegmentId;
+      const isMoving = segment.id === this.activeTimelineMove?.segmentId && this.activeTimelineMove.isDragging;
       renderedSegmentIds.add(segment.id);
       element.disabled = this.isBusy;
       element.setAttribute("aria-label", `Select section ${String(segmentIndex + 1)}`);
       element.setAttribute("aria-pressed", String(isSelected));
+      element.dataset.tooltip = "Drag to reorder";
+      element.classList.toggle("moving", isMoving);
       element.classList.toggle("selected", isSelected);
-      element.style.left = `${String(percentOf(timelineStart, editedDuration))}%`;
-      element.style.width = `${String(percentOf(segmentDuration, editedDuration))}%`;
+      this.renderTimelineSegmentThumbnails(element, segment);
+      const visualOffset = this.activeStartResizeVisualOffsetSeconds(segmentIndex);
+      element.style.left = `${String(percentOf(timelineStart + visualOffset, this.durationSeconds))}%`;
+      element.style.width = `${String(percentOf(segmentDuration, this.durationSeconds))}%`;
       timelineStart += segmentDuration;
       return element;
     });
@@ -803,6 +991,38 @@ class VideoEditorApp {
     }
 
     this.timelineSegmentsElement.replaceChildren(...elements);
+  }
+
+  private renderTimelineSegmentThumbnails(element: HTMLButtonElement, segment: TimelineSegment): void {
+    const strip = element.querySelector<HTMLElement>(".timeline-segment-thumbnails");
+    if (!strip) {
+      throw new Error("The timeline clip preview strip is missing.");
+    }
+
+    const thumbnails = timelineThumbnailsForSegment(this.timelineThumbnails, segment);
+    const thumbnailKey = thumbnails.map((thumbnail) => thumbnail.url).join("|");
+    if (strip.dataset.thumbnailKey === thumbnailKey) {
+      return;
+    }
+
+    strip.dataset.thumbnailKey = thumbnailKey;
+    strip.replaceChildren(...thumbnails.map((thumbnail) => timelineThumbnailImage(thumbnail.url)));
+  }
+
+  private activeStartResizeVisualOffsetSeconds(segmentIndex: number): number {
+    const resize = this.activeTimelineResize;
+    if (resize?.edge !== "start") {
+      return zeroSeconds;
+    }
+
+    const resizedSegmentIndex = this.timelineSegments.findIndex((segment) => segment.id === resize.segmentId);
+    if (segmentIndex < resizedSegmentIndex) {
+      return zeroSeconds;
+    }
+
+    const initialSegment = timelineSegmentById(resize.initialSegments, resize.segmentId);
+    const currentSegment = timelineSegmentById(this.timelineSegments, resize.segmentId);
+    return currentSegment.sourceStart - initialSegment.sourceStart;
   }
 
   private timelineSegmentRects(): Map<number, DOMRect> {
@@ -816,7 +1036,30 @@ class VideoEditorApp {
     previousSegmentRects: ReadonlyMap<number, DOMRect>,
     removingElement: HTMLButtonElement
   ): void {
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    this.animateTimelineReflow(previousSegmentRects);
+    if (matchMedia(reducedMotionMediaQuery).matches) {
+      return;
+    }
+
+    removingElement.classList.add("timeline-segment-removing");
+    removingElement.disabled = true;
+    removingElement.setAttribute(ariaHiddenAttributeName, "true");
+    this.timelineSegmentsElement.append(removingElement);
+    const removalAnimation = removingElement.animate([
+      { opacity: 1, transform: "scaleX(1)" },
+      { opacity: 0, transform: "scaleX(0.2)" }
+    ], {
+      duration: timelineReflowDurationMs,
+      easing: timelineReflowEasing
+    });
+    void removalAnimation.finished.then(
+      (): void => removingElement.remove(),
+      (): void => removingElement.remove()
+    );
+  }
+
+  private animateTimelineReflow(previousSegmentRects: ReadonlyMap<number, DOMRect>): void {
+    if (matchMedia(reducedMotionMediaQuery).matches) {
       return;
     }
 
@@ -837,22 +1080,6 @@ class VideoEditorApp {
         easing: timelineReflowEasing
       });
     }
-
-    removingElement.classList.add("timeline-segment-removing");
-    removingElement.disabled = true;
-    removingElement.setAttribute("aria-hidden", "true");
-    this.timelineSegmentsElement.append(removingElement);
-    const removalAnimation = removingElement.animate([
-      { opacity: 1, transform: "scaleX(1)" },
-      { opacity: 0, transform: "scaleX(0.2)" }
-    ], {
-      duration: timelineReflowDurationMs,
-      easing: timelineReflowEasing
-    });
-    void removalAnimation.finished.then(
-      (): void => removingElement.remove(),
-      (): void => removingElement.remove()
-    );
   }
 
   private syncPlaybackTime(): void {
@@ -862,8 +1089,9 @@ class VideoEditorApp {
     let currentTime = this.clampedPlaybackTime(timelineTime);
 
     if (!this.video.paused) {
-      if (timelineTime >= this.trimEndSeconds - playbackBoundaryToleranceSeconds) {
-        currentTime = this.trimEndSeconds;
+      const editedDuration = this.editedDurationSeconds();
+      if (timelineTime >= editedDuration - playbackBoundaryToleranceSeconds) {
+        currentTime = editedDuration;
         this.video.pause();
       } else if (sourceTime >= location.segment.sourceEnd - playbackBoundaryToleranceSeconds) {
         const nextSegment = this.timelineSegments.at(location.segmentIndex + 1);
@@ -880,24 +1108,14 @@ class VideoEditorApp {
     this.playheadSeconds = currentTime;
     this.syncAudioPreviewTime(sourceTime);
     this.currentTimeText.textContent = formatTime(currentTime);
-    const editedDuration = this.editedDurationSeconds();
-    this.timeline.style.setProperty("--playhead", `${String(percentOf(currentTime, editedDuration))}%`);
+    const visualOffset = this.activeStartResizeVisualOffsetSeconds(location.segmentIndex);
+    const visualPlayheadTime = currentTime + visualOffset;
+    this.timeline.style.setProperty("--playhead", `${String(percentOf(visualPlayheadTime, this.durationSeconds))}%`);
     this.syncPlayButton();
   }
 
   private syncTimeline(): void {
     const editedDuration = this.editedDurationSeconds();
-    this.startRange.max = String(editedDuration);
-    this.endRange.max = String(editedDuration);
-    this.startRange.step = String(rangeStepSeconds);
-    this.endRange.step = String(rangeStepSeconds);
-    this.startRange.value = String(this.trimStartSeconds);
-    this.endRange.value = String(this.trimEndSeconds);
-
-    const startPercent = percentOf(this.trimStartSeconds, editedDuration);
-    const endPercent = percentOf(this.trimEndSeconds, editedDuration);
-    this.timeline.style.setProperty("--trim-start", `${String(startPercent)}%`);
-    this.timeline.style.setProperty("--trim-end", `${String(endPercent)}%`);
     this.totalTimeText.textContent = formatTime(editedDuration);
     this.renderTimelineSegments();
     this.renderAudioWaveforms();
@@ -932,7 +1150,7 @@ class VideoEditorApp {
   }
 
   private async togglePlayback(): Promise<void> {
-    if (this.isBusy) {
+    if (this.isInteractionLocked) {
       return;
     }
 
@@ -941,8 +1159,8 @@ class VideoEditorApp {
       return;
     }
 
-    if (this.playheadSeconds < this.trimStartSeconds || this.playheadSeconds >= this.trimEndSeconds) {
-      this.seekTo(this.trimStartSeconds);
+    if (this.playheadSeconds >= this.editedDurationSeconds()) {
+      this.seekTo(zeroSeconds);
     }
 
     await this.audioReady;
@@ -960,6 +1178,102 @@ class VideoEditorApp {
     }
   }
 
+  private updateTimelineInteraction(event: PointerEvent): void {
+    if (this.activeTimelineResize?.pointerId === event.pointerId) {
+      this.updateTimelineResize(event);
+      return;
+    }
+
+    if (this.activeTimelineMove?.pointerId === event.pointerId) {
+      this.updateTimelineMove(event);
+      return;
+    }
+
+    this.updateTimelineScrub(event);
+  }
+
+  private updateTimelineMove(event: PointerEvent): void {
+    const move = this.activeTimelineMove;
+    if (move?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (!move.isDragging) {
+      if (Math.abs(event.clientX - move.initialClientX) < timelineMoveThresholdPx) {
+        return;
+      }
+
+      move.isDragging = true;
+      this.timeline.classList.add("moving-clip");
+      this.renderTimelineSegments();
+    }
+
+    const targetIndex = this.timelineMoveTargetIndex(event.clientX, move.segmentId);
+    const segments = moveTimelineSegment(this.timelineSegments, move.segmentId, targetIndex);
+    if (isSameTimelineSegmentOrder(segments, this.timelineSegments)) {
+      event.preventDefault();
+      return;
+    }
+
+    const previousSegmentRects = this.timelineSegmentRects();
+    this.timelineSegments = segments;
+    move.hasMoved = true;
+    this.preparedVideo = null;
+    this.syncTimeline();
+    this.animateTimelineReflow(previousSegmentRects);
+    this.seekTo(this.timelineTimeForSegmentSourceTime(move.playbackSegmentId, move.playbackSourceTime));
+    event.preventDefault();
+  }
+
+  private timelineMoveTargetIndex(clientX: number, segmentId: number): number {
+    let targetIndex = 0;
+    for (const segment of this.timelineSegments) {
+      if (segment.id === segmentId) {
+        continue;
+      }
+
+      const element = this.timelineSegmentElements.get(segment.id);
+      if (!element) {
+        throw new Error("A timeline clip is not rendered.");
+      }
+
+      const bounds = element.getBoundingClientRect();
+      if (clientX < bounds.left + bounds.width / halfDivisor) {
+        return targetIndex;
+      }
+
+      targetIndex += 1;
+    }
+
+    return targetIndex;
+  }
+
+  private updateTimelineResize(event: PointerEvent): void {
+    const resize = this.activeTimelineResize;
+    if (resize?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const initialSegment = timelineSegmentById(resize.initialSegments, resize.segmentId);
+    const initialEdgeTime = timelineSegmentEdgeTime(initialSegment, resize.edge);
+    const sourceTimeDelta = ((event.clientX - resize.initialClientX) / resize.initialTrackWidth) * this.durationSeconds;
+    const segments = resizeTimelineSegment(
+      resize.initialSegments,
+      resize.segmentId,
+      resize.edge,
+      initialEdgeTime + sourceTimeDelta,
+      minimumTrimDurationSeconds,
+      this.durationSeconds
+    );
+    const resizedSegment = timelineSegmentById(segments, resize.segmentId);
+    resize.hasChanged = Math.abs(timelineSegmentEdgeTime(resizedSegment, resize.edge) - initialEdgeTime) > Number.EPSILON;
+    this.timelineSegments = segments;
+    this.preparedVideo = null;
+    this.syncTimeline();
+    this.seekTo(this.timelineTimeForSegmentSourceTime(resize.playbackSegmentId, resize.playbackSourceTime));
+    event.preventDefault();
+  }
+
   private updateTimelineScrub(event: PointerEvent): void {
     if (this.activeTimelinePointerId !== event.pointerId) {
       return;
@@ -969,29 +1283,22 @@ class VideoEditorApp {
   }
 
   private isFullSourceRange(sourceRange: TrimRange): boolean {
-    return sourceRange.start <= fullTrimToleranceSeconds
-      && Math.abs(sourceRange.end - this.durationSeconds) <= fullTrimToleranceSeconds;
+    return sourceRange.start <= fullSourceRangeToleranceSeconds
+      && Math.abs(sourceRange.end - this.durationSeconds) <= fullSourceRangeToleranceSeconds;
   }
 
-  private trimRange(): TrimRange {
-    return {
-      end: this.trimEndSeconds,
-      start: this.trimStartSeconds
-    };
-  }
-
-  private trimKey(): string {
-    return `${this.timelineKey()}:${trimKeyFromRange(this.trimRange())}:${this.audioExportKey()}`;
+  private editKey(): string {
+    return `${this.timelineKey()}:${this.audioExportKey()}`;
   }
 
   private timelineKey(): string {
     return this.timelineSegments
-      .map((segment) => `${String(segment.id)}=${segment.sourceStart.toFixed(trimKeyPrecisionDigits)}-${segment.sourceEnd.toFixed(trimKeyPrecisionDigits)}`)
+      .map((segment) => `${String(segment.id)}=${segment.sourceStart.toFixed(timelineKeyPrecisionDigits)}-${segment.sourceEnd.toFixed(timelineKeyPrecisionDigits)}`)
       .join(",");
   }
 
   private sourceRangesForExport(): TrimRange[] {
-    return sourceRangesForTimelineRange(this.timelineSegments, this.trimRange());
+    return sourceRangesForTimeline(this.timelineSegments);
   }
 
   private audioExportKey(): string {
@@ -1021,25 +1328,6 @@ class VideoEditorApp {
     }
   }
 
-  private updateTrimEnd(value: number): void {
-    const editedDuration = this.editedDurationSeconds();
-    const minimumDuration = Math.min(minimumTrimDurationSeconds, editedDuration);
-    this.trimEndSeconds = clamp(value, this.trimStartSeconds + minimumDuration, editedDuration);
-
-    this.syncTimeline();
-    this.seekTo(this.playheadSeconds);
-    this.preparedVideo = null;
-  }
-
-  private updateTrimStart(value: number): void {
-    const minimumDuration = Math.min(minimumTrimDurationSeconds, this.durationSeconds);
-    this.trimStartSeconds = clamp(value, zeroSeconds, this.trimEndSeconds - minimumDuration);
-
-    this.syncTimeline();
-    this.seekTo(this.playheadSeconds);
-    this.preparedVideo = null;
-  }
-
   async initialize(): Promise<void> {
     try {
       this.bindEvents();
@@ -1066,12 +1354,12 @@ class VideoEditorApp {
       }];
       this.activeSegmentId = initialSegmentId;
       this.selectedSegmentId = initialSegmentId;
-      this.trimEndSeconds = this.durationSeconds;
       this.syncTimeline();
       this.syncPlaybackTime();
+      this.runAsync(this.loadTimelineThumbnails(), "Could not load timeline previews.");
     } catch (error) {
       try {
-        await this.reportError("Could not open the editor.", error);
+        await reportError("Could not open the editor.", error);
       } finally {
         await this.closeEditor();
       }
@@ -1153,8 +1441,67 @@ function positiveDuration(value: number): number {
   return value;
 }
 
-function trimKeyFromRange(trimRange: TrimRange): string {
-  return `${trimRange.start.toFixed(trimKeyPrecisionDigits)}:${trimRange.end.toFixed(trimKeyPrecisionDigits)}`;
+function timelineResizeHandle(segmentId: number, edge: TimelineSegmentEdge): HTMLSpanElement {
+  const handle = document.createElement("span");
+  handle.className = `timeline-segment-handle timeline-segment-handle-${edge}`;
+  handle.dataset.segmentId = String(segmentId);
+  handle.dataset.timelineEdge = edge;
+  handle.setAttribute(ariaHiddenAttributeName, "true");
+  return handle;
+}
+
+function timelineThumbnailImage(sourceUrl: string): HTMLImageElement {
+  const image = document.createElement("img");
+  image.alt = "";
+  image.className = "timeline-segment-thumbnail";
+  image.draggable = false;
+  image.src = sourceUrl;
+  return image;
+}
+
+function timelineThumbnailStrip(): HTMLSpanElement {
+  const strip = document.createElement("span");
+  strip.className = "timeline-segment-thumbnails";
+  strip.setAttribute(ariaHiddenAttributeName, "true");
+  return strip;
+}
+
+function isSameTimelineSegmentOrder(
+  leftSegments: readonly TimelineSegment[],
+  rightSegments: readonly TimelineSegment[]
+): boolean {
+  return leftSegments.length === rightSegments.length
+    && leftSegments.every((segment, index) => segment.id === rightSegments[index]?.id);
+}
+
+function timelineSegmentById(segments: readonly TimelineSegment[], segmentId: number): TimelineSegment {
+  const segment = segments.find((candidate) => candidate.id === segmentId);
+  if (!segment) {
+    throw new Error("The requested timeline clip no longer exists.");
+  }
+
+  return segment;
+}
+
+function timelineSegmentEdgeFromString(value: string | undefined): TimelineSegmentEdge {
+  if (value === "start" || value === "end") {
+    return value;
+  }
+
+  throw new Error("Unexpected timeline clip edge.");
+}
+
+function timelineSegmentEdgeTime(segment: TimelineSegment, edge: TimelineSegmentEdge): number {
+  return edge === "start" ? segment.sourceStart : segment.sourceEnd;
+}
+
+function timelineSegmentIdFromString(value: string | undefined): number {
+  const segmentId = Number(value);
+  if (!Number.isSafeInteger(segmentId) || segmentId <= 0) {
+    throw new Error("Unexpected timeline clip identifier.");
+  }
+
+  return segmentId;
 }
 
 async function waitForAudioReady(audioReadyPromises: Array<Promise<void>>): Promise<void> {

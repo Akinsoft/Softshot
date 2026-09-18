@@ -88,8 +88,8 @@ async function runEditedCutSmoke(source) {
       source.mimeType,
       frameRate,
       [
-        { end: 0.35, start: 0 },
-        { end: 1.15, start: 0.8 }
+        { end: 1.15, start: 0.8 },
+        { end: 0.35, start: 0 }
       ],
       [{ kind: "system" }, { kind: "microphone" }]
     );

@@ -173,6 +173,87 @@ test("editor timeline trims across cuts and rejects destructive edge cases", asy
   assert.throws(() => deleteTimelineSegment([segments[0]], 1), /final timeline segment/);
 });
 
+test("editor timeline clip edges trim, ripple, and restore without overlapping", async () => {
+  const {
+    resizeTimelineSegment,
+    sourceRangesForTimeline
+  } = await importDist("editor-timeline");
+  let segments = [
+    { id: 1, sourceEnd: 20, sourceStart: 0 },
+    { id: 2, sourceEnd: 40, sourceStart: 20 },
+    { id: 3, sourceEnd: 60, sourceStart: 40 }
+  ];
+
+  segments = resizeTimelineSegment(segments, 1, "end", 15, 0.05, 60);
+  segments = resizeTimelineSegment(segments, 2, "start", 25, 0.05, 60);
+  assert.deepEqual(segments, [
+    { id: 1, sourceEnd: 15, sourceStart: 0 },
+    { id: 2, sourceEnd: 40, sourceStart: 25 },
+    { id: 3, sourceEnd: 60, sourceStart: 40 }
+  ]);
+  assert.deepEqual(sourceRangesForTimeline(segments), [
+    { end: 15, start: 0 },
+    { end: 60, start: 25 }
+  ]);
+
+  segments = resizeTimelineSegment(segments, 1, "end", 100, 0.05, 60);
+  assert.equal(segments[0].sourceEnd, 25);
+  segments = resizeTimelineSegment(segments, 2, "start", -100, 0.05, 60);
+  assert.equal(segments[1].sourceStart, 25);
+  segments = resizeTimelineSegment(segments, 3, "start", 59.99, 0.05, 60);
+  assert.equal(segments[2].sourceStart, 59.95);
+});
+
+test("editor timeline clips reorder without losing source-aware trim bounds", async () => {
+  const {
+    moveTimelineSegment,
+    resizeTimelineSegment,
+    sourceRangesForTimeline
+  } = await importDist("editor-timeline");
+  let segments = [
+    { id: 1, sourceEnd: 20, sourceStart: 0 },
+    { id: 2, sourceEnd: 40, sourceStart: 20 },
+    { id: 3, sourceEnd: 60, sourceStart: 40 }
+  ];
+
+  segments = moveTimelineSegment(segments, 3, 0);
+  assert.deepEqual(segments.map((segment) => segment.id), [3, 1, 2]);
+  assert.deepEqual(sourceRangesForTimeline(segments), [
+    { end: 60, start: 40 },
+    { end: 40, start: 0 }
+  ]);
+
+  segments = resizeTimelineSegment(segments, 2, "start", 25, 0.05, 60);
+  assert.deepEqual(segments, [
+    { id: 3, sourceEnd: 60, sourceStart: 40 },
+    { id: 1, sourceEnd: 20, sourceStart: 0 },
+    { id: 2, sourceEnd: 40, sourceStart: 25 }
+  ]);
+  assert.throws(() => moveTimelineSegment(segments, 2, 3), /destination is invalid/);
+});
+
+test("timeline thumbnail sampling stays lightweight and follows retained clip ranges", async () => {
+  const {
+    timelineThumbnailsForSegment,
+    timelineThumbnailTimes
+  } = await importDist("editor-thumbnails");
+  const thumbnails = timelineThumbnailTimes(10, 4).map((sourceTime, index) => ({
+    sourceTime,
+    url: `preview-${String(index)}`
+  }));
+
+  assert.deepEqual(thumbnails.map((thumbnail) => thumbnail.sourceTime), [1.25, 3.75, 6.25, 8.75]);
+  assert.deepEqual(
+    timelineThumbnailsForSegment(thumbnails, { id: 1, sourceEnd: 7, sourceStart: 3 }).map((thumbnail) => thumbnail.sourceTime),
+    [3.75, 6.25]
+  );
+  assert.deepEqual(
+    timelineThumbnailsForSegment(thumbnails, { id: 2, sourceEnd: 5.1, sourceStart: 4.9 }).map((thumbnail) => thumbnail.sourceTime),
+    [3.75]
+  );
+  assert.throws(() => timelineThumbnailTimes(10, 0), /positive integer/);
+});
+
 test("audio waveforms follow retained timeline sections", async () => {
   const { timelineWaveformPeaks } = await importDist("editor-waveform-view");
   const sourcePeaks = [0, 0.1, 0.2, 0.3, 0.4, 0.5];
