@@ -1,6 +1,8 @@
 import { app, Notification } from "electron";
 import { autoUpdater } from "electron-updater";
 
+import { errorMessage } from "./async-errors";
+
 const appName = "Softshot";
 const updateCheckDelayMs = 2500;
 const updateInstallDelayMs = 1200;
@@ -67,8 +69,4 @@ function showUpdateReadyNotification(): void {
     body: "Softshot will finish updating when it closes.",
     title: `${appName} update ready`
   }).show();
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

@@ -1,3 +1,4 @@
+import { errorMessage } from "./async-errors.js";
 import {
   audioInputDevices,
   defaultDeviceId,
@@ -5,7 +6,9 @@ import {
   microphoneDeviceOptionValue,
   normalizeMicrophoneDeviceId
 } from "./audio-devices.js";
-import type { AppSettings, AppSettingsUpdate, SettingsKeybindEvent, SoftshotApi } from "./shared";
+import { getRequiredElement } from "./overlay-dom.js";
+import type { AppSettings, AppSettingsUpdate, SettingsKeybindEvent } from "./shared.js";
+import { getSoftshotApi } from "./softshot-api.js";
 import { TooltipController } from "./ui-tooltip.js";
 
 const statusClearDelayMs = 1400;
@@ -36,7 +39,6 @@ const displayNames = new Map([
   ["VolumeMute", "Volume Mute"],
   ["VolumeUp", "Volume Up"]
 ]);
-type ElementConstructor<TElement extends HTMLElement> = new() => TElement;
 
 class SettingsController {
   private readonly closeButton = getRequiredElement("settings-close-button", HTMLButtonElement);
@@ -66,7 +68,7 @@ class SettingsController {
       return;
     }
 
-    await softshotApi().beginSettingsKeybindRecording();
+    await getSoftshotApi().beginSettingsKeybindRecording();
     this.isRecordingKeybind = true;
     this.keybindButton.classList.add("recording");
     this.keybindButton.textContent = recordingButtonText;
@@ -86,7 +88,7 @@ class SettingsController {
 
   private async endKeybindRecording(): Promise<void> {
     this.finishKeybindRecording();
-    await softshotApi().endSettingsKeybindRecording();
+    await getSoftshotApi().endSettingsKeybindRecording();
   }
 
   private render(): void {
@@ -139,7 +141,7 @@ class SettingsController {
   }
 
   private async updateSettings(update: AppSettingsUpdate): Promise<void> {
-    const updatedSettings = await softshotApi().updateSettings(update);
+    const updatedSettings = await getSoftshotApi().updateSettings(update);
     this.settings = updatedSettings;
     this.render();
     this.setStatus("");
@@ -172,10 +174,10 @@ class SettingsController {
       void this.refreshMicrophoneDevices().catch(reportError);
     });
 
-    softshotApi().onSettingsKeybindEvent((event): void => {
+    getSoftshotApi().onSettingsKeybindEvent((event): void => {
       this.handleSettingsKeybindEvent(event);
     });
-    softshotApi().onSettingsChanged((settings): void => {
+    getSoftshotApi().onSettingsChanged((settings): void => {
       this.settings = settings;
       this.render();
     });
@@ -231,7 +233,7 @@ class SettingsController {
 
   private async closeSettings(): Promise<void> {
     try {
-      await softshotApi().closeSettings();
+      await getSoftshotApi().closeSettings();
     } catch (error) {
       await reportError(error);
     }
@@ -269,10 +271,10 @@ class SettingsController {
 
   async start(): Promise<void> {
     this.wireEvents();
-    this.settings = await softshotApi().getSettings();
+    this.settings = await getSoftshotApi().getSettings();
     await this.refreshMicrophoneDevices();
     this.render();
-    await softshotApi().settingsReadyToShow();
+    await getSoftshotApi().settingsReadyToShow();
   }
 }
 
@@ -281,22 +283,6 @@ function displayShortcut(shortcut: string): string {
     .split(keySeparator)
     .map((key) => displayNames.get(key) ?? key)
     .join(keySeparator);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Something went wrong.";
-}
-
-function getRequiredElement<TElement extends HTMLElement>(
-  id: string,
-  expectedType: ElementConstructor<TElement>
-): TElement {
-  const value = document.querySelector(`#${id}`);
-  if (!(value instanceof expectedType)) {
-    throw new TypeError(`Missing element: ${id}.`);
-  }
-
-  return value;
 }
 
 function microphoneOption(label: string, deviceId: string | null, selectedDeviceId: string | null): HTMLOptionElement {
@@ -308,17 +294,13 @@ function microphoneOption(label: string, deviceId: string | null, selectedDevice
 }
 
 async function reportError(error: unknown): Promise<void> {
-  await softshotApi().showError(errorMessage(error));
-}
-
-function softshotApi(): SoftshotApi {
-  return (globalThis as typeof globalThis & Window).softshot;
+  await getSoftshotApi().showError(errorMessage(error));
 }
 
 void new SettingsController().start().catch(async (error: unknown): Promise<void> => {
   try {
-    await softshotApi().showError(errorMessage(error));
+    await reportError(error);
   } finally {
-    await softshotApi().closeSettings();
+    await getSoftshotApi().closeSettings();
   }
 });
