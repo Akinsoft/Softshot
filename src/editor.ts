@@ -269,6 +269,10 @@ class VideoEditorApp {
       || this.activeTimelinePointerId !== noPointerId;
   }
 
+  private get canReorderTimelineSegments(): boolean {
+    return this.timelineSegments.length > 1;
+  }
+
   private async closeEditor(): Promise<void> {
     if (this.isInteractionLocked) {
       return;
@@ -302,7 +306,7 @@ class VideoEditorApp {
     }
 
     const segmentElement = target?.closest<HTMLButtonElement>(".timeline-segment");
-    if (segmentElement && this.timelineSegments.length > 1) {
+    if (segmentElement && this.canReorderTimelineSegments) {
       this.beginTimelineMove(event, segmentElement);
       return;
     }
@@ -974,7 +978,13 @@ class VideoEditorApp {
       element.disabled = this.isBusy;
       element.setAttribute("aria-label", `Select section ${String(segmentIndex + 1)}`);
       element.setAttribute("aria-pressed", String(isSelected));
-      element.dataset.tooltip = "Drag to reorder";
+      if (this.canReorderTimelineSegments) {
+        element.dataset.tooltip = "Drag to reorder";
+      } else {
+        delete element.dataset.tooltip;
+      }
+
+      element.classList.toggle("reorderable", this.canReorderTimelineSegments);
       element.classList.toggle("moving", isMoving);
       element.classList.toggle("selected", isSelected);
       this.renderTimelineSegmentThumbnails(element, segment);
