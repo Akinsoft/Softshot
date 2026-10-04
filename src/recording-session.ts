@@ -27,6 +27,7 @@ const hardwareVideoCodec = "avc";
 const hardwareKeyframeIntervalSeconds = 2;
 const hardwareFragmentDurationSeconds = 1;
 const hardwareOperationTimeoutMs = 15_000;
+const fullDisplayCropTolerancePx = 0.5;
 
 type HardwareRecordingOutput = Output<Mp4OutputFormat, AppendOnlyStreamTarget>;
 type RecordingSessionErrorHandler = (error: unknown) => void;
@@ -737,10 +738,10 @@ function createAnnotationCanvas(
 }
 
 function isFullDisplayCrop(crop: Rect, bounds: Rect): boolean {
-  return crop.x === bounds.x
-    && crop.y === bounds.y
-    && crop.width === bounds.width
-    && crop.height === bounds.height;
+  return Math.abs(crop.x - bounds.x) <= fullDisplayCropTolerancePx
+    && Math.abs(crop.y - bounds.y) <= fullDisplayCropTolerancePx
+    && Math.abs(crop.width - bounds.width) <= fullDisplayCropTolerancePx
+    && Math.abs(crop.height - bounds.height) <= fullDisplayCropTolerancePx;
 }
 
 function setVideoContentHint(stream: MediaStream): void {
