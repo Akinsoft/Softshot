@@ -19,6 +19,7 @@ import {
   timelineLocationAt,
   type TimelineSegment,
   timelineSegmentBounds,
+  timelineSegmentById,
   timelineSegmentDuration,
   type TimelineSegmentEdge,
   timelineTimeAfterDeletion
@@ -1482,15 +1483,6 @@ function isSameTimelineSegmentOrder(
 ): boolean {
   return leftSegments.length === rightSegments.length
     && leftSegments.every((segment, index) => segment.id === rightSegments[index]?.id);
-}
-
-function timelineSegmentById(segments: readonly TimelineSegment[], segmentId: number): TimelineSegment {
-  const segment = segments.find((candidate) => candidate.id === segmentId);
-  if (!segment) {
-    throw new Error("The requested timeline clip no longer exists.");
-  }
-
-  return segment;
 }
 
 function timelineSegmentEdgeFromString(value: string | undefined): TimelineSegmentEdge {

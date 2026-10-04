@@ -85,6 +85,10 @@ function locateTimelinePosition(
   throw new Error("Could not locate the timeline position.");
 }
 
+export function timelineSegmentById(segments: readonly TimelineSegment[], segmentId: number): TimelineSegment {
+  return requiredSegmentAt(segments, timelineSegmentIndex(segments, segmentId));
+}
+
 export function timelineSegmentBounds(
   segments: readonly TimelineSegment[],
   segmentId: number
@@ -153,11 +157,7 @@ export function deleteTimelineSegment(
     throw new Error("The final timeline segment cannot be deleted.");
   }
 
-  const segmentIndex = segments.findIndex((segment) => segment.id === segmentId);
-  if (segmentIndex === -1) {
-    throw new Error(missingTimelineSegmentMessage);
-  }
-
+  const segmentIndex = timelineSegmentIndex(segments, segmentId);
   return [
     ...segments.slice(0, segmentIndex),
     ...segments.slice(segmentIndex + 1)
@@ -174,11 +174,7 @@ export function moveTimelineSegment(
     throw new RangeError("The timeline clip destination is invalid.");
   }
 
-  const segmentIndex = segments.findIndex((segment) => segment.id === segmentId);
-  if (segmentIndex === -1) {
-    throw new Error(missingTimelineSegmentMessage);
-  }
-
+  const segmentIndex = timelineSegmentIndex(segments, segmentId);
   const segment = requiredSegmentAt(segments, segmentIndex);
   const remainingSegments = [
     ...segments.slice(0, segmentIndex),
@@ -212,14 +208,10 @@ export function resizeTimelineSegment(
     throw new RangeError("The source duration must be positive and finite.");
   }
 
-  const segmentIndex = segments.findIndex((segment) => segment.id === segmentId);
-  if (segmentIndex === -1) {
-    throw new Error(missingTimelineSegmentMessage);
-  }
-
+  const segmentIndex = timelineSegmentIndex(segments, segmentId);
   const sourceOrderedSegments = segments.toSorted(compareTimelineSegmentSourceStart);
   requireTimelineSourceBounds(sourceOrderedSegments, sourceDuration);
-  const sourceSegmentIndex = sourceOrderedSegments.findIndex((segment) => segment.id === segmentId);
+  const sourceSegmentIndex = timelineSegmentIndex(sourceOrderedSegments, segmentId);
   const segment = requiredSegmentAt(sourceOrderedSegments, sourceSegmentIndex);
   const previousSegment = sourceSegmentIndex > 0
     ? requiredSegmentAt(sourceOrderedSegments, sourceSegmentIndex - 1)
@@ -348,6 +340,15 @@ function requireTimelineSourceBounds(segments: readonly TimelineSegment[], sourc
 
     previousSourceEnd = segment.sourceEnd;
   }
+}
+
+function timelineSegmentIndex(segments: readonly TimelineSegment[], segmentId: number): number {
+  const segmentIndex = segments.findIndex((segment) => segment.id === segmentId);
+  if (segmentIndex === -1) {
+    throw new Error(missingTimelineSegmentMessage);
+  }
+
+  return segmentIndex;
 }
 
 function requiredSegmentAt(segments: readonly TimelineSegment[], segmentIndex: number): TimelineSegment {
