@@ -1922,10 +1922,10 @@ class SoftshotApp {
       }
     } catch (error) {
       if (!isRecordingFileOwnedByEditor) {
-        const cleanupResults = await Promise.allSettled([this.cleanupRecordingFiles(recordingFiles, true)]);
-        const cleanupErrors = rejectedReasons(cleanupResults);
-        if (cleanupErrors.length > 0) {
-          throw combinedError("Could not open the editor or preserve its recording files.", [error, ...cleanupErrors]);
+        try {
+          await this.cleanupRecordingFiles(recordingFiles, true);
+        } catch (cleanupError) {
+          throw combinedError("Could not open the editor or preserve its recording files.", [error, cleanupError]);
         }
       }
 
