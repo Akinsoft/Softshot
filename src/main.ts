@@ -673,6 +673,10 @@ class SoftshotApp {
   }
 
   private applyLaunchAtStartup(isEnabled: boolean): void {
+    if (!app.isPackaged) {
+      return;
+    }
+
     const options = this.loginItemSettingsOptions();
     app.setLoginItemSettings({
       ...options,
