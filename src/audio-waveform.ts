@@ -3,8 +3,6 @@ import { ALL_FORMATS, AudioSampleSink, CustomSource, Input } from "mediabunny";
 import type { AudioSourceKind } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
-const half = 0.5;
-
 export async function audioWaveformPeaks(
   kind: AudioSourceKind,
   durationSeconds: number,
@@ -36,37 +34,26 @@ export async function audioWaveformPeaks(
       throw new Error("The audio waveform source does not contain an audio track.");
     }
 
-    const peakIndexes = Array.from({ length: peakCount }).keys();
-    const timestamps = Array.from(
-      peakIndexes,
-      (peakIndex) => ((peakIndex + half) / peakCount) * durationSeconds
-    );
-    const sink = new AudioSampleSink(audioTrack);
-    const peaks: number[] = [];
-    for await (const sample of sink.samplesAtTimestamps(timestamps)) {
-      if (!sample) {
-        peaks.push(0);
-        continue;
-      }
-
+    const peaks = Array.from({ length: peakCount }, () => 0);
+    const secondsPerPeak = durationSeconds / peakCount;
+    const samples = new AudioSampleSink(audioTrack).samples(0, durationSeconds);
+    let channelSamples = new Float32Array(0);
+    for await (const sample of samples) {
       try {
-        let peak = 0;
-        for (let channelIndex = 0; channelIndex < sample.numberOfChannels; channelIndex += 1) {
-          const channelSamples = new Float32Array(sample.numberOfFrames);
-          sample.copyTo(channelSamples, { format: "f32-planar", planeIndex: channelIndex });
-          for (const value of channelSamples) {
-            peak = Math.max(peak, Math.abs(value));
-          }
+        if (channelSamples.length < sample.numberOfFrames) {
+          channelSamples = new Float32Array(sample.numberOfFrames);
         }
 
-        peaks.push(peak);
+        for (let channelIndex = 0; channelIndex < sample.numberOfChannels; channelIndex += 1) {
+          sample.copyTo(channelSamples, { format: "f32-planar", planeIndex: channelIndex });
+          accumulateChannelPeaks(peaks, channelSamples, sample.numberOfFrames, {
+            firstFrame: sample.timestamp * sample.sampleRate,
+            framesPerPeak: secondsPerPeak * sample.sampleRate
+          });
+        }
       } finally {
         sample.close();
       }
-    }
-
-    if (peaks.length !== peakCount) {
-      throw new Error("The audio waveform decoder returned an incomplete result.");
     }
 
     const maximumPeak = Math.max(...peaks);
@@ -75,5 +62,38 @@ export async function audioWaveformPeaks(
       : peaks;
   } finally {
     input.dispose();
+  }
+}
+
+interface PeakWindowLayout {
+  firstFrame: number;
+  framesPerPeak: number;
+}
+
+function accumulateChannelPeaks(
+  peaks: number[],
+  channelSamples: Float32Array,
+  frameCount: number,
+  layout: PeakWindowLayout
+): void {
+  let frameIndex = 0;
+  while (frameIndex < frameCount) {
+    const peakIndex = Math.floor((layout.firstFrame + frameIndex) / layout.framesPerPeak);
+    if (peakIndex >= peaks.length) {
+      return;
+    }
+
+    const windowEnd = Math.min(
+      frameCount,
+      Math.max(frameIndex + 1, Math.ceil((peakIndex + 1) * layout.framesPerPeak - layout.firstFrame))
+    );
+    let peak = peaks[peakIndex] ?? 0;
+    for (; frameIndex < windowEnd; frameIndex += 1) {
+      peak = Math.max(peak, Math.abs(channelSamples[frameIndex] ?? 0));
+    }
+
+    if (peakIndex >= 0) {
+      peaks[peakIndex] = peak;
+    }
   }
 }
