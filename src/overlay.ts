@@ -66,10 +66,9 @@ const frameScale = { x: 1, y: 1 };
 const screenshotCanvasContextError = "Could not create the screenshot canvas.";
 const screenshotCopyAction = "copy";
 const screenshotSaveAction = "save";
+const selectionHintText = "Drag to select an area first";
 const spaceKey = " ";
-const toolbarPulseDurationMs = 160;
 const undoShortcutKey = "z";
-const videoButtonAnimationDurationMs = 220;
 const zeroPoint = { x: 0, y: 0 };
 const mediaDeviceChangeEventName = "devicechange";
 const countdownFirstValue = 3;
@@ -82,11 +81,6 @@ const countdownZeroHoldMs = 500;
 const editorLoadingClassName = "editor-loading";
 const liveCaptureClassName = "live-capture";
 const runIdIncrement = 1;
-const videoButtonPopKeyframes = [
-  { transform: "scale(1)" },
-  { transform: "scale(1.08)" },
-  { transform: "scale(1)" }
-] satisfies Keyframe[];
 
 type RecordingSessionPreparation =
   | { kind: "failed"; error: unknown }
@@ -789,7 +783,7 @@ class OverlayApp {
 
     if (!this.selection) {
       this.closeMenus();
-      this.pulseToolbar();
+      this.showSelectionHint(this.screenshotButton);
       return;
     }
 
@@ -806,15 +800,8 @@ class OverlayApp {
     this.runAsync(this.toggleRecording(), "Could not toggle recording.");
   }
 
-  private pulseToolbar(): void {
-    this.toolbar.animate(
-      [
-        { transform: "translateX(-50%) scale(1)" },
-        { transform: "translateX(-50%) scale(1.035)" },
-        { transform: "translateX(-50%) scale(1)" }
-      ],
-      { duration: toolbarPulseDurationMs, easing: "ease-out" }
-    );
+  private showSelectionHint(anchor: HTMLButtonElement): void {
+    this.tooltips.showMessage(anchor, selectionHintText);
   }
 
   private releasePointerCapture(pointerId: number): void {
@@ -866,7 +853,7 @@ class OverlayApp {
 
   private async renderSelectionPng(): Promise<Uint8Array | null> {
     if (!this.selection) {
-      this.pulseToolbar();
+      this.showSelectionHint(this.screenshotButton);
       return null;
     }
 
@@ -986,18 +973,10 @@ class OverlayApp {
   }
 
   private setVideoButtonState(state: VideoButtonState): void {
-    const previousState = this.videoButton.dataset.state;
     this.videoButton.dataset.state = state;
 
     for (const icon of this.videoButton.querySelectorAll<HTMLElement>("[data-video-icon]")) {
       icon.classList.toggle("active", icon.dataset.videoIcon === state);
-    }
-
-    if (previousState && previousState !== state) {
-      this.videoButton.animate(videoButtonPopKeyframes, {
-        duration: videoButtonAnimationDurationMs,
-        easing: "cubic-bezier(0.2, 0.85, 0.28, 1.2)"
-      });
     }
   }
 
@@ -1220,7 +1199,7 @@ class OverlayApp {
     this.screenshotButton.classList.toggle("active", this.captureMode === "screenshot");
     this.videoButton.classList.toggle("active", this.captureMode === "video");
     this.videoButton.classList.toggle("recording", this.isRecording || this.isCountingDown);
-    setTooltipLabel(this.videoButton, this.videoButtonTitle(videoState));
+    setTooltipLabel(this.videoButton, this.videoButtonTitle(videoState), videoState === "video" ? null : "Space");
     this.setVideoButtonState(videoState);
     this.penButton.classList.toggle("active", this.activeTool === "pen");
     this.arrowButton.classList.toggle("active", this.activeTool === "arrow");
@@ -1293,7 +1272,7 @@ class OverlayApp {
 
     if (!this.selection) {
       this.syncToolbar();
-      this.pulseToolbar();
+      this.showSelectionHint(this.videoButton);
       return;
     }
 
