@@ -59,6 +59,7 @@ import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 
 const appName = "Softshot";
 const appId = "com.akinsoft.softshot";
+const developmentAppId = `${appId}.dev`;
 const captureShortcutRetryDelayMs = 1000;
 const captureShortcutRetryLimit = 12;
 const keySeparator = "+";
@@ -560,7 +561,7 @@ class SoftshotApp {
   }
 
   private createEditorWindow(display: Display): BrowserWindow {
-    return new BrowserWindow({
+    return this.createTaskbarWindow({
       x: display.workArea.x,
       y: display.workArea.y,
       width: editorWindowWidthPx,
@@ -582,7 +583,7 @@ class SoftshotApp {
   }
 
   private createSettingsWindow(): BrowserWindow {
-    return new BrowserWindow({
+    return this.createTaskbarWindow({
       width: settingsWindowWidthPx,
       height: settingsWindowHeightPx,
       frame: false,
@@ -600,6 +601,15 @@ class SoftshotApp {
         nodeIntegration: false
       }
     });
+  }
+
+  private createTaskbarWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
+    const window = new BrowserWindow(options);
+    if (!app.isPackaged) {
+      window.setAppDetails({ appId: developmentAppId });
+    }
+
+    return window;
   }
 
   private createTray(): Tray {
