@@ -5,8 +5,10 @@ const tooltipAboveClassName = "above";
 const tooltipArrowXProperty = "--tooltip-arrow-x";
 const tooltipBelowClassName = "below";
 const tooltipClassName = "softshot-tooltip";
-const tooltipOffsetPx = 10;
+const tooltipMessageDurationMs = 1800;
+const tooltipOffsetPx = 11;
 const tooltipSelector = "[data-tooltip]";
+const tooltipShortcutClassName = "softshot-tooltip-shortcut";
 const tooltipViewportPaddingPx = 8;
 const tooltipArrowInsetPx = 7;
 const halfDivisor = 2;
@@ -17,12 +19,24 @@ export class TooltipController {
   private readonly root: HTMLElement;
   private readonly tooltip = createTooltipElement();
   private activeTarget: HTMLElement | null = null;
+  private messageHandle: ReturnType<typeof setTimeout> | null = null;
+  private suppressedTarget: HTMLElement | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
   }
 
+  private clearMessageTimer(): void {
+    if (this.messageHandle === null) {
+      return;
+    }
+
+    clearTimeout(this.messageHandle);
+    this.messageHandle = null;
+  }
+
   private hide(): void {
+    this.clearMessageTimer();
     this.activeTarget = null;
     this.tooltip.hidden = true;
   }
@@ -32,20 +46,28 @@ export class TooltipController {
       return;
     }
 
+    this.suppressedTarget = null;
     this.hide();
   }
 
   private showForEvent(event: Event): void {
-    const target = this.tooltipTargetFromEvent(event);
-    if (!target) {
+    if (event instanceof PointerEvent && event.buttons !== 0) {
       this.hide();
       return;
     }
 
-    if (target === this.activeTarget) {
+    const target = this.tooltipTargetFromEvent(event);
+    if (!target) {
+      this.suppressedTarget = null;
+      this.hide();
       return;
     }
 
+    if (target === this.activeTarget || target === this.suppressedTarget) {
+      return;
+    }
+
+    this.suppressedTarget = null;
     this.show(target);
   }
 
@@ -56,8 +78,13 @@ export class TooltipController {
       return;
     }
 
+    this.showText(target, text, target.dataset.tooltipShortcut ?? null);
+  }
+
+  private showText(target: HTMLElement, text: string, shortcut: string | null): void {
+    this.clearMessageTimer();
     this.activeTarget = target;
-    this.tooltip.textContent = text;
+    this.tooltip.replaceChildren(text, ...(shortcut ? [tooltipShortcutElement(shortcut)] : []));
     this.tooltip.hidden = false;
     this.tooltip.classList.remove(tooltipAboveClassName, tooltipBelowClassName);
 
@@ -93,6 +120,14 @@ export class TooltipController {
     return target;
   }
 
+  showMessage(target: HTMLElement, text: string): void {
+    this.showText(target, text, null);
+    this.messageHandle = setTimeout((): void => {
+      this.messageHandle = null;
+      this.hide();
+    }, tooltipMessageDurationMs);
+  }
+
   bind(): void {
     this.root.addEventListener("pointerover", (event): void => {
       this.showForEvent(event);
@@ -106,16 +141,22 @@ export class TooltipController {
     this.root.addEventListener("focusout", (event): void => {
       this.hideWhenRootLeaves(event);
     });
-    this.root.addEventListener("pointerdown", (): void => {
+    this.root.addEventListener("pointerdown", (event): void => {
       this.hide();
+      this.suppressedTarget = this.tooltipTargetFromEvent(event);
     });
   }
 }
 
-export function setTooltipLabel(element: HTMLElement, label: string): void {
+export function setTooltipLabel(element: HTMLElement, label: string, shortcut: string | null = null): void {
   element.dataset.tooltip = label;
   element.setAttribute(ariaLabelAttribute, label);
   element.removeAttribute(nativeTitleAttribute);
+  if (shortcut) {
+    element.dataset.tooltipShortcut = shortcut;
+  } else {
+    delete element.dataset.tooltipShortcut;
+  }
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -130,6 +171,13 @@ function createTooltipElement(): HTMLDivElement {
   tooltip.setAttribute("role", "tooltip");
   document.body.append(tooltip);
   return tooltip;
+}
+
+function tooltipShortcutElement(shortcut: string): HTMLElement {
+  const element = document.createElement("kbd");
+  element.className = tooltipShortcutClassName;
+  element.textContent = shortcut;
+  return element;
 }
 
 function isUnavailableTooltipTarget(target: HTMLElement): boolean {
