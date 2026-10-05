@@ -53,8 +53,6 @@ The packaged Windows installer is written to `release/`.
 ```powershell
 npm run build
 npm run lint
-npm test
-npm run test:media
 ```
 
 ## License
