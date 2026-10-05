@@ -12,7 +12,7 @@ import {
   type InputVideoTrack,
   Mp4OutputFormat,
   Output,
-  type VideoSample,
+  VideoSample,
   VideoSampleSink,
   VideoSampleSource,
   WebMOutputFormat
@@ -43,6 +43,7 @@ export interface TrimRange {
 
 export interface ExportAudioTrack {
   kind: AudioSourceKind;
+  volume: number;
 }
 
 export interface ExportedVideo {
@@ -58,6 +59,7 @@ interface EditorByteSource {
 interface LoadedAudioInput {
   input: Input;
   track: InputAudioTrack;
+  volume: number;
 }
 
 interface LoadedVideoInput {
@@ -69,16 +71,20 @@ export async function exportEditedVideo(
   preferredMimeType: string,
   fps: VideoFps,
   trimRanges: readonly TrimRange[],
-  audioTracks: readonly ExportAudioTrack[]
+  audioTracks: readonly ExportAudioTrack[],
+  isVideoVisible: boolean
 ): Promise<ExportedVideo> {
   validateTrimRanges(trimRanges);
   const videoInput = createVideoInput();
-  const audioInputs = audioTracks.map((audioTrack) => createAudioInput(audioTrack.kind));
+  const audioInputs = audioTracks.map((audioTrack) => ({
+    input: createAudioInput(audioTrack.kind),
+    volume: audioTrack.volume
+  }));
   let writer: RecordingFileWriter | null = null;
   let output: Output | null = null;
   try {
     const loadedVideo = await loadVideoInput(videoInput);
-    const loadedAudioInputs = await Promise.all(audioInputs.map(async (input) => await loadAudioInput(input)));
+    const loadedAudioInputs = await Promise.all(audioInputs.map(async ({ input, volume }) => await loadAudioInput(input, volume)));
     const isMp4 = preferredMimeType.startsWith(mp4MimeType);
     const fileExtension: VideoFileExtension = isMp4 ? "mp4" : "webm";
     const mimeType = isMp4 ? mp4MimeType : webmMimeType;
@@ -116,7 +122,9 @@ export async function exportEditedVideo(
 
     await output.start();
     await Promise.all([
-      encodeVideoRanges(loadedVideo.track, videoSource, trimRanges),
+      isVideoVisible
+        ? encodeVideoRanges(loadedVideo.track, videoSource, trimRanges)
+        : encodeBlankVideoRanges(videoSource, trimRanges, fps, { height, width }),
       ...(audioSource
         ? [encodeAudioRanges(loadedAudioInputs, audioSource, trimRanges)]
         : [])
@@ -129,7 +137,7 @@ export async function exportEditedVideo(
   } finally {
     videoInput.dispose();
     for (const audioInput of audioInputs) {
-      audioInput.dispose();
+      audioInput.input.dispose();
     }
   }
 }
@@ -203,7 +211,7 @@ async function loadVideoInput(input: Input): Promise<LoadedVideoInput> {
   return { input, track };
 }
 
-async function loadAudioInput(input: Input): Promise<LoadedAudioInput> {
+async function loadAudioInput(input: Input, volume: number): Promise<LoadedAudioInput> {
   if (!await input.canRead()) {
     throw new Error("A recording audio track could not be read for export.");
   }
@@ -217,7 +225,7 @@ async function loadAudioInput(input: Input): Promise<LoadedAudioInput> {
     throw new Error("This system cannot decode a recording audio track for export.");
   }
 
-  return { input, track };
+  return { input, track, volume };
 }
 
 async function assertEncodingSupport(
@@ -267,6 +275,45 @@ async function encodeVideoRanges(
     }
 
     outputOffset += trimRange.end - trimRange.start;
+  }
+
+  outputSource.close();
+}
+
+async function encodeBlankVideoRanges(
+  outputSource: VideoSampleSource,
+  trimRanges: readonly TrimRange[],
+  fps: VideoFps,
+  size: { height: number; width: number }
+): Promise<void> {
+  const canvas = new OffscreenCanvas(size.width, size.height);
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("The hidden video frame canvas is unavailable.");
+  }
+
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, size.width, size.height);
+  const frameDuration = 1 / fps;
+  let outputOffset = 0;
+  for (const trimRange of trimRanges) {
+    const rangeDuration = trimRange.end - trimRange.start;
+    const frameCount = Math.max(1, Math.round(rangeDuration / frameDuration));
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      const frameStart = frameIndex * frameDuration;
+      const isLastFrame = frameIndex === frameCount - 1;
+      const sample = new VideoSample(canvas, {
+        duration: isLastFrame ? Math.max(minimumSampleDurationSeconds, rangeDuration - frameStart) : frameDuration,
+        timestamp: outputOffset + frameStart
+      });
+      try {
+        await outputSource.add(sample, { keyFrame: frameIndex === 0 });
+      } finally {
+        sample.close();
+      }
+    }
+
+    outputOffset += rangeDuration;
   }
 
   outputSource.close();
@@ -329,10 +376,10 @@ async function renderAudioChunk(
     frameCount,
     recordingAudioSampleRate
   );
-  const gain = context.createGain();
-  gain.gain.value = audioMixGain(inputs.length);
-  gain.connect(context.destination);
   for (const input of inputs) {
+    const gain = context.createGain();
+    gain.gain.value = audioMixGain(inputs.length) * input.volume;
+    gain.connect(context.destination);
     const sink = new AudioSampleSink(input.track);
     for await (const sample of sink.samples(start, end)) {
       scheduleAudioSample(context, gain, sample, start, end);

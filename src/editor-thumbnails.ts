@@ -12,6 +12,11 @@ export interface TimelineThumbnail {
   url: string;
 }
 
+export interface TimelineFilmstrip {
+  offsetSeconds: number;
+  thumbnails: TimelineThumbnail[];
+}
+
 export function timelineThumbnailTimes(durationSeconds: number, thumbnailCount: number): number[] {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new RangeError("The thumbnail duration must be positive and finite.");
@@ -29,30 +34,41 @@ export function timelineThumbnailTimes(durationSeconds: number, thumbnailCount: 
   return times;
 }
 
-export function timelineThumbnailsForSegment(
+export function timelineFilmstrip(
   thumbnails: readonly TimelineThumbnail[],
-  segment: TimelineSegment
-): TimelineThumbnail[] {
+  segment: TimelineSegment,
+  tileDurationSeconds: number
+): TimelineFilmstrip {
+  if (!Number.isFinite(tileDurationSeconds) || tileDurationSeconds <= 0) {
+    throw new RangeError("The filmstrip tile duration must be positive and finite.");
+  }
+
   if (thumbnails.length === 0) {
-    return [];
+    return { offsetSeconds: 0, thumbnails: [] };
   }
 
-  const matchingThumbnails = thumbnails.filter((thumbnail) =>
-    thumbnail.sourceTime >= segment.sourceStart && thumbnail.sourceTime < segment.sourceEnd);
-  if (matchingThumbnails.length > 0) {
-    return matchingThumbnails;
+  const firstTileIndex = Math.floor(segment.sourceStart / tileDurationSeconds);
+  const endTileIndex = Math.max(firstTileIndex + 1, Math.ceil(segment.sourceEnd / tileDurationSeconds));
+  const tileThumbnails: TimelineThumbnail[] = [];
+  for (let tileIndex = firstTileIndex; tileIndex < endTileIndex; tileIndex += 1) {
+    tileThumbnails.push(nearestTimelineThumbnail(thumbnails, (tileIndex + half) * tileDurationSeconds));
   }
 
-  const segmentMidpoint = (segment.sourceStart + segment.sourceEnd) * half;
+  return {
+    offsetSeconds: segment.sourceStart - firstTileIndex * tileDurationSeconds,
+    thumbnails: tileThumbnails
+  };
+}
+
+function nearestTimelineThumbnail(thumbnails: readonly TimelineThumbnail[], sourceTime: number): TimelineThumbnail {
   let closestThumbnail = requiredFirstThumbnail(thumbnails);
-
   for (const candidate of thumbnails.slice(1)) {
-    if (Math.abs(candidate.sourceTime - segmentMidpoint) < Math.abs(closestThumbnail.sourceTime - segmentMidpoint)) {
+    if (Math.abs(candidate.sourceTime - sourceTime) < Math.abs(closestThumbnail.sourceTime - sourceTime)) {
       closestThumbnail = candidate;
     }
   }
 
-  return [closestThumbnail];
+  return closestThumbnail;
 }
 
 function requiredFirstThumbnail(thumbnails: readonly TimelineThumbnail[]): TimelineThumbnail {

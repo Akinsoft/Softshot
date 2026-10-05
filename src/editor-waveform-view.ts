@@ -1,17 +1,17 @@
-import {
-  timelineDuration,
-  timelineLocationsAt,
-  type TimelineSegment
-} from "./editor-timeline.js";
+import { type TimelineSegment, timelineSegmentDuration } from "./editor-timeline.js";
 
 const waveformBarSpacingPx = 2;
+const waveformClipGapPx = 2;
+const waveformClipRadiusPx = 5;
 const waveformMinimumBarHeightPx = 1;
 const half = 0.5;
+const activeWaveformColors = { bars: "rgba(94, 234, 212, 0.88)", clip: "rgba(45, 212, 191, 0.13)" };
+const mutedWaveformColors = { bars: "rgba(180, 188, 198, 0.42)", clip: "rgba(148, 163, 184, 0.08)" };
 
-export function timelineWaveformPeaks(
+export function segmentWaveformPeaks(
   sourcePeaks: readonly number[],
   sourceDurationSeconds: number,
-  segments: readonly TimelineSegment[],
+  segment: TimelineSegment,
   outputPeakCount: number
 ): number[] {
   if (sourcePeaks.length === 0 || sourcePeaks.some((peak) => !Number.isFinite(peak) || peak < 0 || peak > 1)) {
@@ -26,18 +26,22 @@ export function timelineWaveformPeaks(
     throw new RangeError("The waveform output peak count must be a positive integer.");
   }
 
-  const editedDurationSeconds = timelineDuration(segments);
-  const outputIndexes = Array.from({ length: outputPeakCount }).keys();
-  const timelineTimes = Array.from(
-    outputIndexes,
-    (outputIndex) => ((outputIndex + half) / outputPeakCount) * editedDurationSeconds
-  );
-  return timelineLocationsAt(segments, timelineTimes).map(({ sourceTime }) => {
-    const sourceIndex = Math.min(
-      Math.floor((sourceTime / sourceDurationSeconds) * sourcePeaks.length),
-      sourcePeaks.length - 1
+  const segmentDurationSeconds = timelineSegmentDuration(segment);
+  const sourcePeaksPerSecond = sourcePeaks.length / sourceDurationSeconds;
+  return Array.from(Array.from({ length: outputPeakCount }).keys(), (outputIndex) => {
+    const binStartSeconds = segment.sourceStart + (outputIndex / outputPeakCount) * segmentDurationSeconds;
+    const binEndSeconds = segment.sourceStart + ((outputIndex + 1) / outputPeakCount) * segmentDurationSeconds;
+    const firstPeakIndex = Math.min(Math.floor(binStartSeconds * sourcePeaksPerSecond), sourcePeaks.length - 1);
+    const endPeakIndex = Math.min(
+      Math.max(firstPeakIndex + 1, Math.ceil(binEndSeconds * sourcePeaksPerSecond)),
+      sourcePeaks.length
     );
-    return sourcePeaks[sourceIndex] ?? 0;
+    let peak = 0;
+    for (let peakIndex = firstPeakIndex; peakIndex < endPeakIndex; peakIndex += 1) {
+      peak = Math.max(peak, sourcePeaks[peakIndex] ?? 0);
+    }
+
+    return peak;
   });
 }
 
@@ -45,8 +49,9 @@ export function drawTimelineWaveform(
   canvas: HTMLCanvasElement,
   sourcePeaks: readonly number[],
   sourceDurationSeconds: number,
-  segments: readonly TimelineSegment[],
-  isMuted: boolean
+  segment: TimelineSegment,
+  isMuted: boolean,
+  volume: number
 ): void {
   const bounds = canvas.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0) {
@@ -63,13 +68,26 @@ export function drawTimelineWaveform(
 
   context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
   context.clearRect(0, 0, bounds.width, bounds.height);
+  const colors = isMuted ? mutedWaveformColors : activeWaveformColors;
+  context.beginPath();
+  context.roundRect(
+    waveformClipGapPx * half,
+    0,
+    Math.max(0, bounds.width - waveformClipGapPx),
+    bounds.height,
+    waveformClipRadiusPx
+  );
+  context.fillStyle = colors.clip;
+  context.fill();
+  context.clip();
+
   const outputPeakCount = Math.max(1, Math.floor(bounds.width / waveformBarSpacingPx));
-  const peaks = timelineWaveformPeaks(sourcePeaks, sourceDurationSeconds, segments, outputPeakCount);
+  const peaks = segmentWaveformPeaks(sourcePeaks, sourceDurationSeconds, segment, outputPeakCount);
   const centerY = bounds.height / waveformBarSpacingPx;
   const maximumHeight = Math.max(waveformMinimumBarHeightPx, centerY - waveformMinimumBarHeightPx);
-  context.fillStyle = isMuted ? "rgba(180, 188, 198, 0.5)" : "rgba(96, 202, 246, 0.92)";
+  context.fillStyle = colors.bars;
   for (const [peakIndex, peak] of peaks.entries()) {
-    const height = Math.max(waveformMinimumBarHeightPx, peak * maximumHeight);
+    const height = Math.max(waveformMinimumBarHeightPx, Math.min(peak * volume, 1) * maximumHeight);
     context.fillRect(
       peakIndex * waveformBarSpacingPx,
       centerY - height,
