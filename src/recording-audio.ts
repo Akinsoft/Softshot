@@ -8,17 +8,17 @@ import {
 } from "./audio-quality.js";
 import { stopTracks } from "./desktop-capture.js";
 import { RecordingFileWriter, stopMediaRecorder } from "./recording-file-writer.js";
-import type { AudioSourceKind, RecordingAudioTrack } from "./shared.js";
+import type { RecordingAudioSourceKind, RecordingAudioTrack } from "./shared.js";
 
 type RecordingAudioErrorHandler = (error: unknown) => void;
 
 interface AudioInput {
-  kind: AudioSourceKind;
+  kind: RecordingAudioSourceKind;
   track: MediaStreamTrack;
 }
 
 interface AudioRecorder {
-  kind: AudioSourceKind;
+  kind: RecordingAudioSourceKind;
   mimeType: string;
   recorder: MediaRecorder;
   writer: RecordingFileWriter;
@@ -27,7 +27,7 @@ interface AudioRecorder {
 interface AudioGraph {
   context: AudioContext;
   mixedTrack: MediaStreamTrack;
-  sourceTracks: Array<{ kind: AudioSourceKind; track: MediaStreamTrack }>;
+  sourceTracks: Array<{ kind: RecordingAudioSourceKind; track: MediaStreamTrack }>;
 }
 
 export class RecordingAudio {
@@ -220,7 +220,7 @@ async function createAudioGraph(inputs: readonly AudioInput[]): Promise<AudioGra
   }
 }
 
-async function createAudioRecorder(kind: AudioSourceKind, track: MediaStreamTrack): Promise<AudioRecorder> {
+async function createAudioRecorder(kind: RecordingAudioSourceKind, track: MediaStreamTrack): Promise<AudioRecorder> {
   if (!MediaRecorder.isTypeSupported(recordingAudioMasterMimeType)) {
     throw new Error("This system does not support high-quality Opus audio recording.");
   }

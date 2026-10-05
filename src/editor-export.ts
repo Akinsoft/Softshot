@@ -25,7 +25,7 @@ import {
   recordingAudioSampleRate
 } from "./audio-quality.js";
 import { RecordingFileWriter } from "./recording-file-writer.js";
-import type { AudioSourceKind, VideoFileExtension, VideoFps } from "./shared.js";
+import type { AudioSourceKind, VideoFileExtension } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 import { videoBitrate } from "./video-bitrate.js";
 
@@ -73,7 +73,7 @@ interface LoadedVideoInput {
 
 export async function exportEditedVideo(
   preferredMimeType: string,
-  fps: VideoFps,
+  fps: number,
   trimRanges: readonly TrimRange[],
   audioTracks: readonly ExportAudioTrack[],
   isVideoVisible: boolean
@@ -287,7 +287,7 @@ async function encodeVideoRanges(
 async function encodeBlankVideoRanges(
   outputSource: VideoSampleSource,
   trimRanges: readonly TrimRange[],
-  fps: VideoFps,
+  fps: number,
   size: { height: number; width: number }
 ): Promise<void> {
   const canvas = new OffscreenCanvas(size.width, size.height);

@@ -18,7 +18,13 @@ export const videoQualityDimensions = {
 export type CaptureMode = "screenshot" | "video";
 export type CapturePipeline = "composited" | "direct";
 export type DrawingTool = "select" | "pen" | "arrow";
-export type AudioSourceKind = "microphone" | "system";
+export const recordingAudioSourceKinds = ["microphone", "system"] as const;
+export const audioSourceKinds = [...recordingAudioSourceKinds, "clip"] as const;
+const recordingAudioSourceKindSet: ReadonlySet<unknown> = new Set(recordingAudioSourceKinds);
+const audioSourceKindSet: ReadonlySet<unknown> = new Set(audioSourceKinds);
+
+export type RecordingAudioSourceKind = (typeof recordingAudioSourceKinds)[number];
+export type AudioSourceKind = (typeof audioSourceKinds)[number];
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
 export type VideoFileExtension = "mp4" | "webm";
@@ -45,13 +51,17 @@ export interface OverlayBootstrap {
   toolbarDisplayId: number;
 }
 
+export type EditorSource =
+  | { capturePipeline: CapturePipeline; encoder: RecordingEncoder; kind: "recording" }
+  | { fileName: string; kind: "file" };
+
 export interface EditorBootstrap {
   audioTracks: EditorAudioTrack[];
-  capturePipeline: CapturePipeline;
+  canReuseSourceFile: boolean;
   durationSeconds: number;
-  encoder: RecordingEncoder;
-  fps: VideoFps;
+  fps: number;
   mimeType: string;
+  source: EditorSource;
   sourceFilePath: string;
   sourceUrl: string;
 }
@@ -64,7 +74,7 @@ export interface EditorAudioTrack {
 }
 
 export interface RecordingAudioTrack {
-  kind: AudioSourceKind;
+  kind: RecordingAudioSourceKind;
   mimeType: string;
   recordingId: string;
 }
@@ -152,4 +162,12 @@ export interface SoftshotApi {
   onSettingsChanged(handler: SettingsChangedEventHandler): () => void;
   settingsReadyToShow(): Promise<void>;
   updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
+}
+
+export function isAudioSourceKind(value: unknown): value is AudioSourceKind {
+  return audioSourceKindSet.has(value);
+}
+
+export function isRecordingAudioSourceKind(value: unknown): value is RecordingAudioSourceKind {
+  return recordingAudioSourceKindSet.has(value);
 }

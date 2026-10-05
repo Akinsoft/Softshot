@@ -11,6 +11,7 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 - Cursor-free region recording: switch the same selection into video mode, then record just that part of the screen with desktop audio and an optional microphone.
 - Simple quality controls: choose `720p` or `1080p` and `30fps` or `60fps`.
 - Trim before sharing: recordings open in a focused editor so you can keep only the useful part.
+- Edit existing clips: right-click an MP4, MOV, MKV, or WebM file and choose Open with > Softshot, or pick Open video in the tray menu.
 - Local-first sharing: no account, cloud workspace, or project library between the capture and your clipboard.
 - Tray-first desktop app: Softshot stays out of the way until you need it.
 

@@ -27,8 +27,8 @@ import {
 import { drawTimelineWaveform } from "./editor-waveform-view.js";
 import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, PreparedVideoFile, VideoFps } from "./shared.js";
-import { videoFpsOptions } from "./shared.js";
+import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, EditorSource, PreparedVideoFile } from "./shared.js";
+import { isAudioSourceKind, videoFpsOptions } from "./shared.js";
 import { getSoftshotApi, reportAsyncError, reportError } from "./softshot-api.js";
 import { setTooltipLabel, TooltipController } from "./ui-tooltip.js";
 
@@ -111,6 +111,16 @@ const noPointerId = -1;
 const ariaHiddenAttributeName = "aria-hidden";
 const ariaPressedAttributeName = "aria-pressed";
 const reducedMotionMediaQuery = "(prefers-reduced-motion: reduce)";
+const audioTrackLabels: Record<AudioSourceKind, string> = {
+  clip: "Audio",
+  microphone: "Mic",
+  system: "Desktop"
+};
+const audioTrackIcons: Record<AudioSourceKind, () => string> = {
+  clip: clipTrackIcon,
+  microphone: microphoneTrackIcon,
+  system: desktopTrackIcon
+};
 
 interface PreparedVideo {
   filePath: string;
@@ -222,7 +232,7 @@ class VideoEditorApp {
   private readonly audioMetersByKind = new Map<AudioSourceKind, AudioMeter>();
   private durationSeconds = zeroSeconds;
   private filmstripTileWidthPx = 0;
-  private fps: VideoFps = videoFpsOptions.high;
+  private fps: number = videoFpsOptions.high;
   private isBusy = false;
   private isClosing = false;
   private mimeType = defaultMimeType;
@@ -230,6 +240,7 @@ class VideoEditorApp {
   private playheadSeconds = zeroSeconds;
   private preparedVideo: PreparedVideo | null = null;
   private selectedSegmentId: number | null = null;
+  private canReuseSourceFile = false;
   private sourceFilePath = "";
   private sourceUrl = "";
   private statusHandle: ReturnType<typeof setTimeout> | null = null;
@@ -1051,7 +1062,8 @@ class VideoEditorApp {
 
   private async createPreparedVideo(key: string, sourceRanges: readonly TrimRange[]): Promise<PreparedVideo> {
     const singleSourceRange = sourceRanges.length === 1 ? sourceRanges[0] : null;
-    if (this.hasDefaultAudioMix()
+    if (this.canReuseSourceFile
+      && this.hasDefaultAudioMix()
       && this.isVideoTrackVisible
       && singleSourceRange
       && singleSourceRange.start <= fullSourceRangeToleranceSeconds) {
@@ -1062,8 +1074,10 @@ class VideoEditorApp {
         };
       }
 
-      const trimmedFile = await getSoftshotApi().trimEditorVideoEnd(singleSourceRange.end);
-      return preparedVideoFromFile(key, trimmedFile);
+      if (!this.hasEmbeddedAudio()) {
+        const trimmedFile = await getSoftshotApi().trimEditorVideoEnd(singleSourceRange.end);
+        return preparedVideoFromFile(key, trimmedFile);
+      }
     }
 
     const exportedVideo = await this.exportVideoForSourceRanges(sourceRanges);
@@ -1081,6 +1095,10 @@ class VideoEditorApp {
         kind: audioTrack.kind,
         volume: this.audioTrackVolume(audioTrack.kind)
       }));
+  }
+
+  private hasEmbeddedAudio(): boolean {
+    return this.audioTracks.some((audioTrack) => audioTrack.sourceFilePath === this.sourceFilePath);
   }
 
   private hasDefaultAudioMix(): boolean {
@@ -1262,15 +1280,14 @@ class VideoEditorApp {
     this.durationSeconds = positiveDuration(bootstrap.durationSeconds);
     this.fps = bootstrap.fps;
     this.mimeType = bootstrap.mimeType;
+    this.canReuseSourceFile = bootstrap.canReuseSourceFile;
     this.sourceFilePath = bootstrap.sourceFilePath;
     this.sourceUrl = bootstrap.sourceUrl;
     this.video.muted = this.audioTracks.length > 0;
     this.video.src = this.sourceUrl;
     this.createAudioPreviewElements();
     this.renderAudioTracks();
-    const encoderLabel = bootstrap.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding";
-    const pipelineLabel = bootstrap.capturePipeline === "direct" ? "Direct capture" : "Composited capture";
-    this.showStatus(`${encoderLabel}, ${pipelineLabel}`);
+    this.showStatus(editorSourceStatus(bootstrap.source));
   }
 
   private async loadAudioWaveforms(): Promise<void> {
@@ -2339,7 +2356,7 @@ function preparedVideoFromFile(key: string, file: PreparedVideoFile): PreparedVi
 }
 
 function audioSourceKindFromString(value: string | undefined): AudioSourceKind {
-  if (value === "microphone" || value === "system") {
+  if (isAudioSourceKind(value)) {
     return value;
   }
 
@@ -2347,15 +2364,25 @@ function audioSourceKindFromString(value: string | undefined): AudioSourceKind {
 }
 
 function audioTrackLabel(kind: AudioSourceKind): string {
-  return kind === "microphone" ? "Mic" : "Desktop";
+  return audioTrackLabels[kind];
+}
+
+function editorSourceStatus(source: EditorSource): string {
+  if (source.kind === "file") {
+    return source.fileName;
+  }
+
+  const encoderLabel = source.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding";
+  const pipelineLabel = source.capturePipeline === "direct" ? "Direct capture" : "Composited capture";
+  return `${encoderLabel}, ${pipelineLabel}`;
 }
 
 function audioTrackIcon(kind: AudioSourceKind): string {
-  if (kind === "microphone") {
-    return microphoneTrackIcon();
-  }
+  return audioTrackIcons[kind]();
+}
 
-  return desktopTrackIcon();
+function clipTrackIcon(): string {
+  return speakerTrackIcon(`<path d="M16.5 9.5a4 4 0 0 1 0 5" /><path d="M19 7a7.5 7.5 0 0 1 0 10" />`);
 }
 
 function audioTrackMuteIcon(isMuted: boolean): string {

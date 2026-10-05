@@ -35,7 +35,7 @@ export async function remuxVideoEnd(
       showWarnings: false,
       trim: { end: endSeconds }
     });
-    if (!conversion.isValid) {
+    if (!conversion.isValid || conversion.discardedTracks.length > 0) {
       const reasons = conversion.discardedTracks.map((track) => track.reason).join(", ");
       const reasonDetails = reasons ? `: ${reasons}` : ".";
       throw new Error(`The recording cannot be remuxed${reasonDetails}`);

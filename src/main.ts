@@ -39,6 +39,7 @@ import type {
   EditorBootstrap,
   OverlayBootstrap,
   PreparedVideoFile,
+  RecordingAudioSourceKind,
   RecordingAudioTrack,
   RecordingEncoder,
   RecordingFile,
@@ -48,13 +49,14 @@ import type {
   VideoFileExtension,
   VideoFps
 } from "./shared";
-import { videoFpsOptions } from "./shared";
+import { isAudioSourceKind, isRecordingAudioSourceKind, videoFpsOptions } from "./shared";
 import {
   recordingRetentionMs,
   shortLivedRecordingFilePrefix,
   shortLivedRecordingRetentionMs,
   standardRecordingRetentionMs
 } from "./temporary-retention";
+import { probeVideoFile } from "./video-file-probe";
 import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 
 const appName = "Softshot";
@@ -101,6 +103,7 @@ const maxCaptureShortcutKeyCount = 3;
 const firstFunctionKey = 1;
 const lastFunctionKey = 24;
 const maxShortcutModifierKeyCount = maxCaptureShortcutKeyCount - 1;
+const openableVideoFileExtensions: ReadonlySet<string> = new Set(["mkv", "mov", "mp4", "webm"]);
 
 const modifierShortcutKeys = ["Control", "Alt", "Shift", "Meta"] as const;
 const modifierKeys = new Set<string>(modifierShortcutKeys);
@@ -286,6 +289,8 @@ class SoftshotApp {
 
   private tray: Tray | null = null;
 
+  private initialization: Promise<void> = Promise.resolve();
+
   private capture(): void {
     if (this.requestActiveOverlayStop()) {
       return;
@@ -318,6 +323,19 @@ class SoftshotApp {
     }
 
     throw new Error("The prepared recording file does not belong to this editor.");
+  }
+
+  private isReusableEditorSourceFile(webContentsId: number, filePath: string): boolean {
+    return this.editorDataByWebContents.get(webContentsId)?.canReuseSourceFile === true
+      && this.editorSourceFilesByWebContents.get(webContentsId) === filePath;
+  }
+
+  private assertEditorPreparedFile(webContentsId: number, filePath: string): void {
+    if (this.isReusableEditorSourceFile(webContentsId, filePath)) {
+      return;
+    }
+
+    this.assertEditorTempFile(webContentsId, filePath);
   }
 
   private registerEditorSavePath(webContentsId: number, filePath: string): void {
@@ -1212,10 +1230,18 @@ class SoftshotApp {
     return result.filePath;
   }
 
-  private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
+  private async editorVideoDefaultSavePath(editorData: EditorBootstrap, fileExtension: VideoFileExtension): Promise<string> {
+    if (editorData.source.kind === "file") {
+      const sourceName = path.basename(editorData.sourceFilePath, path.extname(editorData.sourceFilePath));
+      return path.join(path.dirname(editorData.sourceFilePath), `${sourceName} edited.${fileExtension}`);
+    }
+
     const targetDirectory = path.join(app.getPath("videos"), appName);
     await mkdir(targetDirectory, { recursive: true });
+    return path.join(targetDirectory, `${appName} ${this.timestamp()}.${fileExtension}`);
+  }
 
+  private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
     const parentWindow = BrowserWindow.fromWebContents(event.sender);
     const editorData = this.editorDataByWebContents.get(event.sender.id);
     if (!editorData) {
@@ -1224,14 +1250,14 @@ class SoftshotApp {
 
     const fileExtension = videoFileExtension(editorData.mimeType);
     const options: Electron.SaveDialogOptions = {
-      defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.${fileExtension}`),
+      defaultPath: await this.editorVideoDefaultSavePath(editorData, fileExtension),
       filters: [
         {
           name: fileExtension === "mp4" ? "MP4 video" : "WebM video",
           extensions: [fileExtension]
         }
       ],
-      title: "Save recording"
+      title: editorData.source.kind === "file" ? "Save video" : "Save recording"
     };
     const result = parentWindow && !parentWindow.isDestroyed()
       ? await dialog.showSaveDialog(parentWindow, options)
@@ -1864,72 +1890,21 @@ class SoftshotApp {
 
       const editorAudioTracks = await this.editorAudioTracksFromRecordingFiles(audioTrackFiles);
       const overlay = BrowserWindow.fromWebContents(event.sender);
-      const editorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-      const editor = this.createEditorWindow(editorDisplay);
-      const editorWebContentsId = editor.webContents.id;
-      this.activeEditorWindows.add(editor);
-      this.editorDataByWebContents.set(editorWebContentsId, {
-        audioTracks: editorAudioTracks,
-        capturePipeline,
-        durationSeconds,
-        encoder,
-        fps,
-        mimeType,
-        sourceFilePath: recordingFile.filePath,
-        sourceUrl: pathToFileURL(recordingFile.filePath).toString()
-      });
-      this.editorSourceFilesByWebContents.set(editorWebContentsId, recordingFile.filePath);
-      this.registerEditorTempFile(editorWebContentsId, recordingFile.filePath);
-      for (const audioTrackFile of audioTrackFiles) {
-        this.registerEditorTempFile(editorWebContentsId, audioTrackFile.file.filePath);
-      }
-
+      const editor = this.createEditor(
+        {
+          audioTracks: editorAudioTracks,
+          canReuseSourceFile: true,
+          durationSeconds,
+          fps,
+          mimeType,
+          source: { capturePipeline, encoder, kind: "recording" },
+          sourceFilePath: recordingFile.filePath,
+          sourceUrl: pathToFileURL(recordingFile.filePath).toString()
+        },
+        recordingFiles.map((file) => file.filePath)
+      );
       isRecordingFileOwnedByEditor = true;
-
-      editor.once("ready-to-show", (): void => {
-        this.showEditorWindow(editor);
-      });
-
-      editor.on("close", (closeEvent): void => {
-        if (this.isQuitting
-          || editor.webContents.isCrashed()
-          || (!this.hasRecordingTempFilesForOwner(editorWebContentsId)
-            && !this.editorOperationCountsByWebContents.has(editorWebContentsId))) {
-          return;
-        }
-
-        closeEvent.preventDefault();
-        void this.showErrorSafely(
-          "Please wait for the current editor operation to finish before closing the editor."
-        );
-      });
-
-      editor.on("closed", (): void => {
-        this.activeEditorWindows.delete(editor);
-        this.editorDataByWebContents.delete(editorWebContentsId);
-        this.editorOperationCountsByWebContents.delete(editorWebContentsId);
-        this.editorSavePathsByWebContents.delete(editorWebContentsId);
-        void this.cleanupAbandonedRecordingFiles(editorWebContentsId, false).catch((error: unknown): void => {
-          this.reportBackgroundError("Could not clean up an unfinished video export.", error);
-        });
-        void this.cleanupEditorTempFiles(
-          editorWebContentsId,
-          this.completedEditorWebContents.delete(editorWebContentsId)
-        ).catch((error: unknown): void => {
-          this.reportBackgroundError("Could not clean up temporary editor files.", error);
-        });
-      });
-
-      try {
-        await editor.loadFile(path.join(app.getAppPath(), "src", "editor.html"));
-        this.showEditorWindow(editor);
-      } catch (error) {
-        if (!editor.isDestroyed()) {
-          editor.close();
-        }
-
-        throw error;
-      }
+      await this.loadEditor(editor);
 
       if (overlay && !overlay.isDestroyed()) {
         overlay.close();
@@ -1941,6 +1916,126 @@ class SoftshotApp {
         } catch (cleanupError) {
           throw combinedError("Could not open the editor or preserve its recording files.", [error, cleanupError]);
         }
+      }
+
+      throw error;
+    }
+  }
+
+  private async openVideoFileEditor(filePath: string): Promise<void> {
+    await this.initialization;
+    const sourceFileExtension = fileExtensionName(filePath);
+    const editedFileExtension = editedVideoFileExtension(sourceFileExtension);
+    const mimeType = `video/${editedFileExtension}`;
+    const probe = await probeVideoFile(filePath);
+    const sourceUrl = pathToFileURL(filePath).toString();
+    const editor = this.createEditor(
+      {
+        audioTracks: probe.hasAudio
+          ? [{ kind: "clip", mimeType, sourceFilePath: filePath, sourceUrl }]
+          : [],
+        canReuseSourceFile: sourceFileExtension === editedFileExtension,
+        durationSeconds: probe.durationSeconds,
+        fps: probe.fps,
+        mimeType,
+        source: { fileName: path.basename(filePath), kind: "file" },
+        sourceFilePath: filePath,
+        sourceUrl
+      },
+      []
+    );
+    await this.loadEditor(editor);
+  }
+
+  private async openVideoFileEditorWithErrorHandling(filePath: string): Promise<void> {
+    try {
+      await this.openVideoFileEditor(filePath);
+    } catch (error) {
+      await this.showErrorSafely(`Could not open ${path.basename(filePath)} in the editor.`, error);
+    }
+  }
+
+  private openVideoFileEditors(filePaths: readonly string[]): void {
+    for (const filePath of filePaths) {
+      void this.openVideoFileEditorWithErrorHandling(filePath);
+    }
+  }
+
+  private async chooseVideoFilesToOpenWithErrorHandling(): Promise<void> {
+    try {
+      const result = await dialog.showOpenDialog({
+        filters: [
+          {
+            name: "Videos",
+            extensions: [...openableVideoFileExtensions]
+          }
+        ],
+        properties: ["openFile", "multiSelections"],
+        title: "Open video"
+      });
+      if (!result.canceled) {
+        this.openVideoFileEditors(result.filePaths);
+      }
+    } catch (error) {
+      await this.showErrorSafely("Could not choose a video to open.", error);
+    }
+  }
+
+  private createEditor(data: EditorBootstrap, temporaryFilePaths: readonly string[]): BrowserWindow {
+    const editorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const editor = this.createEditorWindow(editorDisplay);
+    const editorWebContentsId = editor.webContents.id;
+    this.activeEditorWindows.add(editor);
+    this.editorDataByWebContents.set(editorWebContentsId, data);
+    this.editorSourceFilesByWebContents.set(editorWebContentsId, data.sourceFilePath);
+    for (const temporaryFilePath of temporaryFilePaths) {
+      this.registerEditorTempFile(editorWebContentsId, temporaryFilePath);
+    }
+
+    editor.once("ready-to-show", (): void => {
+      this.showEditorWindow(editor);
+    });
+
+    editor.on("close", (closeEvent): void => {
+      if (this.isQuitting
+        || editor.webContents.isCrashed()
+        || (!this.hasRecordingTempFilesForOwner(editorWebContentsId)
+          && !this.editorOperationCountsByWebContents.has(editorWebContentsId))) {
+        return;
+      }
+
+      closeEvent.preventDefault();
+      void this.showErrorSafely(
+        "Please wait for the current editor operation to finish before closing the editor."
+      );
+    });
+
+    editor.on("closed", (): void => {
+      this.activeEditorWindows.delete(editor);
+      this.editorDataByWebContents.delete(editorWebContentsId);
+      this.editorOperationCountsByWebContents.delete(editorWebContentsId);
+      this.editorSavePathsByWebContents.delete(editorWebContentsId);
+      void this.cleanupAbandonedRecordingFiles(editorWebContentsId, false).catch((error: unknown): void => {
+        this.reportBackgroundError("Could not clean up an unfinished video export.", error);
+      });
+      void this.cleanupEditorTempFiles(
+        editorWebContentsId,
+        this.completedEditorWebContents.delete(editorWebContentsId)
+      ).catch((error: unknown): void => {
+        this.reportBackgroundError("Could not clean up temporary editor files.", error);
+      });
+    });
+
+    return editor;
+  }
+
+  private async loadEditor(editor: BrowserWindow): Promise<void> {
+    try {
+      await editor.loadFile(path.join(app.getAppPath(), "src", "editor.html"));
+      this.showEditorWindow(editor);
+    } catch (error) {
+      if (!editor.isDestroyed()) {
+        editor.close();
       }
 
       throw error;
@@ -2272,33 +2367,10 @@ class SoftshotApp {
 
     ipcMain.handle("editor:copy-prepared-video", async (event, filePath: string): Promise<void> => {
       await this.runEditorOperation(event.sender.id, async (): Promise<void> => {
-        this.assertEditorTempFile(event.sender.id, filePath);
-        const editorData = this.editorDataByWebContents.get(event.sender.id);
-        if (!editorData) {
-          throw new Error(missingEditorRecordingDataMessage);
-        }
-
-        const clipboardFilePath = await this.createTemporaryVideoFilePath(
-          videoFileExtension(editorData.mimeType),
-          shortLivedRecordingFilePrefix
-        );
-        try {
-          await link(filePath, clipboardFilePath);
-          await writeFileDropListToClipboard(clipboardFilePath);
-        } catch (error) {
-          await rm(clipboardFilePath, { force: true });
-          throw error;
-        }
-
-        const previousClipboardFilePath = this.editorClipboardFilesByWebContents.get(event.sender.id);
-        if (previousClipboardFilePath) {
-          this.editorTempFilesByWebContents.get(event.sender.id)?.delete(previousClipboardFilePath);
-          await rm(previousClipboardFilePath, { force: true });
-        }
-
-        this.registerEditorTempFile(event.sender.id, clipboardFilePath);
-        this.editorClipboardFilesByWebContents.set(event.sender.id, clipboardFilePath);
-        this.completedEditorWebContents.add(event.sender.id);
+        this.assertEditorPreparedFile(event.sender.id, filePath);
+        await (this.editorTempFilesByWebContents.get(event.sender.id)?.has(filePath)
+          ? this.copyEditorTempVideoToClipboard(event.sender.id, filePath)
+          : writeFileDropListToClipboard(filePath));
         const editor = BrowserWindow.fromWebContents(event.sender);
         if (editor && !editor.isDestroyed()) {
           editor.focus();
@@ -2309,6 +2381,35 @@ class SoftshotApp {
     ipcMain.handle("editor:close", (event): void => {
       this.closeSenderWindow(event);
     });
+  }
+
+  private async copyEditorTempVideoToClipboard(webContentsId: number, filePath: string): Promise<void> {
+    const editorData = this.editorDataByWebContents.get(webContentsId);
+    if (!editorData) {
+      throw new Error(missingEditorRecordingDataMessage);
+    }
+
+    const clipboardFilePath = await this.createTemporaryVideoFilePath(
+      videoFileExtension(editorData.mimeType),
+      shortLivedRecordingFilePrefix
+    );
+    try {
+      await link(filePath, clipboardFilePath);
+      await writeFileDropListToClipboard(clipboardFilePath);
+    } catch (error) {
+      await rm(clipboardFilePath, { force: true });
+      throw error;
+    }
+
+    const previousClipboardFilePath = this.editorClipboardFilesByWebContents.get(webContentsId);
+    if (previousClipboardFilePath) {
+      this.editorTempFilesByWebContents.get(webContentsId)?.delete(previousClipboardFilePath);
+      await rm(previousClipboardFilePath, { force: true });
+    }
+
+    this.registerEditorTempFile(webContentsId, clipboardFilePath);
+    this.editorClipboardFilesByWebContents.set(webContentsId, clipboardFilePath);
+    this.completedEditorWebContents.add(webContentsId);
   }
 
   private registerSettingsIpcHandlers(): void {
@@ -2452,6 +2553,12 @@ class SoftshotApp {
     template.push(
       { type: "separator" },
       {
+        label: "Open video...",
+        click: (): void => {
+          void this.chooseVideoFilesToOpenWithErrorHandling();
+        }
+      },
+      {
         label: "Recent recordings",
         click: (): void => {
           void this.openRecordingTempDirectoryWithErrorHandling();
@@ -2588,7 +2695,7 @@ class SoftshotApp {
   }
 
   private async savePreparedEditorVideo(webContentsId: number, preparedFilePath: string, targetFilePath: string): Promise<void> {
-    this.assertEditorTempFile(webContentsId, preparedFilePath);
+    this.assertEditorPreparedFile(webContentsId, preparedFilePath);
     this.assertEditorSavePath(webContentsId, targetFilePath);
     await mkdir(path.dirname(targetFilePath), { recursive: true });
     await this.replaceFileAtomically(targetFilePath, async (temporaryFilePath): Promise<void> => {
@@ -2597,7 +2704,10 @@ class SoftshotApp {
     this.completedEditorWebContents.add(webContentsId);
     this.editorSavedFilesByWebContents.set(webContentsId, preparedFilePath);
     this.editorSavePathsByWebContents.get(webContentsId)?.delete(targetFilePath);
-    this.notifySaved("Recording saved", targetFilePath);
+    this.notifySaved(
+      this.editorDataByWebContents.get(webContentsId)?.source.kind === "file" ? "Video saved" : "Recording saved",
+      targetFilePath
+    );
   }
 
   private async createTemporaryVideoFilePath(
@@ -2651,8 +2761,15 @@ class SoftshotApp {
 
     this.registerNavigationGuards();
 
-    app.on("second-instance", (): void => {
-      this.capture();
+    app.on("second-instance", (...eventArguments): void => {
+      const [, argv, workingDirectory] = eventArguments;
+      const videoFilePaths = videoFilePathsFromArguments(argv, workingDirectory);
+      if (videoFilePaths.length === 0) {
+        this.capture();
+        return;
+      }
+
+      this.openVideoFileEditors(videoFilePaths);
     });
 
     app.on("before-quit", (): void => {
@@ -2668,7 +2785,8 @@ class SoftshotApp {
       this.debugLog("Kept tray app running after overlay closed.");
     });
 
-    void this.initializeWhenReady();
+    this.initialization = this.initializeWhenReady();
+    this.openVideoFileEditors(videoFilePathsFromArguments(process.argv, process.cwd()));
   }
 }
 
@@ -2676,7 +2794,7 @@ function padDatePart(part: number): string {
   return part.toString().padStart(timestampPartWidth, "0");
 }
 
-function audioTrackLabel(kind: AudioSourceKind): string {
+function audioTrackLabel(kind: RecordingAudioSourceKind): string {
   return kind === "microphone" ? "Microphone audio" : "Desktop audio";
 }
 
@@ -2700,16 +2818,20 @@ function recordingAudioTrackFromUnknown(value: unknown): RecordingAudioTrack {
   };
 }
 
-function recordingAudioTrackKindFromUnknown(value: Record<string, unknown>): AudioSourceKind {
-  return audioSourceKindFromUnknown(value.kind);
+function recordingAudioTrackKindFromUnknown(value: Record<string, unknown>): RecordingAudioSourceKind {
+  if (isRecordingAudioSourceKind(value.kind)) {
+    return value.kind;
+  }
+
+  throw new TypeError("Recording audio track kind must be microphone or system.");
 }
 
 function audioSourceKindFromUnknown(value: unknown): AudioSourceKind {
-  if (value === "microphone" || value === "system") {
+  if (isAudioSourceKind(value)) {
     return value;
   }
 
-  throw new TypeError("Audio track kind must be microphone or system.");
+  throw new TypeError("Audio track kind must be microphone, system, or clip.");
 }
 
 function recordingAudioTracksFromUnknown(value: unknown): RecordingAudioTrack[] {
@@ -2755,6 +2877,26 @@ function capturePipelineFromUnknown(value: unknown): CapturePipeline {
   }
 
   throw new TypeError("Recording capture pipeline must be composited or direct.");
+}
+
+function editedVideoFileExtension(sourceFileExtension: string): VideoFileExtension {
+  if (!openableVideoFileExtensions.has(sourceFileExtension)) {
+    throw new Error("Only MP4, MOV, MKV, and WebM videos can be opened in the editor.");
+  }
+
+  return sourceFileExtension === "webm" ? "webm" : "mp4";
+}
+
+function videoFilePathsFromArguments(argv: readonly string[], workingDirectory: string): string[] {
+  return argv
+    .slice(1)
+    .filter((argument) => !argument.startsWith("-")
+      && openableVideoFileExtensions.has(fileExtensionName(argument)))
+    .map((argument) => path.resolve(workingDirectory, argument));
+}
+
+function fileExtensionName(filePath: string): string {
+  return path.extname(filePath).slice(1).toLowerCase();
 }
 
 function videoFileExtension(mimeType: string): VideoFileExtension {
