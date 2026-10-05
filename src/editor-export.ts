@@ -34,6 +34,10 @@ const keyframeIntervalSeconds = 2;
 const minimumSampleDurationSeconds = 1e-6;
 const mp4MimeType = "video/mp4";
 const preferredHardwareAcceleration = "prefer-hardware";
+const videoEncoderHardwareAcceleration = {
+  avc: preferredHardwareAcceleration,
+  vp9: "no-preference"
+} as const;
 const webmMimeType = "video/webm";
 
 export interface TrimRange {
@@ -99,14 +103,14 @@ export async function exportEditedVideo(
     output = new Output({
       format: isMp4
         ? new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 1 })
-        : new WebMOutputFormat(),
+        : new WebMOutputFormat({ appendOnly: true }),
       target: new AppendOnlyStreamTarget(writer.writableStream())
     });
     const videoSource = new VideoSampleSource({
       bitrate,
       codec: videoCodec,
       contentHint: "detail",
-      hardwareAcceleration: preferredHardwareAcceleration,
+      hardwareAcceleration: videoEncoderHardwareAcceleration[videoCodec],
       keyFrameInterval: keyframeIntervalSeconds
     });
     const audioSource = loadedAudioInputs.length > 0
@@ -238,7 +242,7 @@ async function assertEncodingSupport(
 ): Promise<void> {
   const supportsVideo = await canEncodeVideo(videoCodec, {
     bitrate,
-    hardwareAcceleration: preferredHardwareAcceleration,
+    hardwareAcceleration: videoEncoderHardwareAcceleration[videoCodec],
     height,
     width
   });
