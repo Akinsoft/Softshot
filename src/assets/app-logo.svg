@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#25282e"/><stop offset="1" stop-color="#0f1013"/></linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8be0ff"/><stop offset="1" stop-color="#1aa3ea"/></linearGradient>
+    <linearGradient id="face2" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fd4fd"/><stop offset="1" stop-color="#0c8fd8"/></linearGradient>
+    <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#035a92"/><stop offset="1" stop-color="#0b7cc4"/></linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#tile)"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+  <g transform="translate(128 128) scale(0.72) translate(-128 -125.2)" stroke-linejoin="round">
+    <path d="M64 81.44L196 128.96L196 168.96L64 121.44Z" fill="url(#fold)" stroke="url(#fold)" stroke-width="4"/>
+    <path d="M196 26L64 81.44C42 85.44 42 119.44 64 121.44L196 66Z" fill="url(#face)" stroke="url(#face)" stroke-width="12"/>
+    <path d="M196 128.96C218 130.96 218 164.96 196 168.96L64 224.4L64 184.4Z" fill="url(#face2)" stroke="url(#face2)" stroke-width="12"/>
+  </g>
+</svg>
