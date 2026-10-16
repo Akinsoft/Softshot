@@ -1,7 +1,9 @@
 import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
 import { audioMixGain, recordingAudioSampleRate } from "./audio-quality.js";
 import { audioWaveformPeaks } from "./audio-waveform.js";
-import { type ExportAudioTrack, exportEditedVideo, type ExportedVideo, type TrimRange } from "./editor-export.js";
+import { type ExportAudioTrack, exportEdit, type ExportOptions, type TrimRange } from "./editor-export.js";
+import { ExportPanel } from "./editor-export-panel.js";
+import { type ExportPlan, type ExportSource, sourceExportPlan } from "./editor-export-settings.js";
 import {
   captureVideoTimelineThumbnails,
   releaseTimelineThumbnailUrls,
@@ -27,8 +29,15 @@ import {
 import { drawTimelineWaveform } from "./editor-waveform-view.js";
 import { playMedia, waitForMediaMetadata } from "./media-element.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { AudioSourceKind, EditorAudioTrack, EditorBootstrap, EditorSource, PreparedVideoFile } from "./shared.js";
-import { isAudioSourceKind, videoFpsOptions } from "./shared.js";
+import type {
+  AudioSourceKind,
+  CompletedOutputFile,
+  EditorAudioTrack,
+  EditorBootstrap,
+  EditorSource,
+  PreparedVideoFile
+} from "./shared.js";
+import { isAudioSourceKind, videoFileExtension, videoFpsOptions } from "./shared.js";
 import { getSoftshotApi, reportAsyncError, reportError } from "./softshot-api.js";
 import { setTooltipLabel, TooltipController } from "./ui-tooltip.js";
 
@@ -75,6 +84,7 @@ const spaceKey = " ";
 const backspaceKey = "backspace";
 const cutKey = "c";
 const endKey = "end";
+const exportKey = "e";
 const escapeKey = "escape";
 const handKey = "b";
 const homeKey = "home";
@@ -183,6 +193,18 @@ class VideoEditorApp {
   private readonly closeButton = getRequiredElement("editor-close-button", HTMLButtonElement);
   private readonly copyButton = getRequiredElement("editor-copy-button", HTMLButtonElement);
   private readonly cutButton = getRequiredElement("cut-button", HTMLButtonElement);
+  private readonly exportButton = getRequiredElement("editor-export-button", HTMLButtonElement);
+  private readonly exportPanel = new ExportPanel({
+    exportFile: async (plan, options): Promise<CompletedOutputFile> =>
+      await this.exportOutputFile(plan, this.sourceRangesForExport(), options),
+    exportSource: (): ExportSource => this.exportSource(),
+    setBusy: (isBusy): void => {
+      this.setBusy(isBusy);
+    },
+    showStatus: (message): void => {
+      this.showStatus(message);
+    }
+  });
   private readonly currentTimeText = getRequiredElement("current-time", HTMLSpanElement);
   private readonly audioTrackHeadersElement = getRequiredElement("audio-track-headers", HTMLDivElement);
   private readonly audioTracksElement = getRequiredElement("audio-tracks", HTMLElement);
@@ -326,6 +348,10 @@ class VideoEditorApp {
     this.saveButton.addEventListener("click", (): void => {
       this.runAsync(this.saveVideo(), "Could not save the recording.");
     });
+    this.exportButton.addEventListener("click", (): void => {
+      this.runAsync(this.openExportPanel(), "Could not open export.");
+    });
+    this.exportPanel.bind();
     this.audioTrackHeadersElement.addEventListener("click", (event): void => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>(audioMuteButtonSelector);
       if (!button) {
@@ -440,6 +466,10 @@ class VideoEditorApp {
 
   private bindKeyboardEvents(): void {
     addEventListener("keydown", (event): void => {
+      if (this.exportPanel.isOpen) {
+        return;
+      }
+
       const command = this.keyboardCommand(event);
       if (!command) {
         return;
@@ -461,13 +491,19 @@ class VideoEditorApp {
     }
 
     if (event.ctrlKey || event.metaKey) {
-      return this.historyKeyboardCommand(key, event.shiftKey);
+      return this.modifierKeyboardCommand(key, event.shiftKey);
     }
 
     return this.keyboardCommands.get(key) ?? null;
   }
 
-  private historyKeyboardCommand(key: string, isShiftPressed: boolean): KeyboardCommand | null {
+  private modifierKeyboardCommand(key: string, isShiftPressed: boolean): KeyboardCommand | null {
+    if (key === exportKey && !isShiftPressed) {
+      return { allowRepeat: false, run: (): void => {
+        this.runAsync(this.openExportPanel(), "Could not open export.");
+      } };
+    }
+
     if (key === redoKey || (key === undoKey && isShiftPressed)) {
       return { allowRepeat: false, run: (): void => {
         this.redoTimelineEdit();
@@ -1080,11 +1116,7 @@ class VideoEditorApp {
       }
     }
 
-    const exportedVideo = await this.exportVideoForSourceRanges(sourceRanges);
-    const preparedFile = await getSoftshotApi().completeEditorVideoFile(
-      exportedVideo.recordingId,
-      exportedVideo.mimeType
-    );
+    const preparedFile = await this.exportOutputFile(sourceExportPlan(this.exportSource()), sourceRanges);
     return preparedVideoFromFile(key, preparedFile);
   }
 
@@ -1261,14 +1293,40 @@ class VideoEditorApp {
     event.preventDefault();
   }
 
-  private async exportVideoForSourceRanges(sourceRanges: readonly TrimRange[]): Promise<ExportedVideo> {
-    return await exportEditedVideo(
-      this.mimeType,
-      this.fps,
+  private async exportOutputFile(
+    plan: ExportPlan,
+    sourceRanges: readonly TrimRange[],
+    options: ExportOptions = {}
+  ): Promise<CompletedOutputFile> {
+    const exportedFile = await exportEdit(
+      plan,
       sourceRanges,
       this.audioTracksForExport(),
-      this.isVideoTrackVisible
+      this.isVideoTrackVisible,
+      options
     );
+    return await getSoftshotApi().completeEditorOutputFile(exportedFile.recordingId, exportedFile.fileExtension);
+  }
+
+  private exportSource(): ExportSource {
+    return {
+      durationSeconds: this.editedDurationSeconds(),
+      format: videoFileExtension(this.mimeType),
+      fps: this.fps,
+      hasAudio: this.audioTracksForExport().length > 0,
+      height: this.video.videoHeight,
+      isVideoVisible: this.isVideoTrackVisible,
+      width: this.video.videoWidth
+    };
+  }
+
+  private async openExportPanel(): Promise<void> {
+    if (this.isInteractionLocked) {
+      return;
+    }
+
+    this.video.pause();
+    await this.exportPanel.open();
   }
 
   private loadRecording(bootstrap: EditorBootstrap): void {
@@ -1542,6 +1600,7 @@ class VideoEditorApp {
       this.closeButton,
       this.copyButton,
       this.cutButton,
+      this.exportButton,
       this.handButton,
       this.snapButton,
       this.videoTrackToggle,

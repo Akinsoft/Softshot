@@ -5,7 +5,9 @@ import type {
   AppSettingsUpdate,
   AudioSourceKind,
   CapturePipeline,
+  CompletedOutputFile,
   EditorBootstrap,
+  OutputFileExtension,
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingAudioTrack,
@@ -18,7 +20,6 @@ import type {
   SettingsKeybindEventHandler,
   SoftshotApi,
   StopRecordingRequestHandler,
-  VideoFileExtension,
   VideoFps
 } from "./shared";
 
@@ -29,7 +30,7 @@ const settingsChangedEventChannel = "settings:changed";
 const api: SoftshotApi = {
   appendRecordingFileChunk: async (recordingId: string, bytes: Uint8Array) =>
     ipcRenderer.invoke("recording:append-file-chunk", recordingId, bytes) as Promise<void>,
-  createRecordingFile: async (fileExtension: VideoFileExtension) =>
+  createRecordingFile: async (fileExtension: OutputFileExtension) =>
     ipcRenderer.invoke("recording:create-file", fileExtension) as Promise<RecordingFile>,
   discardRecordingFile: async (recordingId: string) =>
     ipcRenderer.invoke("recording:discard-file", recordingId) as Promise<void>,
@@ -65,8 +66,10 @@ const api: SoftshotApi = {
   readEditorAudioFile: async (kind: AudioSourceKind, start: number, end: number) =>
     ipcRenderer.invoke("editor:read-audio-file", kind, start, end) as Promise<Uint8Array>,
   chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
-  completeEditorVideoFile: async (recordingId: string, mimeType: string) =>
-    ipcRenderer.invoke("editor:complete-video-file", recordingId, mimeType) as Promise<PreparedVideoFile>,
+  chooseEditorExportPath: async (fileExtension: OutputFileExtension, fileLabel: string) =>
+    ipcRenderer.invoke("editor:choose-export-path", fileExtension, fileLabel) as Promise<SaveDialogResult>,
+  completeEditorOutputFile: async (recordingId: string, fileExtension: OutputFileExtension) =>
+    ipcRenderer.invoke("editor:complete-output-file", recordingId, fileExtension) as Promise<CompletedOutputFile>,
   trimEditorVideoEnd: async (endSeconds: number) =>
     ipcRenderer.invoke("editor:trim-video-end", endSeconds) as Promise<PreparedVideoFile>,
   savePreparedEditorVideo: async (preparedFilePath: string, targetFilePath: string) =>

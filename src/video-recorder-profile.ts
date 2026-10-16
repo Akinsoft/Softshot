@@ -1,5 +1,6 @@
 import { recordingAudioBitrate, recordingAudioChannelCount, recordingAudioSampleRate } from "./audio-quality.js";
 import type { RecordingEncoder, VideoFileExtension, VideoFps } from "./shared.js";
+import { videoFileExtension } from "./shared.js";
 import { hardwareVideoCodecs } from "./video-codecs.js";
 
 export interface VideoRecorderProfile {
@@ -64,7 +65,7 @@ export async function selectVideoRecorderProfile(
 
   return {
     encoder: "compatibility",
-    fileExtension: mimeType.startsWith("video/mp4") ? "mp4" : "webm",
+    fileExtension: videoFileExtension(mimeType),
     hardwareVideoCodec: null,
     mimeType
   };

@@ -4,6 +4,7 @@ import {
   AudioBufferSource,
   type AudioSample,
   AudioSampleSink,
+  BufferTarget,
   canEncodeAudio,
   canEncodeVideo,
   CustomSource,
@@ -12,33 +13,38 @@ import {
   type InputVideoTrack,
   Mp4OutputFormat,
   Output,
+  type Rotation,
   VideoSample,
   VideoSampleSink,
   VideoSampleSource,
+  type VideoTransformOptions,
+  WavOutputFormat,
   WebMOutputFormat
 } from "mediabunny";
 
-import {
-  audioMixGain,
-  recordingAudioBitrate,
-  recordingAudioChannelCount,
-  recordingAudioSampleRate
-} from "./audio-quality.js";
+import { audioMixGain, recordingAudioChannelCount, recordingAudioSampleRate } from "./audio-quality.js";
+import type { EncodedVideoPlan, ExportAudioPlan, ExportPlan, ExportVideoCodec, GifPlan } from "./editor-export-settings.js";
+import { exportVideoCodecLabel } from "./editor-export-settings.js";
+import { encodeGifRanges } from "./editor-gif-export.js";
+import { VideoUpscaler } from "./editor-upscaler.js";
 import { RecordingFileWriter } from "./recording-file-writer.js";
-import type { AudioSourceKind, VideoFileExtension } from "./shared.js";
+import type { AudioSourceKind, OutputFileExtension } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
-import { videoBitrate } from "./video-bitrate.js";
 
 const audioRenderChunkSeconds = 5;
+const bitsPerKilobit = 1000;
+const bufferedOutputChunkBytes = 4_194_304;
+const halfTurnDegrees = 180;
 const keyframeIntervalSeconds = 2;
 const minimumSampleDurationSeconds = 1e-6;
-const mp4MimeType = "video/mp4";
 const preferredHardwareAcceleration = "prefer-hardware";
-const videoEncoderHardwareAcceleration = {
-  avc: preferredHardwareAcceleration,
-  vp9: "no-preference"
-} as const;
-const webmMimeType = "video/webm";
+const hardwareThenAnyAcceleration = [preferredHardwareAcceleration, "no-preference"] as const;
+const videoEncoderAccelerations: Record<ExportVideoCodec, readonly HardwareAcceleration[]> = {
+  av1: hardwareThenAnyAcceleration,
+  avc: hardwareThenAnyAcceleration,
+  hevc: hardwareThenAnyAcceleration,
+  vp9: ["no-preference"]
+};
 
 export interface TrimRange {
   end: number;
@@ -50,9 +56,24 @@ export interface ExportAudioTrack {
   volume: number;
 }
 
-export interface ExportedVideo {
-  mimeType: string;
+export interface ExportedFile {
+  fileExtension: OutputFileExtension;
   recordingId: string;
+}
+
+export interface ExportOptions {
+  onProgress?: (progress: number) => void;
+  signal?: AbortSignal;
+}
+
+export interface VideoEncoderSize {
+  height: number;
+  width: number;
+}
+
+export interface VideoEncoderCheck extends VideoEncoderSize {
+  bitrate: number;
+  framerate: number;
 }
 
 interface EditorByteSource {
@@ -71,108 +92,349 @@ interface LoadedVideoInput {
   track: InputVideoTrack;
 }
 
-export async function exportEditedVideo(
-  preferredMimeType: string,
-  fps: number,
+interface VideoFrameLayout {
+  codedSize: VideoEncoderSize;
+  outputRotation: Rotation;
+  sourceRotation: Rotation;
+}
+
+interface VideoExportJob {
+  audioInputs: readonly LoadedAudioInput[];
+  audioPlan: ExportAudioPlan | null;
+  format: "mp4" | "webm";
+  isVideoVisible: boolean;
+  options: ExportOptions;
+  totalSeconds: number;
+  trimRanges: readonly TrimRange[];
+  videoPlan: EncodedVideoPlan;
+  videoTrack: InputVideoTrack;
+}
+
+type ExportTrackKind = "audio" | "video";
+
+export class ExportProgress {
+  private readonly processedSecondsByTrack = new Map<ExportTrackKind, number>();
+
+  constructor(
+    private readonly totalSeconds: number,
+    trackKinds: readonly ExportTrackKind[],
+    private readonly onProgress: ((progress: number) => void) | null
+  ) {
+    for (const trackKind of trackKinds) {
+      this.processedSecondsByTrack.set(trackKind, 0);
+    }
+  }
+
+  update(trackKind: ExportTrackKind, processedSeconds: number): void {
+    this.processedSecondsByTrack.set(trackKind, processedSeconds);
+    const slowestSeconds = Math.min(...this.processedSecondsByTrack.values());
+    this.onProgress?.(Math.min(1, Math.max(0, slowestSeconds / this.totalSeconds)));
+  }
+}
+
+export async function exportEdit(
+  plan: ExportPlan,
   trimRanges: readonly TrimRange[],
   audioTracks: readonly ExportAudioTrack[],
-  isVideoVisible: boolean
-): Promise<ExportedVideo> {
+  isVideoVisible: boolean,
+  options: ExportOptions = {}
+): Promise<ExportedFile> {
   validateTrimRanges(trimRanges);
-  const videoInput = createVideoInput();
-  const audioInputs = audioTracks.map((audioTrack) => ({
-    input: createAudioInput(audioTrack.kind),
-    volume: audioTrack.volume
-  }));
-  let writer: RecordingFileWriter | null = null;
-  let output: Output | null = null;
-  try {
-    const loadedVideo = await loadVideoInput(videoInput);
-    const loadedAudioInputs = await Promise.all(audioInputs.map(async ({ input, volume }) => await loadAudioInput(input, volume)));
-    const isMp4 = preferredMimeType.startsWith(mp4MimeType);
-    const fileExtension: VideoFileExtension = isMp4 ? "mp4" : "webm";
-    const mimeType = isMp4 ? mp4MimeType : webmMimeType;
-    const videoCodec = isMp4 ? "avc" : "vp9";
-    const audioCodec = isMp4 ? "aac" : "opus";
-    const width = await loadedVideo.track.getCodedWidth();
-    const height = await loadedVideo.track.getCodedHeight();
-    const bitrate = videoBitrate(width, height, fps);
-    await assertEncodingSupport(videoCodec, audioCodec, bitrate, width, height, loadedAudioInputs.length > 0);
+  const totalSeconds = trimRanges.reduce((total, trimRange) => total + trimRange.end - trimRange.start, 0);
+  if (plan.kind === "gif") {
+    return await exportGif(plan.gif, trimRanges, totalSeconds, options);
+  }
 
-    writer = await RecordingFileWriter.create(fileExtension);
-    output = new Output({
-      format: isMp4
+  if (plan.kind === "audio") {
+    return await exportAudioOnly(plan.format, plan.audio, trimRanges, audioTracks, totalSeconds, options);
+  }
+
+  const videoInput = await openVideoInput();
+  try {
+    const audioInputs = plan.audio ? await openAudioInputs(audioTracks) : [];
+    try {
+      return await exportVideo({
+        audioInputs,
+        audioPlan: plan.audio,
+        format: plan.format,
+        isVideoVisible,
+        options,
+        totalSeconds,
+        trimRanges,
+        videoPlan: plan.video,
+        videoTrack: videoInput.track
+      });
+    } finally {
+      disposeAudioInputs(audioInputs);
+    }
+  } finally {
+    videoInput.input.dispose();
+  }
+}
+
+export async function supportedVideoEncoderAcceleration(
+  codec: ExportVideoCodec,
+  encoderCheck: VideoEncoderCheck
+): Promise<HardwareAcceleration | null> {
+  const accelerations = videoEncoderAccelerations[codec];
+  for (const hardwareAcceleration of accelerations) {
+    const options = { ...encoderCheck, hardwareAcceleration };
+    if (await canEncodeVideo(codec, options)) {
+      return hardwareAcceleration;
+    }
+  }
+
+  return null;
+}
+
+async function exportVideo(job: VideoExportJob): Promise<ExportedFile> {
+  const { audioInputs, audioPlan, videoPlan, videoTrack } = job;
+  const codedSize = { height: await videoTrack.getCodedHeight(), width: await videoTrack.getCodedWidth() };
+  const sourceRotation = await videoTrack.getRotation();
+  const shouldKeepRotationMetadata = videoPlan.outputSize === null && (sourceRotation === 0 || job.format === "mp4");
+  const frameLayout: VideoFrameLayout = {
+    codedSize,
+    outputRotation: shouldKeepRotationMetadata ? sourceRotation : 0,
+    sourceRotation
+  };
+  const encoderSize = videoPlan.outputSize ?? (shouldKeepRotationMetadata ? codedSize : rotatedSize(codedSize, sourceRotation));
+  const hardwareAcceleration = await supportedVideoEncoderAcceleration(videoPlan.codec, {
+    ...encoderSize,
+    bitrate: videoPlan.bitrate,
+    framerate: videoPlan.fps
+  });
+  if (!hardwareAcceleration) {
+    const sizeLabel = `${String(encoderSize.width)}×${String(encoderSize.height)}`;
+    throw new Error(`This system cannot encode ${exportVideoCodecLabel(videoPlan.codec)} video at ${sizeLabel}.`);
+  }
+
+  const hasAudio = audioPlan !== null && audioInputs.length > 0;
+  if (hasAudio) {
+    await assertAudioEncodingSupport(audioPlan);
+  }
+
+  const upscaler = videoPlan.scaling === "up" && videoPlan.outputSize
+    ? new VideoUpscaler(videoPlan.outputSize.width, videoPlan.outputSize.height)
+    : null;
+  const transform = videoTransform(videoPlan, upscaler, !shouldKeepRotationMetadata);
+  try {
+    return await encodeVideoExport(job, transform, hardwareAcceleration, frameLayout);
+  } finally {
+    upscaler?.dispose();
+  }
+}
+
+async function encodeVideoExport(
+  job: VideoExportJob,
+  transform: VideoTransformOptions | null,
+  hardwareAcceleration: HardwareAcceleration,
+  frameLayout: VideoFrameLayout
+): Promise<ExportedFile> {
+  const { audioInputs, audioPlan, format, options, videoPlan, videoTrack } = job;
+  const hasAudio = audioPlan !== null && audioInputs.length > 0;
+  return await writeExportFile(format, async (writer) => {
+    const output = new Output({
+      format: format === "mp4"
         ? new Mp4OutputFormat({ fastStart: "fragmented", minimumFragmentDuration: 1 })
         : new WebMOutputFormat({ appendOnly: true }),
       target: new AppendOnlyStreamTarget(writer.writableStream())
     });
     const videoSource = new VideoSampleSource({
-      bitrate,
-      codec: videoCodec,
+      bitrate: videoPlan.bitrate,
+      bitrateMode: videoPlan.bitrateMode,
+      codec: videoPlan.codec,
       contentHint: "detail",
-      hardwareAcceleration: videoEncoderHardwareAcceleration[videoCodec],
-      keyFrameInterval: keyframeIntervalSeconds
+      hardwareAcceleration,
+      keyFrameInterval: keyframeIntervalSeconds,
+      ...(transform && { transform })
     });
-    const audioSource = loadedAudioInputs.length > 0
-      ? new AudioBufferSource({ bitrate: recordingAudioBitrate, codec: audioCodec })
-      : null;
+    const audioSource = hasAudio ? new AudioBufferSource({ bitrate: audioPlan.bitrate, codec: audioPlan.codec }) : null;
     output.addVideoTrack(videoSource, {
-      frameRate: fps,
-      rotation: await loadedVideo.track.getRotation()
+      frameRate: videoPlan.fps,
+      rotation: frameLayout.outputRotation
     });
     if (audioSource) {
       output.addAudioTrack(audioSource);
     }
 
-    await output.start();
-    await Promise.all([
-      isVideoVisible
-        ? encodeVideoRanges(loadedVideo.track, videoSource, trimRanges)
-        : encodeBlankVideoRanges(videoSource, trimRanges, fps, { height, width }),
-      ...(audioSource
-        ? [encodeAudioRanges(loadedAudioInputs, audioSource, trimRanges)]
-        : [])
-    ]);
-    await output.finalize();
-    await writer.finalize();
-    return { mimeType, recordingId: writer.recordingId };
-  } catch (error) {
-    return await discardFailedExport(output, writer, error);
+    const progress = new ExportProgress(job.totalSeconds, audioSource ? ["video", "audio"] : ["video"], options.onProgress ?? null);
+    await runOutput(output, async () => {
+      await Promise.all([
+        job.isVideoVisible
+          ? encodeVideoRanges(videoTrack, videoSource, job.trimRanges, progress, options.signal)
+          : encodeBlankVideoRanges(videoSource, job.trimRanges, videoPlan.fps, frameLayout, progress, options.signal),
+        ...(audioSource ? [encodeAudioRanges(audioInputs, audioSource, job.trimRanges, progress, options.signal)] : [])
+      ]);
+    });
+  });
+}
+
+async function exportAudioOnly(
+  format: "m4a" | "wav",
+  audioPlan: ExportAudioPlan,
+  trimRanges: readonly TrimRange[],
+  audioTracks: readonly ExportAudioTrack[],
+  totalSeconds: number,
+  options: ExportOptions
+): Promise<ExportedFile> {
+  if (audioTracks.length === 0) {
+    throw new Error("There is no sound to export.");
+  }
+
+  const audioInputs = await openAudioInputs(audioTracks);
+  try {
+    await assertAudioEncodingSupport(audioPlan);
+    return await writeExportFile(format, async (writer) => {
+      const target = new BufferTarget();
+      const output = new Output({
+        format: format === "m4a" ? new Mp4OutputFormat({ fastStart: "in-memory" }) : new WavOutputFormat(),
+        target
+      });
+      const audioSource = new AudioBufferSource({ bitrate: audioPlan.bitrate, codec: audioPlan.codec });
+      output.addAudioTrack(audioSource);
+      const progress = new ExportProgress(totalSeconds, ["audio"], options.onProgress ?? null);
+      await runOutput(output, async () => {
+        await encodeAudioRanges(audioInputs, audioSource, trimRanges, progress, options.signal);
+      });
+      await writeBufferedOutput(writer, target);
+    });
   } finally {
-    videoInput.dispose();
-    for (const audioInput of audioInputs) {
-      audioInput.input.dispose();
-    }
+    disposeAudioInputs(audioInputs);
   }
 }
 
-async function discardFailedExport(
-  output: Output | null,
-  writer: RecordingFileWriter | null,
-  exportError: unknown
-): Promise<never> {
-  const errors = [exportError];
-  if (output && output.state !== "canceled" && output.state !== "finalized") {
-    try {
-      await output.cancel();
-    } catch (error) {
-      errors.push(error);
-    }
+async function exportGif(
+  gifPlan: GifPlan,
+  trimRanges: readonly TrimRange[],
+  totalSeconds: number,
+  options: ExportOptions
+): Promise<ExportedFile> {
+  const videoInput = await openVideoInput();
+  try {
+    return await writeExportFile("gif", async (writer) => {
+      const streamWriter = writer.writableStream().getWriter();
+      const progress = new ExportProgress(totalSeconds, ["video"], options.onProgress ?? null);
+      await encodeGifRanges(videoInput.track, streamWriter, gifPlan, trimRanges, progress, options.signal);
+      await streamWriter.close();
+    });
+  } finally {
+    videoInput.input.dispose();
+  }
+}
+
+function videoTransform(
+  videoPlan: EncodedVideoPlan,
+  upscaler: VideoUpscaler | null,
+  shouldBakeRotation: boolean
+): VideoTransformOptions | null {
+  const { normalizeFrameRate, outputSize } = videoPlan;
+  const frameRate = normalizeFrameRate && { frameRate: videoPlan.fps };
+  if (upscaler) {
+    return {
+      ...frameRate,
+      force: true,
+      process: (sample): OffscreenCanvas => upscaler.upscale(sample.toCanvasImageSource(), sample.displayWidth, sample.displayHeight)
+    };
   }
 
-  if (writer) {
+  if (outputSize) {
+    return { ...frameRate, fit: "fill", height: outputSize.height, width: outputSize.width };
+  }
+
+  if (!shouldBakeRotation && !normalizeFrameRate) {
+    return null;
+  }
+
+  return { ...frameRate, force: shouldBakeRotation };
+}
+
+function rotatedSize(size: VideoEncoderSize, rotation: Rotation): VideoEncoderSize {
+  return rotation % halfTurnDegrees === 0 ? size : { height: size.width, width: size.height };
+}
+
+async function writeExportFile(
+  fileExtension: OutputFileExtension,
+  write: (writer: RecordingFileWriter) => Promise<void>
+): Promise<ExportedFile> {
+  const writer = await RecordingFileWriter.create(fileExtension);
+  try {
+    await write(writer);
+    await writer.finalize();
+    return { fileExtension, recordingId: writer.recordingId };
+  } catch (error) {
     try {
       await writer.discard();
-    } catch (error) {
-      errors.push(error);
+    } catch (discardError) {
+      throw new AggregateError([error, discardError], "Could not export or clean up the edited file.", { cause: discardError });
     }
+
+    throw error;
+  }
+}
+
+async function runOutput(output: Output, encode: () => Promise<void>): Promise<void> {
+  try {
+    await output.start();
+    await encode();
+    await output.finalize();
+  } catch (error) {
+    if (output.state !== "canceled" && output.state !== "finalized") {
+      try {
+        await output.cancel();
+      } catch (cancelError) {
+        throw new AggregateError([error, cancelError], "Could not export or stop the media encoder.", { cause: cancelError });
+      }
+    }
+
+    throw error;
+  }
+}
+
+async function writeBufferedOutput(writer: RecordingFileWriter, target: BufferTarget): Promise<void> {
+  const { buffer } = target;
+  if (!buffer) {
+    throw new Error("The exported audio is empty.");
   }
 
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Could not export or clean up the edited recording.");
+  const streamWriter = writer.writableStream().getWriter();
+  const bytes = new Uint8Array(buffer);
+  for (let offset = 0; offset < bytes.byteLength; offset += bufferedOutputChunkBytes) {
+    await streamWriter.write(bytes.subarray(offset, offset + bufferedOutputChunkBytes));
   }
 
-  throw exportError;
+  await streamWriter.close();
+}
+
+async function openVideoInput(): Promise<LoadedVideoInput> {
+  const input = createVideoInput();
+  try {
+    return { input, track: await loadVideoTrack(input) };
+  } catch (error) {
+    input.dispose();
+    throw error;
+  }
+}
+
+async function openAudioInputs(audioTracks: readonly ExportAudioTrack[]): Promise<LoadedAudioInput[]> {
+  const inputs = audioTracks.map((audioTrack) => ({
+    input: createAudioInput(audioTrack.kind),
+    volume: audioTrack.volume
+  }));
+  try {
+    return await Promise.all(inputs.map(async ({ input, volume }) => await loadAudioInput(input, volume)));
+  } catch (error) {
+    for (const { input } of inputs) {
+      input.dispose();
+    }
+
+    throw error;
+  }
+}
+
+function disposeAudioInputs(audioInputs: readonly LoadedAudioInput[]): void {
+  for (const audioInput of audioInputs) {
+    audioInput.input.dispose();
+  }
 }
 
 function createEditorInput(source: EditorByteSource): Input {
@@ -198,7 +460,7 @@ function createAudioInput(kind: AudioSourceKind): Input {
   });
 }
 
-async function loadVideoInput(input: Input): Promise<LoadedVideoInput> {
+async function loadVideoTrack(input: Input): Promise<InputVideoTrack> {
   if (!await input.canRead()) {
     throw new Error("The source recording could not be read for export.");
   }
@@ -212,7 +474,7 @@ async function loadVideoInput(input: Input): Promise<LoadedVideoInput> {
     throw new Error("This system cannot decode the source recording for export.");
   }
 
-  return { input, track };
+  return track;
 }
 
 async function loadAudioInput(input: Input, volume: number): Promise<LoadedAudioInput> {
@@ -232,45 +494,37 @@ async function loadAudioInput(input: Input, volume: number): Promise<LoadedAudio
   return { input, track, volume };
 }
 
-async function assertEncodingSupport(
-  videoCodec: "avc" | "vp9",
-  audioCodec: "aac" | "opus",
-  bitrate: number,
-  width: number,
-  height: number,
-  hasAudio: boolean
-): Promise<void> {
-  const supportsVideo = await canEncodeVideo(videoCodec, {
-    bitrate,
-    hardwareAcceleration: videoEncoderHardwareAcceleration[videoCodec],
-    height,
-    width
-  });
-  if (!supportsVideo) {
-    throw new Error(`This system cannot encode edited ${videoCodec.toUpperCase()} video.`);
-  }
-
-  if (hasAudio && !await canEncodeAudio(audioCodec, {
-    bitrate: recordingAudioBitrate,
+async function assertAudioEncodingSupport(audioPlan: ExportAudioPlan): Promise<void> {
+  const isSupported = await canEncodeAudio(audioPlan.codec, {
+    bitrate: audioPlan.bitrate,
     numberOfChannels: recordingAudioChannelCount,
     sampleRate: recordingAudioSampleRate
-  })) {
-    throw new Error(`This system cannot encode edited ${audioCodec.toUpperCase()} audio.`);
+  });
+  if (isSupported) {
+    return;
   }
+
+  const bitrateLabel = `${String(audioPlan.bitrate / bitsPerKilobit)} kbps`;
+  throw new Error(`This system cannot encode ${audioPlan.codec.toUpperCase()} audio at ${bitrateLabel}.`);
 }
 
 async function encodeVideoRanges(
   inputTrack: InputVideoTrack,
   outputSource: VideoSampleSource,
-  trimRanges: readonly TrimRange[]
+  trimRanges: readonly TrimRange[],
+  progress: ExportProgress,
+  signal: AbortSignal | undefined
 ): Promise<void> {
   let outputOffset = 0;
   for (const trimRange of trimRanges) {
     const sink = new VideoSampleSink(inputTrack, { hardwareAcceleration: preferredHardwareAcceleration });
     let isFirstSample = true;
     for await (const sample of sink.samples(trimRange.start, trimRange.end)) {
+      signal?.throwIfAborted();
+      const processedSeconds = outputOffset + Math.min(trimRange.end, sample.timestamp + sample.duration) - trimRange.start;
       if (await encodeVideoSample(sample, outputSource, trimRange, outputOffset, isFirstSample)) {
         isFirstSample = false;
+        progress.update("video", processedSeconds);
       }
     }
 
@@ -288,26 +542,31 @@ async function encodeBlankVideoRanges(
   outputSource: VideoSampleSource,
   trimRanges: readonly TrimRange[],
   fps: number,
-  size: { height: number; width: number }
+  frameLayout: VideoFrameLayout,
+  progress: ExportProgress,
+  signal: AbortSignal | undefined
 ): Promise<void> {
-  const canvas = new OffscreenCanvas(size.width, size.height);
+  const { codedSize } = frameLayout;
+  const canvas = new OffscreenCanvas(codedSize.width, codedSize.height);
   const context = canvas.getContext("2d");
   if (!context) {
     throw new Error("The hidden video frame canvas is unavailable.");
   }
 
   context.fillStyle = "#000";
-  context.fillRect(0, 0, size.width, size.height);
+  context.fillRect(0, 0, codedSize.width, codedSize.height);
   const frameDuration = 1 / fps;
   let outputOffset = 0;
   for (const trimRange of trimRanges) {
     const rangeDuration = trimRange.end - trimRange.start;
     const frameCount = Math.max(1, Math.round(rangeDuration / frameDuration));
     for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      signal?.throwIfAborted();
       const frameStart = frameIndex * frameDuration;
       const isLastFrame = frameIndex === frameCount - 1;
       const sample = new VideoSample(canvas, {
         duration: isLastFrame ? Math.max(minimumSampleDurationSeconds, rangeDuration - frameStart) : frameDuration,
+        rotation: frameLayout.sourceRotation,
         timestamp: outputOffset + frameStart
       });
       try {
@@ -315,6 +574,8 @@ async function encodeBlankVideoRanges(
       } finally {
         sample.close();
       }
+
+      progress.update("video", outputOffset + Math.min(rangeDuration, frameStart + frameDuration));
     }
 
     outputOffset += rangeDuration;
@@ -354,16 +615,23 @@ async function encodeVideoSample(
 async function encodeAudioRanges(
   inputs: readonly LoadedAudioInput[],
   outputSource: AudioBufferSource,
-  trimRanges: readonly TrimRange[]
+  trimRanges: readonly TrimRange[],
+  progress: ExportProgress,
+  signal: AbortSignal | undefined
 ): Promise<void> {
+  let outputOffset = 0;
   for (const trimRange of trimRanges) {
     let chunkStart = trimRange.start;
     while (chunkStart < trimRange.end) {
+      signal?.throwIfAborted();
       const chunkEnd = Math.min(chunkStart + audioRenderChunkSeconds, trimRange.end);
       const buffer = await renderAudioChunk(inputs, chunkStart, chunkEnd);
       await outputSource.add(buffer);
       chunkStart = chunkEnd;
+      progress.update("audio", outputOffset + chunkEnd - trimRange.start);
     }
+
+    outputOffset += trimRange.end - trimRange.start;
   }
 
   outputSource.close();

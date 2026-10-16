@@ -8,15 +8,20 @@ const settingsTemporaryFileName = `${settingsFileName}.tmp`;
 const settingsIndentSpaces = 2;
 const maxShortcutKeyCount = 3;
 const defaultCaptureShortcut = "PrintScreen";
+const defaultExportDirectory = null;
+const defaultExportPresetId = null;
 const defaultMicrophoneDeviceId = null;
 const isSystemAudioEnabledByDefault = true;
 const keySeparator = "+";
+const exportPresetIdPattern = /^[a-z\d-]{1,40}$/u;
 
 const modifierKeys = new Set(["Alt", "Control", "Meta", "Shift"]);
 
 export function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSettings {
   return {
     captureShortcut: defaultCaptureShortcut,
+    exportDirectory: defaultExportDirectory,
+    exportPresetId: defaultExportPresetId,
     launchAtStartup: isLaunchAtStartupEnabled,
     microphoneDeviceId: defaultMicrophoneDeviceId,
     systemAudioEnabled: isSystemAudioEnabledByDefault
@@ -77,6 +82,8 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
 
   return {
     captureShortcut: captureShortcutFromJson(value),
+    exportDirectory: exportDirectoryFromJson(value),
+    exportPresetId: exportPresetIdFromJson(value),
     launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
     microphoneDeviceId: microphoneDeviceIdFromJson(value),
     systemAudioEnabled: isSystemAudioEnabledFromJson(value)
@@ -93,6 +100,38 @@ function captureShortcutFromJson(value: Record<string, unknown>): string {
   }
 
   return validateCaptureShortcut(value.captureShortcut);
+}
+
+export function validateExportDirectory(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || !path.isAbsolute(value)) {
+    throw new TypeError("Export folder must be an absolute path or null.");
+  }
+
+  return value;
+}
+
+export function validateExportPresetId(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (typeof value !== "string" || !exportPresetIdPattern.test(value)) {
+    throw new TypeError("Export preset id must be a short preset name or null.");
+  }
+
+  return value;
+}
+
+function exportDirectoryFromJson(value: Record<string, unknown>): string | null {
+  return "exportDirectory" in value ? validateExportDirectory(value.exportDirectory) : defaultExportDirectory;
+}
+
+function exportPresetIdFromJson(value: Record<string, unknown>): string | null {
+  return "exportPresetId" in value ? validateExportPresetId(value.exportPresetId) : defaultExportPresetId;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {

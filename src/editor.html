@@ -30,6 +30,14 @@
             <path d="M8 17h8" />
           </svg>
         </button>
+
+        <button id="editor-export-button" class="icon-button" type="button" data-tooltip="Export" data-tooltip-shortcut="Ctrl+E" aria-label="Export">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15V3" />
+            <path d="m7 8 5-5 5 5" />
+            <path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4" />
+          </svg>
+        </button>
       </div>
 
       <button id="editor-close-button" class="icon-button close-button" type="button" data-tooltip="Close" aria-label="Close">
@@ -204,9 +212,102 @@
       </section>
     </main>
 
+    <dialog id="export-dialog" class="export-dialog" aria-labelledby="export-title">
+      <header class="export-header">
+        <h2 id="export-title" class="export-title">Export</h2>
+        <button id="export-close-button" class="icon-button close-button" type="button" aria-label="Close export">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6 18 18" />
+            <path d="M18 6 6 18" />
+          </svg>
+        </button>
+      </header>
+
+      <div class="export-body">
+        <nav id="export-preset-list" class="export-preset-list softshot-scroll" aria-label="Export presets"></nav>
+
+        <section class="export-settings softshot-scroll" aria-labelledby="export-preset-name">
+          <div class="export-preset-heading">
+            <span id="export-preset-name" class="export-preset-name"></span>
+            <span id="export-preset-description" class="export-preset-description"></span>
+          </div>
+
+          <div class="export-fields">
+            <label class="export-field">
+              <span class="export-field-label">Format</span>
+              <select id="export-format-select" class="softshot-select"></select>
+            </label>
+            <label id="export-codec-field" class="export-field">
+              <span class="export-field-label">Video codec</span>
+              <select id="export-codec-select" class="softshot-select"></select>
+            </label>
+            <label id="export-resolution-field" class="export-field">
+              <span class="export-field-label">Resolution</span>
+              <select id="export-resolution-select" class="softshot-select"></select>
+            </label>
+            <label id="export-fps-field" class="export-field">
+              <span class="export-field-label">Frame rate</span>
+              <select id="export-fps-select" class="softshot-select"></select>
+            </label>
+            <label id="export-quality-field" class="export-field">
+              <span class="export-field-label">Quality</span>
+              <select id="export-quality-select" class="softshot-select"></select>
+            </label>
+            <label id="export-size-field" class="export-field">
+              <span class="export-field-label">Size limit</span>
+              <select id="export-size-select" class="softshot-select"></select>
+            </label>
+            <label id="export-audio-field" class="export-field">
+              <span class="export-field-label">Audio</span>
+              <select id="export-audio-select" class="softshot-select"></select>
+            </label>
+            <label id="export-upscale-field" class="export-field" for="export-upscale-checkbox">
+              <span class="export-field-label">Upscaling</span>
+              <span class="export-toggle-row">
+                <span class="softshot-toggle">
+                  <input id="export-upscale-checkbox" type="checkbox" />
+                  <span class="softshot-toggle-track" aria-hidden="true">
+                    <span class="softshot-toggle-thumb"></span>
+                  </span>
+                </span>
+                <span class="export-toggle-text">Enlarge smaller videos</span>
+              </span>
+            </label>
+          </div>
+
+          <ul id="export-messages" class="export-messages" aria-live="polite"></ul>
+        </section>
+      </div>
+
+      <footer class="export-footer">
+        <div id="export-summary" class="export-summary"></div>
+        <div id="export-progress" class="export-progress" hidden>
+          <div class="export-progress-track">
+            <span id="export-progress-bar" class="export-progress-bar"></span>
+          </div>
+          <span id="export-progress-text" class="export-progress-text"></span>
+        </div>
+        <div class="export-actions">
+          <div class="export-destination" role="radiogroup" aria-label="Export destination">
+            <label class="export-destination-option">
+              <input type="radio" name="export-destination" value="file" checked />
+              <span>Save file</span>
+            </label>
+            <label class="export-destination-option">
+              <input type="radio" name="export-destination" value="clipboard" />
+              <span>Copy</span>
+            </label>
+          </div>
+          <button id="export-cancel-button" class="softshot-button" type="button">Cancel</button>
+          <button id="export-start-button" class="softshot-button primary" type="button">Export</button>
+        </div>
+      </footer>
+    </dialog>
+
     <script type="importmap">
       {
         "imports": {
+          "gifenc": "../node_modules/gifenc/dist/gifenc.esm.js",
           "mediabunny": "../node_modules/mediabunny/dist/bundles/mediabunny.min.mjs"
         }
       }

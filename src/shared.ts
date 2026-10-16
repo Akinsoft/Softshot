@@ -28,6 +28,9 @@ export type AudioSourceKind = (typeof audioSourceKinds)[number];
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
 export type VideoFileExtension = "mp4" | "webm";
+export const outputFileExtensions = ["mp4", "webm", "gif", "m4a", "wav"] as const;
+export type OutputFileExtension = (typeof outputFileExtensions)[number];
+const outputFileExtensionSet: ReadonlySet<unknown> = new Set(outputFileExtensions);
 export type RecordingEncoder = "hardware" | "compatibility";
 
 export interface Rect {
@@ -95,8 +98,15 @@ export interface PreparedVideoFile {
   filePath: string;
 }
 
+export interface CompletedOutputFile {
+  byteLength: number;
+  filePath: string;
+}
+
 export interface AppSettings {
   captureShortcut: string;
+  exportDirectory: string | null;
+  exportPresetId: string | null;
   launchAtStartup: boolean;
   microphoneDeviceId: string | null;
   systemAudioEnabled: boolean;
@@ -104,6 +114,7 @@ export interface AppSettings {
 
 export interface AppSettingsUpdate {
   captureShortcut?: string;
+  exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;
   systemAudioEnabled?: boolean;
@@ -122,7 +133,7 @@ export type StopRecordingRequestHandler = () => void;
 
 export interface SoftshotApi {
   appendRecordingFileChunk(recordingId: string, bytes: Uint8Array): Promise<void>;
-  createRecordingFile(fileExtension: VideoFileExtension): Promise<RecordingFile>;
+  createRecordingFile(fileExtension: OutputFileExtension): Promise<RecordingFile>;
   discardRecordingFile(recordingId: string): Promise<void>;
   getBootstrap(): Promise<OverlayBootstrap>;
   saveScreenshot(bytes: Uint8Array): Promise<SaveDialogResult>;
@@ -142,7 +153,8 @@ export interface SoftshotApi {
   getEditorAudioFileSize(kind: AudioSourceKind): Promise<number>;
   readEditorAudioFile(kind: AudioSourceKind, start: number, end: number): Promise<Uint8Array>;
   chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
-  completeEditorVideoFile(recordingId: string, mimeType: string): Promise<PreparedVideoFile>;
+  chooseEditorExportPath(fileExtension: OutputFileExtension, fileLabel: string): Promise<SaveDialogResult>;
+  completeEditorOutputFile(recordingId: string, fileExtension: OutputFileExtension): Promise<CompletedOutputFile>;
   trimEditorVideoEnd(endSeconds: number): Promise<PreparedVideoFile>;
   savePreparedEditorVideo(preparedFilePath: string, targetFilePath: string): Promise<SaveResult>;
   copyPreparedEditorVideo(filePath: string): Promise<void>;
@@ -166,6 +178,14 @@ export interface SoftshotApi {
 
 export function isAudioSourceKind(value: unknown): value is AudioSourceKind {
   return audioSourceKindSet.has(value);
+}
+
+export function isOutputFileExtension(value: unknown): value is OutputFileExtension {
+  return outputFileExtensionSet.has(value);
+}
+
+export function videoFileExtension(mimeType: string): VideoFileExtension {
+  return mimeType.startsWith("video/mp4") ? "mp4" : "webm";
 }
 
 export function isRecordingAudioSourceKind(value: unknown): value is RecordingAudioSourceKind {

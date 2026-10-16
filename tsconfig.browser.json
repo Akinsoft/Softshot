@@ -10,6 +10,7 @@
     "src/desktop-capture.ts",
     "src/editor.ts",
     "src/editor-*.ts",
+    "src/gifenc.d.ts",
     "src/overlay.ts",
     "src/overlay-*.ts",
     "src/recording-*.ts",

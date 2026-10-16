@@ -1,4 +1,4 @@
-import type { VideoFileExtension } from "./shared.js";
+import type { OutputFileExtension } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const recordingChunkIntervalMs = 1000;
@@ -7,7 +7,7 @@ const recorderStopTimeoutMs = 10_000;
 type RecordingFileErrorHandler = (error: unknown) => void;
 
 export class RecordingFileWriter {
-  static async create(fileExtension: VideoFileExtension): Promise<RecordingFileWriter> {
+  static async create(fileExtension: OutputFileExtension): Promise<RecordingFileWriter> {
     const recordingFile = await getSoftshotApi().createRecordingFile(fileExtension);
     return new RecordingFileWriter(recordingFile.id);
   }

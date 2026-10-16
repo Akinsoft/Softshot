@@ -40,6 +40,10 @@
       "src/styles.css",
       "LICENSE.md",
       "package.json",
+      "!node_modules/gifenc/src/**/*",
+      "!node_modules/gifenc/dist/gifenc.js",
+      "!node_modules/gifenc/dist/*.map",
+      "!node_modules/gifenc/README.md",
       "!node_modules/mediabunny/src/**/*",
       "!node_modules/mediabunny/dist/modules/**/*",
       "!node_modules/mediabunny/dist/bundles/mediabunny.cjs",
@@ -86,6 +90,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
+    "gifenc": "^1.0.3",
     "mediabunny": "^1.50.8"
   }
 }

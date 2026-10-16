@@ -24,7 +24,13 @@ import {
   webContents as electronWebContents
 } from "electron";
 
-import { loadAppSettings, saveAppSettings, validateCaptureShortcut } from "./app-settings";
+import {
+  loadAppSettings,
+  saveAppSettings,
+  validateCaptureShortcut,
+  validateExportDirectory,
+  validateExportPresetId
+} from "./app-settings";
 import { startUpdateChecks } from "./app-updater";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
@@ -35,8 +41,10 @@ import type {
   CapturedDisplay,
   CaptureDisplay,
   CapturePipeline,
+  CompletedOutputFile,
   EditorAudioTrack,
   EditorBootstrap,
+  OutputFileExtension,
   OverlayBootstrap,
   PreparedVideoFile,
   RecordingAudioSourceKind,
@@ -49,7 +57,13 @@ import type {
   VideoFileExtension,
   VideoFps
 } from "./shared";
-import { isAudioSourceKind, isRecordingAudioSourceKind, videoFpsOptions } from "./shared";
+import {
+  isAudioSourceKind,
+  isOutputFileExtension,
+  isRecordingAudioSourceKind,
+  videoFileExtension,
+  videoFpsOptions
+} from "./shared";
 import {
   recordingRetentionMs,
   shortLivedRecordingFilePrefix,
@@ -92,12 +106,32 @@ const webmScanChunkSizeBytes = 65_536;
 const webmSignatureCarryByteLength = webmClusterSignatureLength - 1;
 const mp4FileTypeSignature = new TextEncoder().encode("ftyp");
 const mp4MediaDataSignature = new TextEncoder().encode("mdat");
+const gifFileSignature = new TextEncoder().encode("GIF89a");
+const wavRiffSignature = new TextEncoder().encode("RIFF");
+const wavWaveSignature = new TextEncoder().encode("WAVE");
+const wavWaveSignatureOffset = 8;
+const fileHeaderByteLength = 12;
+const exportFileLabelPattern = /^[\w ]{1,40}$/u;
+const outputFileFilterNames: Record<OutputFileExtension, string> = {
+  gif: "GIF image",
+  m4a: "M4A audio",
+  mp4: "MP4 video",
+  wav: "WAV audio",
+  webm: "WebM video"
+};
 const missingEditorRecordingDataMessage = "Missing editor recording data.";
 const noKeyValue = "Unidentified";
 const mediaPermissionName = "media";
 const settingsKeybindEventChannel = "settings:keybind-event";
 const settingsChangedEventChannel = "settings:changed";
-const appSettingsUpdateKeys = new Set(["captureShortcut", "launchAtStartup", "microphoneDeviceId", "systemAudioEnabled"]);
+const appSettingsUpdateKeys = new Set([
+  "captureShortcut",
+  "exportDirectory",
+  "exportPresetId",
+  "launchAtStartup",
+  "microphoneDeviceId",
+  "systemAudioEnabled"
+]);
 const settingsKeybindShortcutRearmDelayMs = 250;
 const maxCaptureShortcutKeyCount = 3;
 const firstFunctionKey = 1;
@@ -388,7 +422,7 @@ class SoftshotApp {
     }
   }
 
-  private async createRecordingFile(ownerWebContentsId: number, fileExtension: VideoFileExtension): Promise<RecordingFile> {
+  private async createRecordingFile(ownerWebContentsId: number, fileExtension: OutputFileExtension): Promise<RecordingFile> {
     const id = randomUUID();
     const filePath = await this.createTemporaryVideoFilePath(fileExtension);
     await writeFile(filePath, "");
@@ -463,6 +497,25 @@ class SoftshotApp {
     return mimeType.startsWith("video/mp4")
       ? await this.fileHasMp4Media(recordingFile.filePath)
       : await this.fileHasWebmCluster(recordingFile.filePath);
+  }
+
+  private async hasUsableOutputFile(outputFile: RecordingTemporaryFile, fileExtension: OutputFileExtension): Promise<boolean> {
+    if (outputFile.byteLength < minimumRecordingByteLength) {
+      return false;
+    }
+
+    if (fileExtension === "webm") {
+      return await this.fileHasWebmCluster(outputFile.filePath);
+    }
+
+    if (fileExtension === "mp4" || fileExtension === "m4a") {
+      return await this.fileHasMp4Media(outputFile.filePath);
+    }
+
+    const header = await readFileHeader(outputFile.filePath);
+    return fileExtension === "gif"
+      ? hasByteSignatureAt(header, gifFileSignature, 0)
+      : hasByteSignatureAt(header, wavRiffSignature, 0) && hasByteSignatureAt(header, wavWaveSignature, wavWaveSignatureOffset);
   }
 
   private takeRecordingTempFile(recordingId: string, ownerWebContentsId: number): RecordingTemporaryFile {
@@ -1230,45 +1283,118 @@ class SoftshotApp {
     return result.filePath;
   }
 
-  private async editorVideoDefaultSavePath(editorData: EditorBootstrap, fileExtension: VideoFileExtension): Promise<string> {
+  private async editorDefaultSaveDirectory(editorData: EditorBootstrap): Promise<string> {
     if (editorData.source.kind === "file") {
-      const sourceName = path.basename(editorData.sourceFilePath, path.extname(editorData.sourceFilePath));
-      return path.join(path.dirname(editorData.sourceFilePath), `${sourceName} edited.${fileExtension}`);
+      return path.dirname(editorData.sourceFilePath);
     }
 
     const targetDirectory = path.join(app.getPath("videos"), appName);
     await mkdir(targetDirectory, { recursive: true });
-    return path.join(targetDirectory, `${appName} ${this.timestamp()}.${fileExtension}`);
+    return targetDirectory;
   }
 
-  private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
-    const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  private editorOutputBaseName(editorData: EditorBootstrap): string {
+    return editorData.source.kind === "file"
+      ? path.basename(editorData.sourceFilePath, path.extname(editorData.sourceFilePath))
+      : `${appName} ${this.timestamp()}`;
+  }
+
+  private async editorVideoDefaultSavePath(editorData: EditorBootstrap, fileExtension: VideoFileExtension): Promise<string> {
+    const fileNameSuffix = editorData.source.kind === "file" ? " edited" : "";
+    return path.join(
+      await this.editorDefaultSaveDirectory(editorData),
+      `${this.editorOutputBaseName(editorData)}${fileNameSuffix}.${fileExtension}`
+    );
+  }
+
+  private editorDataForSender(event: Electron.IpcMainInvokeEvent): EditorBootstrap {
     const editorData = this.editorDataByWebContents.get(event.sender.id);
     if (!editorData) {
       throw new Error(missingEditorRecordingDataMessage);
     }
 
-    const fileExtension = videoFileExtension(editorData.mimeType);
+    return editorData;
+  }
+
+  private async showEditorSaveDialog(
+    event: Electron.IpcMainInvokeEvent,
+    defaultPath: string,
+    fileExtension: OutputFileExtension,
+    title: string
+  ): Promise<string | null> {
+    const parentWindow = BrowserWindow.fromWebContents(event.sender);
     const options: Electron.SaveDialogOptions = {
-      defaultPath: await this.editorVideoDefaultSavePath(editorData, fileExtension),
+      defaultPath,
       filters: [
         {
-          name: fileExtension === "mp4" ? "MP4 video" : "WebM video",
+          name: outputFileFilterNames[fileExtension],
           extensions: [fileExtension]
         }
       ],
-      title: editorData.source.kind === "file" ? "Save video" : "Save recording"
+      title
     };
     const result = parentWindow && !parentWindow.isDestroyed()
       ? await dialog.showSaveDialog(parentWindow, options)
       : await dialog.showSaveDialog(options);
 
     if (result.canceled || !result.filePath) {
-      return { filePath: null };
+      return null;
     }
 
     this.registerEditorSavePath(event.sender.id, result.filePath);
-    return { filePath: result.filePath };
+    return result.filePath;
+  }
+
+  private async chooseEditorVideoSavePath(event: Electron.IpcMainInvokeEvent): Promise<SaveDialogResult> {
+    const editorData = this.editorDataForSender(event);
+    const fileExtension = videoFileExtension(editorData.mimeType);
+    const filePath = await this.showEditorSaveDialog(
+      event,
+      await this.editorVideoDefaultSavePath(editorData, fileExtension),
+      fileExtension,
+      editorData.source.kind === "file" ? "Save video" : "Save recording"
+    );
+    return { filePath };
+  }
+
+  private async chooseEditorExportPath(
+    event: Electron.IpcMainInvokeEvent,
+    fileExtension: OutputFileExtension,
+    fileLabel: string
+  ): Promise<SaveDialogResult> {
+    const editorData = this.editorDataForSender(event);
+    const filePath = await this.showEditorSaveDialog(
+      event,
+      await this.editorExportDefaultPath(editorData, fileExtension, fileLabel),
+      fileExtension,
+      "Export"
+    );
+    if (filePath) {
+      await this.applySettingsUpdate({ exportDirectory: path.dirname(filePath) });
+    }
+
+    return { filePath };
+  }
+
+  private async editorExportDefaultPath(
+    editorData: EditorBootstrap,
+    fileExtension: OutputFileExtension,
+    fileLabel: string
+  ): Promise<string> {
+    const targetDirectory = this.currentSettings().exportDirectory ?? await this.editorDefaultSaveDirectory(editorData);
+    return path.join(targetDirectory, `${this.editorOutputBaseName(editorData)} ${fileLabel}.${fileExtension}`);
+  }
+
+  private editorSavedNotificationTitle(webContentsId: number, fileExtension: OutputFileExtension): string {
+    if (fileExtension === "gif") {
+      return "GIF saved";
+    }
+
+    if (fileExtension === "m4a" || fileExtension === "wav") {
+      return "Audio saved";
+    }
+
+    return this.editorDataByWebContents.get(webContentsId)?.source.kind === "file" ? "Video saved" : "Recording saved";
   }
 
   private async openKeyboardSettings(): Promise<void> {
@@ -1648,6 +1774,14 @@ class SoftshotApp {
       }
 
       nextSettings.captureShortcut = validateCaptureShortcut(update.captureShortcut);
+    }
+
+    if ("exportDirectory" in update) {
+      nextSettings.exportDirectory = validateExportDirectory(update.exportDirectory);
+    }
+
+    if ("exportPresetId" in update) {
+      nextSettings.exportPresetId = validateExportPresetId(update.exportPresetId);
     }
 
     if ("launchAtStartup" in update) {
@@ -2227,7 +2361,7 @@ class SoftshotApp {
   private registerRecordingIpcHandlers(): void {
     ipcMain.handle("recording:create-file", async (event, fileExtension: unknown): Promise<RecordingFile> => {
       this.getRecordingFileSender(event);
-      return await this.createRecordingFile(event.sender.id, videoFileExtensionFromUnknown(fileExtension));
+      return await this.createRecordingFile(event.sender.id, outputFileExtensionFromUnknown(fileExtension));
     });
 
     ipcMain.handle("recording:append-file-chunk", async (event, recordingId: unknown, bytes: unknown): Promise<void> => {
@@ -2336,16 +2470,30 @@ class SoftshotApp {
       return await this.runEditorOperation(event.sender.id, async () => await this.chooseEditorVideoSavePath(event));
     });
 
-    ipcMain.handle("editor:complete-video-file", async (event, recordingId: unknown, mimeType: unknown): Promise<PreparedVideoFile> => {
+    ipcMain.handle("editor:choose-export-path", async (event, fileExtension: unknown, fileLabel: unknown): Promise<SaveDialogResult> => {
       return await this.runEditorOperation(
         event.sender.id,
-        async () => await this.completeEditorVideoFile(
-          event.sender.id,
-          recordingIdFromUnknown(recordingId),
-          videoMimeTypeFromUnknown(mimeType)
+        async () => await this.chooseEditorExportPath(
+          event,
+          outputFileExtensionFromUnknown(fileExtension),
+          exportFileLabelFromUnknown(fileLabel)
         )
       );
     });
+
+    ipcMain.handle(
+      "editor:complete-output-file",
+      async (event, recordingId: unknown, fileExtension: unknown): Promise<CompletedOutputFile> => {
+        return await this.runEditorOperation(
+          event.sender.id,
+          async () => await this.completeEditorOutputFile(
+            event.sender.id,
+            recordingIdFromUnknown(recordingId),
+            outputFileExtensionFromUnknown(fileExtension)
+          )
+        );
+      }
+    );
 
     ipcMain.handle("editor:trim-video-end", async (event, endSeconds: unknown): Promise<PreparedVideoFile> => {
       if (typeof endSeconds !== "number") {
@@ -2384,13 +2532,12 @@ class SoftshotApp {
   }
 
   private async copyEditorTempVideoToClipboard(webContentsId: number, filePath: string): Promise<void> {
-    const editorData = this.editorDataByWebContents.get(webContentsId);
-    if (!editorData) {
+    if (!this.editorDataByWebContents.has(webContentsId)) {
       throw new Error(missingEditorRecordingDataMessage);
     }
 
     const clipboardFilePath = await this.createTemporaryVideoFilePath(
-      videoFileExtension(editorData.mimeType),
+      outputFileExtensionFromUnknown(fileExtensionName(filePath)),
       shortLivedRecordingFilePrefix
     );
     try {
@@ -2660,34 +2807,33 @@ class SoftshotApp {
       return filePath;
     }
 
-    const fileExtension = videoFileExtensionFromUnknown(path.extname(filePath).slice(1));
+    const fileExtension = outputFileExtensionFromUnknown(fileExtensionName(filePath));
     const targetFilePath = await this.createTemporaryVideoFilePath(fileExtension, shortLivedRecordingFilePrefix);
     await rename(filePath, targetFilePath);
     return targetFilePath;
   }
 
-  private async completeEditorVideoFile(
+  private async completeEditorOutputFile(
     webContentsId: number,
     recordingId: string,
-    mimeType: string
-  ): Promise<PreparedVideoFile> {
-    const editorData = this.editorDataByWebContents.get(webContentsId);
-    if (!editorData) {
+    fileExtension: OutputFileExtension
+  ): Promise<CompletedOutputFile> {
+    if (!this.editorDataByWebContents.has(webContentsId)) {
       throw new Error(missingEditorRecordingDataMessage);
     }
 
     const recordingFile = this.takeRecordingTempFile(recordingId, webContentsId);
     try {
-      if (videoFileExtension(mimeType) !== videoFileExtension(editorData.mimeType)) {
-        throw new Error("The prepared recording format does not match the source recording.");
+      if (fileExtensionName(recordingFile.filePath) !== fileExtension) {
+        throw new Error("The prepared file format does not match its output file.");
       }
 
-      if (!await this.hasUsableRecordingFile(recordingFile, mimeType)) {
-        throw new Error("The prepared recording did not contain usable video data.");
+      if (!await this.hasUsableOutputFile(recordingFile, fileExtension)) {
+        throw new Error("The prepared file did not contain usable media data.");
       }
 
       this.registerEditorTempFile(webContentsId, recordingFile.filePath);
-      return { filePath: recordingFile.filePath };
+      return { byteLength: recordingFile.byteLength, filePath: recordingFile.filePath };
     } catch (error) {
       await rm(recordingFile.filePath, { force: true });
       throw error;
@@ -2697,6 +2843,11 @@ class SoftshotApp {
   private async savePreparedEditorVideo(webContentsId: number, preparedFilePath: string, targetFilePath: string): Promise<void> {
     this.assertEditorPreparedFile(webContentsId, preparedFilePath);
     this.assertEditorSavePath(webContentsId, targetFilePath);
+    const fileExtension = outputFileExtensionFromUnknown(fileExtensionName(preparedFilePath));
+    if (fileExtensionName(targetFilePath) !== fileExtension) {
+      throw new Error(`Save the file with the .${fileExtension} extension.`);
+    }
+
     await mkdir(path.dirname(targetFilePath), { recursive: true });
     await this.replaceFileAtomically(targetFilePath, async (temporaryFilePath): Promise<void> => {
       await copyFile(preparedFilePath, temporaryFilePath);
@@ -2704,14 +2855,11 @@ class SoftshotApp {
     this.completedEditorWebContents.add(webContentsId);
     this.editorSavedFilesByWebContents.set(webContentsId, preparedFilePath);
     this.editorSavePathsByWebContents.get(webContentsId)?.delete(targetFilePath);
-    this.notifySaved(
-      this.editorDataByWebContents.get(webContentsId)?.source.kind === "file" ? "Video saved" : "Recording saved",
-      targetFilePath
-    );
+    this.notifySaved(this.editorSavedNotificationTitle(webContentsId, fileExtension), targetFilePath);
   }
 
   private async createTemporaryVideoFilePath(
-    fileExtension: VideoFileExtension,
+    fileExtension: OutputFileExtension,
     filePrefix = `${appName} `
   ): Promise<string> {
     const targetDirectory = this.recordingTempDirectory();
@@ -2899,10 +3047,6 @@ function fileExtensionName(filePath: string): string {
   return path.extname(filePath).slice(1).toLowerCase();
 }
 
-function videoFileExtension(mimeType: string): VideoFileExtension {
-  return mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-}
-
 function videoMimeTypeFromUnknown(value: unknown): string {
   if (typeof value === "string" && (isMimeType(value, "video/mp4") || isMimeType(value, "video/webm"))) {
     return value;
@@ -2927,12 +3071,31 @@ function isWebmAudioMimeType(value: string): boolean {
   return isMimeType(value, "audio/webm");
 }
 
-function videoFileExtensionFromUnknown(value: unknown): VideoFileExtension {
-  if (value === "mp4" || value === "webm") {
+function outputFileExtensionFromUnknown(value: unknown): OutputFileExtension {
+  if (isOutputFileExtension(value)) {
     return value;
   }
 
-  throw new TypeError("Recording file extension must be mp4 or webm.");
+  throw new TypeError("Output file extension must be mp4, webm, gif, m4a, or wav.");
+}
+
+function exportFileLabelFromUnknown(value: unknown): string {
+  if (typeof value === "string" && exportFileLabelPattern.test(value)) {
+    return value;
+  }
+
+  throw new TypeError("Export file label must be a short name of letters, digits, and spaces.");
+}
+
+async function readFileHeader(filePath: string): Promise<Uint8Array> {
+  const fileHandle = await open(filePath, "r");
+  try {
+    const header = new Uint8Array(fileHeaderByteLength);
+    const { bytesRead } = await fileHandle.read(header, 0, fileHeaderByteLength, 0);
+    return header.subarray(0, bytesRead);
+  } finally {
+    await fileHandle.close();
+  }
 }
 
 function hasByteSignature(bytes: Uint8Array, signature: Uint8Array): boolean {
