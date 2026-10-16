@@ -56,7 +56,7 @@ export interface OverlayBootstrap {
 
 export type EditorSource =
   | { capturePipeline: CapturePipeline; encoder: RecordingEncoder; kind: "recording" }
-  | { fileName: string; kind: "file" };
+  | { fileName: string; filePath: string; kind: "file" };
 
 export interface EditorBootstrap {
   audioTracks: EditorAudioTrack[];

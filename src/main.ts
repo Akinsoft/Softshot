@@ -34,7 +34,7 @@ import {
 import { startUpdateChecks } from "./app-updater";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
-import { remuxVideoEnd } from "./editor-remux";
+import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
 import type {
   AppSettings,
   AudioSourceKind,
@@ -70,7 +70,7 @@ import {
   shortLivedRecordingRetentionMs,
   standardRecordingRetentionMs
 } from "./temporary-retention";
-import { probeVideoFile } from "./video-file-probe";
+import { probeVideoFile, type VideoFileProbe } from "./video-file-probe";
 import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 
 const appName = "Softshot";
@@ -1285,7 +1285,7 @@ class SoftshotApp {
 
   private async editorDefaultSaveDirectory(editorData: EditorBootstrap): Promise<string> {
     if (editorData.source.kind === "file") {
-      return path.dirname(editorData.sourceFilePath);
+      return path.dirname(editorData.source.filePath);
     }
 
     const targetDirectory = path.join(app.getPath("videos"), appName);
@@ -1294,8 +1294,9 @@ class SoftshotApp {
   }
 
   private editorOutputBaseName(editorData: EditorBootstrap): string {
-    return editorData.source.kind === "file"
-      ? path.basename(editorData.sourceFilePath, path.extname(editorData.sourceFilePath))
+    const { source } = editorData;
+    return source.kind === "file"
+      ? path.basename(source.filePath, path.extname(source.filePath))
       : `${appName} ${this.timestamp()}`;
   }
 
@@ -2058,25 +2059,49 @@ class SoftshotApp {
 
   private async openVideoFileEditor(filePath: string): Promise<void> {
     await this.initialization;
-    const sourceFileExtension = fileExtensionName(filePath);
-    const editedFileExtension = editedVideoFileExtension(sourceFileExtension);
-    const mimeType = `video/${editedFileExtension}`;
+    const editedFileExtension = editedVideoFileExtension(fileExtensionName(filePath));
     const probe = await probeVideoFile(filePath);
-    const sourceUrl = pathToFileURL(filePath).toString();
+    if (probe.startSeconds <= 0) {
+      await this.openEditorForVideoFile(filePath, filePath, editedFileExtension, probe, []);
+      return;
+    }
+
+    const zeroStartFilePath = await this.createTemporaryVideoFilePath(editedFileExtension);
+    let zeroStartProbe: VideoFileProbe;
+    try {
+      await remuxVideoToZeroStart(filePath, zeroStartFilePath, editedFileExtension);
+      zeroStartProbe = await probeVideoFile(zeroStartFilePath);
+    } catch (error) {
+      await rm(zeroStartFilePath, { force: true });
+      throw error;
+    }
+
+    await this.openEditorForVideoFile(filePath, zeroStartFilePath, editedFileExtension, zeroStartProbe, [zeroStartFilePath]);
+  }
+
+  private async openEditorForVideoFile(
+    originalFilePath: string,
+    editorFilePath: string,
+    editedFileExtension: VideoFileExtension,
+    probe: VideoFileProbe,
+    temporaryFilePaths: readonly string[]
+  ): Promise<void> {
+    const mimeType = `video/${editedFileExtension}`;
+    const sourceUrl = pathToFileURL(editorFilePath).toString();
     const editor = this.createEditor(
       {
         audioTracks: probe.hasAudio
-          ? [{ kind: "clip", mimeType, sourceFilePath: filePath, sourceUrl }]
+          ? [{ kind: "clip", mimeType, sourceFilePath: editorFilePath, sourceUrl }]
           : [],
-        canReuseSourceFile: sourceFileExtension === editedFileExtension,
+        canReuseSourceFile: fileExtensionName(editorFilePath) === editedFileExtension,
         durationSeconds: probe.durationSeconds,
         fps: probe.fps,
         mimeType,
-        source: { fileName: path.basename(filePath), kind: "file" },
-        sourceFilePath: filePath,
+        source: { fileName: path.basename(originalFilePath), filePath: originalFilePath, kind: "file" },
+        sourceFilePath: editorFilePath,
         sourceUrl
       },
-      []
+      temporaryFilePaths
     );
     await this.loadEditor(editor);
   }
@@ -2154,7 +2179,8 @@ class SoftshotApp {
       });
       void this.cleanupEditorTempFiles(
         editorWebContentsId,
-        this.completedEditorWebContents.delete(editorWebContentsId)
+        this.completedEditorWebContents.delete(editorWebContentsId),
+        data.source.kind === "recording"
       ).catch((error: unknown): void => {
         this.reportBackgroundError("Could not clean up temporary editor files.", error);
       });
@@ -2750,9 +2776,9 @@ class SoftshotApp {
     });
   }
 
-  private async cleanupEditorTempFiles(webContentsId: number, wasCompleted: boolean): Promise<void> {
+  private async cleanupEditorTempFiles(webContentsId: number, wasCompleted: boolean, canKeepSource: boolean): Promise<void> {
     const temporaryFiles = this.editorTempFilesByWebContents.get(webContentsId);
-    const sourceFilePath = this.editorSourceFilesByWebContents.get(webContentsId);
+    const sourceFilePath = canKeepSource ? this.editorSourceFilesByWebContents.get(webContentsId) ?? null : null;
     const clipboardFilePath = this.editorClipboardFilesByWebContents.get(webContentsId);
     const savedFilePath = this.editorSavedFilesByWebContents.get(webContentsId);
     this.editorTempFilesByWebContents.delete(webContentsId);

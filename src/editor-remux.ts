@@ -10,6 +10,23 @@ export async function remuxVideoEnd(
     throw new RangeError("The trim end must be a positive finite number.");
   }
 
+  await remuxVideo(sourceFilePath, targetFilePath, fileExtension, endSeconds);
+}
+
+export async function remuxVideoToZeroStart(
+  sourceFilePath: string,
+  targetFilePath: string,
+  fileExtension: VideoFileExtension
+): Promise<void> {
+  await remuxVideo(sourceFilePath, targetFilePath, fileExtension, null);
+}
+
+async function remuxVideo(
+  sourceFilePath: string,
+  targetFilePath: string,
+  fileExtension: VideoFileExtension,
+  endSeconds: number | null
+): Promise<void> {
   const {
     ALL_FORMATS,
     Conversion,
@@ -33,12 +50,12 @@ export async function remuxVideoEnd(
       input,
       output,
       showWarnings: false,
-      trim: { end: endSeconds }
+      ...(endSeconds !== null && { trim: { end: endSeconds } })
     });
     if (!conversion.isValid || conversion.discardedTracks.length > 0) {
       const reasons = conversion.discardedTracks.map((track) => track.reason).join(", ");
       const reasonDetails = reasons ? `: ${reasons}` : ".";
-      throw new Error(`The recording cannot be remuxed${reasonDetails}`);
+      throw new Error(`The video cannot be remuxed${reasonDetails}`);
     }
 
     await conversion.execute();
