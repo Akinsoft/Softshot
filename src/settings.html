@@ -23,40 +23,62 @@
       </button>
     </header>
 
-    <main class="settings-content">
-      <section class="settings-row keybind-row">
-        <div class="settings-label-group">
-          <span class="settings-label">Keybind</span>
-          <span id="settings-status" class="settings-status" aria-live="polite"></span>
+    <main class="settings-content softshot-scroll">
+      <section class="settings-section" aria-labelledby="capture-heading">
+        <h2 id="capture-heading" class="settings-section-title">Capture</h2>
+        <div class="settings-card">
+          <div class="settings-row">
+            <div class="settings-text">
+              <span class="settings-label">Capture shortcut</span>
+              <span id="settings-status" class="settings-description" aria-live="polite">Opens the screenshot and recording tools</span>
+            </div>
+            <button id="keybind-button" class="softshot-button keybind-button" type="button" aria-label="Change capture shortcut"></button>
+          </div>
         </div>
-
-        <button id="keybind-button" class="keybind-button" type="button"></button>
       </section>
 
-      <label class="settings-row startup-row" for="startup-checkbox">
-        <span class="settings-label">Launch at startup</span>
-        <span class="toggle">
-          <input id="startup-checkbox" type="checkbox" />
-          <span class="toggle-track" aria-hidden="true">
-            <span class="toggle-thumb"></span>
-          </span>
-        </span>
-      </label>
+      <section class="settings-section" aria-labelledby="audio-heading">
+        <h2 id="audio-heading" class="settings-section-title">Audio</h2>
+        <div class="settings-card">
+          <label class="settings-row" for="microphone-select">
+            <span class="settings-text">
+              <span class="settings-label">Microphone</span>
+              <span class="settings-description">Recorded on its own track</span>
+            </span>
+            <select id="microphone-select" class="softshot-select settings-select"></select>
+          </label>
+          <label class="settings-row" for="system-audio-checkbox">
+            <span class="settings-text">
+              <span class="settings-label">Desktop audio</span>
+              <span class="settings-description">Record the sound playing on your PC</span>
+            </span>
+            <span class="softshot-toggle">
+              <input id="system-audio-checkbox" type="checkbox" />
+              <span class="softshot-toggle-track" aria-hidden="true">
+                <span class="softshot-toggle-thumb"></span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </section>
 
-      <label class="settings-row" for="microphone-select">
-        <span class="settings-label">Microphone</span>
-        <select id="microphone-select" class="settings-select"></select>
-      </label>
-
-      <label class="settings-row" for="system-audio-checkbox">
-        <span class="settings-label">Desktop audio</span>
-        <span class="toggle">
-          <input id="system-audio-checkbox" type="checkbox" />
-          <span class="toggle-track" aria-hidden="true">
-            <span class="toggle-thumb"></span>
-          </span>
-        </span>
-      </label>
+      <section class="settings-section" aria-labelledby="general-heading">
+        <h2 id="general-heading" class="settings-section-title">General</h2>
+        <div class="settings-card">
+          <label class="settings-row" for="startup-checkbox">
+            <span class="settings-text">
+              <span class="settings-label">Launch at startup</span>
+              <span class="settings-description">Start Softshot when you sign in</span>
+            </span>
+            <span class="softshot-toggle">
+              <input id="startup-checkbox" type="checkbox" />
+              <span class="softshot-toggle-track" aria-hidden="true">
+                <span class="softshot-toggle-thumb"></span>
+              </span>
+            </span>
+          </label>
+        </div>
+      </section>
     </main>
 
     <script type="module" src="../dist/browser/settings.js"></script>

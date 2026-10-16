@@ -53,6 +53,8 @@ class SettingsController {
 
   private readonly status = getRequiredElement("settings-status", HTMLSpanElement);
 
+  private readonly defaultStatusText = this.status.textContent;
+
   private readonly tooltips = new TooltipController(document.body);
 
   private isRecordingKeybind = false;
@@ -101,7 +103,7 @@ class SettingsController {
     this.renderMicrophoneOptions();
 
     if (!this.isRecordingKeybind) {
-      this.keybindButton.textContent = displayShortcut(this.settings.captureShortcut);
+      this.renderShortcut(this.settings.captureShortcut);
     }
   }
 
@@ -129,14 +131,19 @@ class SettingsController {
       this.statusTimeout = null;
     }
 
-    this.status.textContent = message;
+    this.status.textContent = message || this.defaultStatusText;
+    this.status.classList.toggle("error", message.length > 0);
+  }
+
+  private renderShortcut(shortcut: string): void {
+    this.keybindButton.replaceChildren(shortcutKeycaps(shortcut));
   }
 
   private setTemporaryStatus(message: string): void {
     this.setStatus(message);
     this.statusTimeout = setTimeout((): void => {
-      this.status.textContent = "";
       this.statusTimeout = null;
+      this.setStatus("");
     }, statusClearDelayMs);
   }
 
@@ -252,7 +259,7 @@ class SettingsController {
       }
 
       case "preview": {
-        this.keybindButton.textContent = displayShortcut(event.shortcut);
+        this.renderShortcut(event.shortcut);
         break;
       }
 
@@ -278,11 +285,16 @@ class SettingsController {
   }
 }
 
-function displayShortcut(shortcut: string): string {
-  return shortcut
-    .split(keySeparator)
-    .map((key) => displayNames.get(key) ?? key)
-    .join(keySeparator);
+function shortcutKeycaps(shortcut: string): HTMLSpanElement {
+  const keycaps = document.createElement("span");
+  keycaps.className = "softshot-keycaps";
+  keycaps.append(...shortcut.split(keySeparator).map((key) => {
+    const keycap = document.createElement("kbd");
+    keycap.className = "softshot-keycap";
+    keycap.textContent = displayNames.get(key) ?? key;
+    return keycap;
+  }));
+  return keycaps;
 }
 
 function microphoneOption(label: string, deviceId: string | null, selectedDeviceId: string | null): HTMLOptionElement {

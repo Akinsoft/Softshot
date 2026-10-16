@@ -76,8 +76,8 @@ const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 620;
 const editorWindowMinWidthPx = 720;
 const editorWindowMinHeightPx = 520;
-const settingsWindowWidthPx = 380;
-const settingsWindowHeightPx = 320;
+const settingsWindowWidthPx = 420;
+const settingsWindowHeightPx = 430;
 const appIconRelativePath = path.join("src", "assets", "app-logo.ico");
 const appLogoRelativePath = path.join("src", "assets", "app-logo.png");
 const preloadScriptRelativePath = path.join("dist", "main", "preload.js");
@@ -610,7 +610,7 @@ class SoftshotApp {
       minimizable: false,
       show: false,
       autoHideMenuBar: true,
-      backgroundColor: "#15171a",
+      backgroundColor: "#17181b",
       icon: this.appIconPath(),
       title: appName,
       webPreferences: {
