@@ -15,8 +15,35 @@ permissions:
   contents: write
 
 jobs:
+  ffmpeg:
+    name: FFmpeg
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore FFmpeg
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: vendor/ffmpeg
+          key: ffmpeg-${{ hashFiles('scripts/ffmpeg/**', 'scripts/build-ffmpeg.cjs') }}
+
+      - name: Build FFmpeg
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: node scripts/build-ffmpeg.cjs
+
+      - name: Upload FFmpeg
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg
+          path: vendor/ffmpeg
+          if-no-files-found: error
+
   windows:
     name: Windows
+    needs: ffmpeg
     runs-on: windows-latest
 
     steps:
@@ -31,6 +58,12 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Download FFmpeg
+        uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg
+          path: vendor/ffmpeg
 
       - name: Lint
         run: npm run lint
