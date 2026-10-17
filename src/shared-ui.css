@@ -19,9 +19,9 @@
   --ui-focus-ring: rgba(56, 189, 248, 0.45);
   --ui-toggle-off: rgba(255, 255, 255, 0.16);
   --ui-danger: #fda4af;
-  --ui-radius-small: 6px;
-  --ui-radius: 8px;
-  --ui-radius-large: 12px;
+  --ui-radius-small: 3px;
+  --ui-radius: 4px;
+  --ui-radius-large: 6px;
   --ui-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 
@@ -36,7 +36,7 @@
   max-width: 260px;
   padding: 6px 9px;
   border: 1px solid var(--tooltip-border);
-  border-radius: 7px;
+  border-radius: var(--ui-radius);
   background: var(--tooltip-background);
   color: #f4f7fb;
   font-family: "Segoe UI", system-ui, sans-serif;
@@ -102,7 +102,7 @@
 .softshot-tooltip-shortcut {
   padding: 1px 5px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  border-radius: var(--ui-radius-small);
   background: rgba(255, 255, 255, 0.06);
   color: rgba(244, 247, 251, 0.68);
   font: inherit;
@@ -242,7 +242,7 @@
 .softshot-toggle-track {
   position: relative;
   display: block;
-  border-radius: 999px;
+  border-radius: var(--ui-radius);
   background: var(--ui-toggle-off);
   transition: background-color 160ms ease;
 }
@@ -253,7 +253,7 @@
   left: 3px;
   width: 16px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--ui-radius-small);
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   transition: translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -367,7 +367,7 @@
   padding: 0 7px;
   border: 1px solid var(--ui-border-strong);
   border-bottom-width: 2px;
-  border-radius: 6px;
+  border-radius: var(--ui-radius-small);
   background: var(--ui-surface-raised);
   color: var(--ui-text);
   font: 600 12px/1 var(--ui-font);
