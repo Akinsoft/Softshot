@@ -6,6 +6,10 @@
   },
   "include": [
     "src/global.d.ts",
+    "src/app-window.ts",
+    "src/app-window-*.ts",
+    "src/clip-buffer.ts",
+    "src/clips-recorder.ts",
     "src/audio-waveform.ts",
     "src/desktop-capture.ts",
     "src/editor.ts",
@@ -14,9 +18,9 @@
     "src/overlay.ts",
     "src/overlay-*.ts",
     "src/recording-*.ts",
-    "src/settings.ts",
     "src/shared.ts",
     "src/softshot-api.ts",
+    "src/toast.ts",
     "src/webm.ts"
   ]
 }

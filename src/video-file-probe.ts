@@ -4,7 +4,9 @@ export interface VideoFileProbe {
   durationSeconds: number;
   fps: number;
   hasAudio: boolean;
+  height: number;
   startSeconds: number;
+  width: number;
 }
 
 export async function probeVideoFile(filePath: string): Promise<VideoFileProbe> {
@@ -37,7 +39,9 @@ export async function probeVideoFile(filePath: string): Promise<VideoFileProbe> 
       durationSeconds,
       fps: averagePacketRate,
       hasAudio: await input.getPrimaryAudioTrack() !== null,
-      startSeconds: await input.getFirstTimestamp()
+      height: await videoTrack.getDisplayHeight(),
+      startSeconds: await input.getFirstTimestamp(),
+      width: await videoTrack.getDisplayWidth()
     };
   } finally {
     input.dispose();

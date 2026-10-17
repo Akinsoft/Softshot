@@ -13,6 +13,7 @@
   },
   "scripts": {
     "build": "npm run clean && tsc -p tsconfig.main.json && tsc -p tsconfig.browser.json && node scripts/finalize-build.cjs",
+    "build:ffmpeg": "node scripts/build-ffmpeg.cjs",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "dev": "npm run build && electron .",
     "lint": "eslint src --max-warnings=0",
@@ -28,16 +29,25 @@
     "directories": {
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg"
+      }
+    ],
     "files": [
       "dist/**/*",
       "src/assets/**/*",
+      "src/app-window.html",
+      "src/app-window.css",
+      "src/clips-recorder.html",
       "src/editor.html",
       "src/editor.css",
       "src/overlay.html",
-      "src/settings.html",
-      "src/settings.css",
       "src/shared-ui.css",
       "src/styles.css",
+      "src/toast.html",
+      "src/toast.css",
       "LICENSE.md",
       "package.json",
       "!node_modules/gifenc/src/**/*",

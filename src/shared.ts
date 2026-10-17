@@ -4,6 +4,15 @@ const lowVideoHeight = 720;
 const lowVideoWidth = 1280;
 const highVideoHeight = 1080;
 const highVideoWidth = 1920;
+const ultraVideoHeight = 1440;
+const ultraVideoWidth = 2560;
+const timestampPartWidth = 2;
+const shortClipSeconds = 15;
+const standardClipSeconds = 30;
+const minuteClipSeconds = 60;
+const secondsPerMinute = 60;
+const twoMinuteClipSeconds = 120;
+const fiveMinuteClipSeconds = 300;
 
 export const videoFpsOptions = {
   standard: standardVideoFps,
@@ -14,6 +23,21 @@ export const videoQualityDimensions = {
   low: { height: lowVideoHeight, width: lowVideoWidth },
   high: { height: highVideoHeight, width: highVideoWidth }
 } as const;
+
+export const clipQualityDimensions = {
+  "720p": videoQualityDimensions.low,
+  "1080p": videoQualityDimensions.high,
+  "1440p": { height: ultraVideoHeight, width: ultraVideoWidth }
+} as const;
+
+export const clipQualities = ["720p", "1080p", "1440p"] as const;
+export const clipDurationOptionsSeconds = [
+  shortClipSeconds,
+  standardClipSeconds,
+  minuteClipSeconds,
+  twoMinuteClipSeconds,
+  fiveMinuteClipSeconds
+] as const;
 
 export type CaptureMode = "screenshot" | "video";
 export type CapturePipeline = "composited" | "direct";
@@ -32,6 +56,78 @@ export const outputFileExtensions = ["mp4", "webm", "gif", "m4a", "wav"] as cons
 export type OutputFileExtension = (typeof outputFileExtensions)[number];
 const outputFileExtensionSet: ReadonlySet<unknown> = new Set(outputFileExtensions);
 export type RecordingEncoder = "hardware" | "compatibility";
+export type ClipQuality = (typeof clipQualities)[number];
+export type ClipDurationSeconds = (typeof clipDurationOptionsSeconds)[number];
+export type ShortcutTarget = "capture" | "clips";
+export const appPages = ["capture", "clips", "gallery", "settings"] as const;
+export type AppPage = (typeof appPages)[number];
+export type ClipsState = "error" | "off" | "recording" | "starting" | "waiting";
+
+export type ClipSource =
+  | { displayId: number | null; kind: "display" }
+  | { kind: "window"; processName: string | null; title: string };
+
+export interface ClipSettings {
+  directory: string | null;
+  durationSeconds: ClipDurationSeconds;
+  enabled: boolean;
+  fps: VideoFps;
+  microphoneDeviceId: string | null;
+  quality: ClipQuality;
+  shortcut: string;
+  source: ClipSource;
+  systemAudioEnabled: boolean;
+}
+
+export interface ClipsStatus {
+  isShortcutAvailable: boolean;
+  message: string | null;
+  sourceName: string | null;
+  state: ClipsState;
+}
+
+export interface ClipDisplayOption {
+  height: number;
+  id: number;
+  isPrimary: boolean;
+  label: string;
+  width: number;
+}
+
+export interface ClipWindowOption {
+  iconDataUrl: string | null;
+  processName: string | null;
+  title: string;
+}
+
+export interface ClipSourceOptions {
+  displays: ClipDisplayOption[];
+  windows: ClipWindowOption[];
+}
+
+export interface ClipEntry {
+  createdAt: string;
+  durationSeconds: number;
+  filePath: string;
+  height: number;
+  id: string;
+  sizeBytes: number;
+  sourceName: string;
+  thumbnailUrl: string;
+  width: number;
+}
+
+export interface ClipRecorderConfig {
+  durationSeconds: ClipDurationSeconds;
+  microphoneDeviceId: string | null;
+  systemAudioEnabled: boolean;
+}
+
+export interface ClipAudioSnapshotRequest {
+  fromEpochSeconds: number;
+  id: string;
+  untilEpochSeconds: number;
+}
 
 export interface Rect {
   x: number;
@@ -105,6 +201,7 @@ export interface CompletedOutputFile {
 
 export interface AppSettings {
   captureShortcut: string;
+  clips: ClipSettings;
   exportDirectory: string | null;
   exportPresetId: string | null;
   launchAtStartup: boolean;
@@ -114,22 +211,38 @@ export interface AppSettings {
 
 export interface AppSettingsUpdate {
   captureShortcut?: string;
+  clips?: Partial<ClipSettings>;
   exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;
   systemAudioEnabled?: boolean;
 }
 
-export type SettingsKeybindEvent =
-  | { type: "cancelled" }
-  | { message: string; type: "error" }
-  | { shortcut: string; type: "preview" }
-  | { settings: AppSettings; type: "saved" };
+export type ShortcutRecordingEvent =
+  | { target: ShortcutTarget; type: "cancelled" }
+  | { message: string; target: ShortcutTarget; type: "error" }
+  | { shortcut: string; target: ShortcutTarget; type: "preview" }
+  | { settings: AppSettings; target: ShortcutTarget; type: "saved" };
 
-export type SettingsKeybindEventHandler = (event: SettingsKeybindEvent) => void;
+export type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
 export type SettingsChangedEventHandler = (settings: AppSettings) => void;
+export type AppNavigateHandler = (page: AppPage) => void;
+export type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
+export type ClipsLibraryChangedHandler = () => void;
 
 export type StopRecordingRequestHandler = () => void;
+export type ClipAudioSnapshotRequestHandler = (request: ClipAudioSnapshotRequest) => void;
+export type ToastTone = "error" | "info";
+
+export interface ToastMessage {
+  detail: string | null;
+  id: number;
+  isClickable: boolean;
+  title: string;
+  tone: ToastTone;
+}
+
+export type ToastShowHandler = (toast: ToastMessage) => void;
 
 export interface SoftshotApi {
   appendRecordingFileChunk(recordingId: string, bytes: Uint8Array): Promise<void>;
@@ -166,14 +279,68 @@ export interface SoftshotApi {
   onStopRecordingRequest(handler: StopRecordingRequestHandler): () => void;
   closeOverlay(): Promise<void>;
   showError(message: string): Promise<void>;
-  closeSettings(): Promise<void>;
-  beginSettingsKeybindRecording(): Promise<void>;
-  endSettingsKeybindRecording(): Promise<void>;
+  appReadyToShow(): Promise<void>;
+  beginShortcutRecording(target: ShortcutTarget): Promise<void>;
+  endShortcutRecording(): Promise<void>;
   getSettings(): Promise<AppSettings>;
-  onSettingsKeybindEvent(handler: SettingsKeybindEventHandler): () => void;
+  onAppNavigate(handler: AppNavigateHandler): () => void;
+  onShortcutRecordingEvent(handler: ShortcutRecordingEventHandler): () => void;
   onSettingsChanged(handler: SettingsChangedEventHandler): () => void;
-  settingsReadyToShow(): Promise<void>;
   updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
+  chooseClipsDirectory(): Promise<AppSettings | null>;
+  copyClip(clipId: string): Promise<void>;
+  deleteClip(clipId: string): Promise<void>;
+  getClipsDirectory(): Promise<string>;
+  getClipsStatus(): Promise<ClipsStatus>;
+  listClips(): Promise<ClipEntry[]>;
+  listClipSources(): Promise<ClipSourceOptions>;
+  onClipsLibraryChanged(handler: ClipsLibraryChangedHandler): () => void;
+  onClipsStatusChanged(handler: ClipsStatusChangedHandler): () => void;
+  openClip(clipId: string): Promise<void>;
+  openClipsDirectory(): Promise<void>;
+  restartClips(): Promise<void>;
+  saveClip(): Promise<void>;
+  showClipInFolder(clipId: string): Promise<void>;
+  completeClipAudioSnapshot(requestId: string, recordingId: string): Promise<void>;
+  failClipAudioSnapshot(requestId: string, message: string): Promise<void>;
+  getClipRecorderConfig(): Promise<ClipRecorderConfig>;
+  onClipAudioSnapshotRequest(handler: ClipAudioSnapshotRequestHandler): () => void;
+  reportClipRecorderEnded(): Promise<void>;
+  reportClipRecorderFailed(message: string): Promise<void>;
+  reportClipRecorderStarted(): Promise<void>;
+  clickToast(toastId: number): Promise<void>;
+  finishToast(toastId: number): Promise<void>;
+  onToastShow(handler: ToastShowHandler): () => void;
+  setToastPointerInside(toastId: number, isInside: boolean): Promise<void>;
+}
+
+export function fileTimestamp(value: Date): string {
+  const year = String(value.getFullYear());
+  const month = padDatePart(value.getMonth() + 1);
+  const day = padDatePart(value.getDate());
+  const hours = padDatePart(value.getHours());
+  const minutes = padDatePart(value.getMinutes());
+  const seconds = padDatePart(value.getSeconds());
+  return `${year}-${month}-${day} ${hours}.${minutes}.${seconds}`;
+}
+
+function padDatePart(part: number): string {
+  return part.toString().padStart(timestampPartWidth, "0");
+}
+
+export function clipDurationLabel(durationSeconds: number): string {
+  if (durationSeconds < secondsPerMinute || durationSeconds % secondsPerMinute !== 0) {
+    return durationSeconds === 1 ? "1 second" : `${String(durationSeconds)} seconds`;
+  }
+
+  const minutes = durationSeconds / secondsPerMinute;
+  return minutes === 1 ? "1 minute" : `${String(minutes)} minutes`;
+}
+
+const appPageSet: ReadonlySet<unknown> = new Set(appPages);
+
+export function isAppPage(value: unknown): value is AppPage {
+  return appPageSet.has(value);
 }
 
 export function isAudioSourceKind(value: unknown): value is AudioSourceKind {

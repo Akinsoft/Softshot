@@ -7,12 +7,23 @@
   "include": [
     "src/app-updater.ts",
     "src/app-settings.ts",
+    "src/clip-capture-session.ts",
+    "src/clip-muxer.ts",
+    "src/clip-sources.ts",
+    "src/clip-video-capture.ts",
+    "src/clips-library.ts",
+    "src/clips-service.ts",
     "src/editor-remux.ts",
     "src/global.d.ts",
     "src/main.ts",
+    "src/mp4-fragments.ts",
+    "src/powershell.ts",
     "src/preload.ts",
     "src/shared.ts",
+    "src/task-queue.ts",
     "src/temporary-retention.ts",
+    "src/toast-window.ts",
+    "src/video-bitrate.ts",
     "src/video-file-probe.ts",
     "src/webm.ts"
   ]

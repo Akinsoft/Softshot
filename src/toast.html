@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Softshot</title>
+    <link rel="stylesheet" href="./shared-ui.css" />
+    <link rel="stylesheet" href="./toast.css" />
+  </head>
+  <body>
+    <div id="toast" class="toast" role="status">
+      <img class="toast-logo" src="./assets/app-logo.png" alt="" draggable="false" />
+      <div class="toast-text">
+        <span id="toast-title" class="toast-title"></span>
+        <span id="toast-detail" class="toast-detail" hidden></span>
+      </div>
+    </div>
+    <script type="module" src="../dist/browser/toast.js"></script>
+  </body>
+</html>

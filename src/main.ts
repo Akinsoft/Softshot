@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { appendFile, copyFile, link, mkdir, open, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
@@ -16,7 +15,6 @@ import {
   ipcMain,
   Menu,
   nativeImage,
-  Notification,
   screen,
   session,
   shell,
@@ -25,17 +23,23 @@ import {
 } from "electron";
 
 import {
+  clipSettingsWithUpdate,
+  isTrueSetting,
   loadAppSettings,
   saveAppSettings,
   validateCaptureShortcut,
   validateExportDirectory,
-  validateExportPresetId
+  validateExportPresetId,
+  validateMicrophoneDeviceId
 } from "./app-settings";
 import { startUpdateChecks } from "./app-updater";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
+import { ClipsService } from "./clips-service";
 import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
+import { writeFileDropListToClipboard } from "./powershell";
 import type {
+  AppPage,
   AppSettings,
   AudioSourceKind,
   CapturedDisplay,
@@ -53,23 +57,27 @@ import type {
   RecordingFile,
   SaveDialogResult,
   SaveResult,
-  SettingsKeybindEvent,
+  ShortcutRecordingEvent,
+  ShortcutTarget,
   VideoFileExtension,
   VideoFps
 } from "./shared";
 import {
+  fileTimestamp,
   isAudioSourceKind,
   isOutputFileExtension,
   isRecordingAudioSourceKind,
   videoFileExtension,
   videoFpsOptions
 } from "./shared";
+import { TaskQueue } from "./task-queue";
 import {
   recordingRetentionMs,
   shortLivedRecordingFilePrefix,
   shortLivedRecordingRetentionMs,
   standardRecordingRetentionMs
 } from "./temporary-retention";
+import { ToastWindow } from "./toast-window";
 import { probeVideoFile, type VideoFileProbe } from "./video-file-probe";
 import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 
@@ -81,17 +89,20 @@ const captureShortcutRetryLimit = 12;
 const keySeparator = "+";
 const overlayReadyTimeoutMs = 15_000;
 const captureOnReadyDelayMs = 300;
-const timestampPartWidth = 2;
 const pngSignature = Buffer.from("89504e470d0a1a0a", "hex");
-const clipboardFileEnvironmentName = "SOFTSHOT_CLIPBOARD_FILE";
 const clipboardFolderName = "clipboard";
 const transparentWindowBackground = "#00000000";
 const editorWindowWidthPx = 860;
 const editorWindowHeightPx = 620;
 const editorWindowMinWidthPx = 720;
 const editorWindowMinHeightPx = 520;
-const settingsWindowWidthPx = 420;
-const settingsWindowHeightPx = 430;
+const appWindowWidthPx = 980;
+const appWindowHeightPx = 680;
+const appWindowMinWidthPx = 820;
+const appWindowMinHeightPx = 560;
+const appWindowTitleBarHeightPx = 44;
+const appWindowBackground = "#131417";
+const appWindowSymbolColor = "#f3f5f8";
 const appIconRelativePath = path.join("src", "assets", "app-logo.ico");
 const appLogoRelativePath = path.join("src", "assets", "app-logo.png");
 const preloadScriptRelativePath = path.join("dist", "main", "preload.js");
@@ -99,8 +110,6 @@ const trayIconLogicalSizePx = 16;
 const trayIconScaleFactor2x = 2;
 const trayIconScaleFactor3x = 3;
 const trayIconScaleFactors = [1, trayIconScaleFactor2x, trayIconScaleFactor3x] as const;
-const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
-const powershellClipboardTimeoutMs = 10_000;
 const minimumRecordingByteLength = 1;
 const webmScanChunkSizeBytes = 65_536;
 const webmSignatureCarryByteLength = webmClusterSignatureLength - 1;
@@ -122,17 +131,21 @@ const outputFileFilterNames: Record<OutputFileExtension, string> = {
 const missingEditorRecordingDataMessage = "Missing editor recording data.";
 const noKeyValue = "Unidentified";
 const mediaPermissionName = "media";
-const settingsKeybindEventChannel = "settings:keybind-event";
+const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
+const appNavigateEventChannel = "app:navigate";
+const clipsStatusChangedEventChannel = "clips:status-changed";
+const clipsLibraryChangedEventChannel = "clips:library-changed";
 const appSettingsUpdateKeys = new Set([
   "captureShortcut",
+  "clips",
   "exportDirectory",
   "exportPresetId",
   "launchAtStartup",
   "microphoneDeviceId",
   "systemAudioEnabled"
 ]);
-const settingsKeybindShortcutRearmDelayMs = 250;
+const shortcutRecordingRearmDelayMs = 250;
 const maxCaptureShortcutKeyCount = 3;
 const firstFunctionKey = 1;
 const lastFunctionKey = 24;
@@ -252,10 +265,6 @@ interface RecordingAudioTrackFile extends RecordingAudioTrack {
   file: RecordingTemporaryFile;
 }
 
-interface SettingsUpdateOptions {
-  captureShortcutRegistrationDelayMs?: number;
-}
-
 class SoftshotApp {
   private activeOverlay: BrowserWindow | null = null;
 
@@ -279,15 +288,26 @@ class SoftshotApp {
 
   private settings: AppSettings | null = null;
 
-  private settingsUpdateChain: Promise<boolean> = Promise.resolve(true);
+  private readonly settingsUpdates = new TaskQueue();
 
-  private settingsKeybindRecordingWebContentsId: number | null = null;
+  private shortcutRecordingWebContentsId: number | null = null;
 
-  private isSettingsKeybindSaving = false;
+  private shortcutRecordingTarget: ShortcutTarget = "capture";
 
-  private readonly settingsKeybindRecorderShortcuts = new Set<string>();
+  private isShortcutRecordingSaving = false;
 
-  private settingsWindow: BrowserWindow | null = null;
+  private readonly shortcutRecorderShortcuts = new Set<string>();
+
+  private appWindow: BrowserWindow | null = null;
+
+  private readonly clips = this.createClipsService();
+
+  private readonly toasts = new ToastWindow(
+    () => this.preloadScriptPath(),
+    (error): void => {
+      this.reportBackgroundError("Could not show a Softshot notification.", error);
+    }
+  );
 
   private readonly displayMediaDisplayIdsByWebContents = new Map<number, number>();
 
@@ -568,7 +588,9 @@ class SoftshotApp {
     }
 
     const ownerWindow = BrowserWindow.fromWebContents(contents);
-    return ownerWindow === this.activeOverlay || (ownerWindow !== null && this.activeEditorWindows.has(ownerWindow));
+    return ownerWindow === this.activeOverlay
+      || this.clips.isRecorderWindow(ownerWindow)
+      || (ownerWindow !== null && this.activeEditorWindows.has(ownerWindow));
   }
 
   private async cleanupAbandonedRecordingFiles(ownerWebContentsId: number, shouldPreserveData: boolean): Promise<void> {
@@ -653,19 +675,23 @@ class SoftshotApp {
     });
   }
 
-  private createSettingsWindow(): BrowserWindow {
+  private createAppWindow(): BrowserWindow {
     return this.createTaskbarWindow({
-      width: settingsWindowWidthPx,
-      height: settingsWindowHeightPx,
-      frame: false,
-      resizable: false,
-      maximizable: false,
-      minimizable: false,
+      width: appWindowWidthPx,
+      height: appWindowHeightPx,
+      minWidth: appWindowMinWidthPx,
+      minHeight: appWindowMinHeightPx,
       show: false,
       autoHideMenuBar: true,
-      backgroundColor: "#17181b",
+      backgroundColor: appWindowBackground,
       icon: this.appIconPath(),
       title: appName,
+      titleBarStyle: "hidden",
+      titleBarOverlay: {
+        color: appWindowBackground,
+        height: appWindowTitleBarHeightPx,
+        symbolColor: appWindowSymbolColor
+      },
       webPreferences: {
         preload: this.preloadScriptPath(),
         contextIsolation: true,
@@ -676,18 +702,78 @@ class SoftshotApp {
 
   private createTaskbarWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
     const window = new BrowserWindow(options);
+    window.setAppDetails(this.taskbarAppDetails());
+    return window;
+  }
+
+  private taskbarAppDetails(): Electron.AppDetailsOptions {
     if (!app.isPackaged) {
-      window.setAppDetails({ appId: developmentAppId });
+      return {
+        appIconPath: this.appIconPath(),
+        appId: developmentAppId,
+        relaunchCommand: `"${process.execPath}" "${app.getAppPath()}"`,
+        relaunchDisplayName: appName
+      };
     }
 
-    return window;
+    return {
+      appIconIndex: 0,
+      appIconPath: process.execPath,
+      appId,
+      relaunchCommand: `"${process.execPath}"`,
+      relaunchDisplayName: appName
+    };
   }
 
   private createTray(): Tray {
     const currentTray = new Tray(this.createTrayImage());
     currentTray.setToolTip(appName);
     currentTray.setContextMenu(Menu.buildFromTemplate(this.trayMenuTemplate()));
+    currentTray.on("click", (): void => {
+      void this.openAppWindowWithErrorHandling(null);
+    });
     return currentTray;
+  }
+
+  private createClipsService(): ClipsService {
+    return new ClipsService({
+      clipSettings: () => this.currentSettings().clips,
+      isAppWindowSender: (sender) => this.isAppWindowWebContents(sender),
+      libraryChanged: (): void => {
+        this.sendToAppWindow(clipsLibraryChangedEventChannel);
+      },
+      openGallery: (): void => {
+        void this.openAppWindowWithErrorHandling("gallery");
+      },
+      openVideoFile: async (filePath): Promise<void> => {
+        await this.openVideoFileEditor(filePath);
+      },
+      preloadScriptPath: () => this.preloadScriptPath(),
+      recorderClosed: (webContentsId): void => {
+        void this.cleanupAbandonedRecordingFiles(webContentsId, false).catch((error: unknown): void => {
+          this.reportBackgroundError("Could not clean up unfinished clip audio.", error);
+        });
+      },
+      showToast: (toast): void => {
+        this.toasts.show(toast);
+      },
+      statusChanged: (): void => {
+        this.sendToAppWindow(clipsStatusChangedEventChannel, this.clips.currentStatus());
+        this.refreshTrayMenu();
+      },
+      takeClipRecording: async (recordingId, ownerWebContentsId) =>
+        await this.takeClipRecording(recordingId, ownerWebContentsId)
+    });
+  }
+
+  private async takeClipRecording(recordingId: string, ownerWebContentsId: number): Promise<string> {
+    const recordingFile = this.takeRecordingTempFile(recordingId, ownerWebContentsId);
+    if (!await this.hasUsableRecordingFile(recordingFile, "video/mp4")) {
+      await rm(recordingFile.filePath, { force: true });
+      throw new Error("The clip audio did not contain usable data.");
+    }
+
+    return recordingFile.filePath;
   }
 
   private createTrayImage(): Electron.NativeImage {
@@ -825,7 +911,7 @@ class SoftshotApp {
     this.displayMediaDisplayIdsByWebContents.set(event.sender.id, displayId);
   }
 
-  private getDisplayMediaDisplayId(request: Electron.DisplayMediaRequestHandlerHandlerRequest): number {
+  private displayMediaRequestWebContentsId(request: Electron.DisplayMediaRequestHandlerHandlerRequest): number {
     if (!request.videoRequested) {
       throw new Error("Softshot display capture requires a video stream.");
     }
@@ -839,12 +925,21 @@ class SoftshotApp {
       throw new Error("Softshot could not identify the display capture window.");
     }
 
-    const displayId = this.displayMediaDisplayIdsByWebContents.get(requestWebContents.id);
+    return requestWebContents.id;
+  }
+
+  private async displayMediaSource(webContentsId: number): Promise<Electron.DesktopCapturerSource> {
+    const clipSource = this.clips.displayMediaSource(webContentsId);
+    if (clipSource) {
+      return clipSource;
+    }
+
+    const displayId = this.displayMediaDisplayIdsByWebContents.get(webContentsId);
     if (typeof displayId !== "number") {
       throw new TypeError("Softshot received an unexpected display capture request.");
     }
 
-    return displayId;
+    return await this.getDesktopSourceForDisplay(displayId);
   }
 
   private async handleDisplayMediaRequest(
@@ -852,8 +947,7 @@ class SoftshotApp {
     callback: (streams: Electron.Streams) => void
   ): Promise<void> {
     try {
-      const displayId = this.getDisplayMediaDisplayId(request);
-      const source = await this.getDesktopSourceForDisplay(displayId);
+      const source = await this.displayMediaSource(this.displayMediaRequestWebContentsId(request));
       const streams: Electron.Streams = { video: source };
       if (request.audioRequested) {
         streams.audio = "loopback";
@@ -916,11 +1010,13 @@ class SoftshotApp {
       throw new Error("Missing Softshot recording window.");
     }
 
-    if (this.activeOverlay === senderWindow || this.activeEditorWindows.has(senderWindow)) {
+    if (this.activeOverlay === senderWindow
+      || this.activeEditorWindows.has(senderWindow)
+      || this.clips.isRecorderWindow(senderWindow)) {
       return senderWindow;
     }
 
-    throw new Error("Only an active capture or editor window can write recording files.");
+    throw new Error("Only an active capture, clip, or editor window can write recording files.");
   }
 
   private handleOverlayReadinessTimeout(overlay: BrowserWindow): void {
@@ -990,8 +1086,10 @@ class SoftshotApp {
       this.registerPermissionRequestHandler();
       this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
+      this.toasts.bind();
       this.registerCaptureShortcuts();
       this.tray = this.createTray();
+      this.clips.start();
       void this.cleanupExpiredTemporaryRecordings().catch((error: unknown): void => {
         this.reportBackgroundError("Could not clean up expired temporary recordings.", error);
       });
@@ -1010,29 +1108,25 @@ class SoftshotApp {
   }
 
   private notifySaved(title: string, filePath: string): void {
-    if (!Notification.isSupported()) {
-      return;
-    }
-
-    new Notification({
+    this.toasts.show({
+      detail: null,
+      onClick: (): void => {
+        shell.showItemInFolder(filePath);
+      },
       title,
-      body: filePath
-    }).show();
+      tone: "info"
+    });
   }
 
   private notifyRecoverableRecording(filePath: string, retentionDescription = "7 days"): void {
-    if (!Notification.isSupported()) {
-      return;
-    }
-
-    const notification = new Notification({
+    this.toasts.show({
+      detail: "Click to show it in its folder.",
+      onClick: (): void => {
+        shell.showItemInFolder(filePath);
+      },
       title: `Recording kept for ${retentionDescription}`,
-      body: filePath
+      tone: "info"
     });
-    notification.on("click", (): void => {
-      shell.showItemInFolder(filePath);
-    });
-    notification.show();
   }
 
   private recordingTempDirectory(): string {
@@ -1088,7 +1182,8 @@ class SoftshotApp {
   private canInstallUpdatesNow(): boolean {
     return !this.activeOverlay
       && this.activeEditorWindows.size === 0
-      && (!this.settingsWindow || this.settingsWindow.isDestroyed());
+      && !this.clips.isBusy()
+      && (!this.appWindow || this.appWindow.isDestroyed());
   }
 
   private requestActiveOverlayStop(): boolean {
@@ -1179,6 +1274,14 @@ class SoftshotApp {
       canInstallNow: (): boolean => this.canInstallUpdatesNow(),
       log: (message: string): void => {
         this.debugLog(message);
+      },
+      updateReady: (): void => {
+        this.toasts.show({
+          detail: "It finishes installing when Softshot closes.",
+          onClick: null,
+          title: "Softshot update ready",
+          tone: "info"
+        });
       }
     });
   }
@@ -1263,7 +1366,7 @@ class SoftshotApp {
 
     const parentWindow = BrowserWindow.fromWebContents(event.sender);
     const options: Electron.SaveDialogOptions = {
-      defaultPath: path.join(targetDirectory, `${appName} ${this.timestamp()}.png`),
+      defaultPath: path.join(targetDirectory, `${appName} ${fileTimestamp(new Date())}.png`),
       filters: [
         {
           name: "PNG image",
@@ -1297,7 +1400,7 @@ class SoftshotApp {
     const { source } = editorData;
     return source.kind === "file"
       ? path.basename(source.filePath, path.extname(source.filePath))
-      : `${appName} ${this.timestamp()}`;
+      : `${appName} ${fileTimestamp(new Date())}`;
   }
 
   private async editorVideoDefaultSavePath(editorData: EditorBootstrap, fileExtension: VideoFileExtension): Promise<string> {
@@ -1490,29 +1593,47 @@ class SoftshotApp {
     editor.focus();
   }
 
-  private showSettingsWindow(settingsWindow: BrowserWindow): void {
-    if (settingsWindow.isDestroyed()) {
+  private showAppWindow(appWindow: BrowserWindow): void {
+    if (appWindow.isDestroyed()) {
       return;
     }
 
-    if (!settingsWindow.isVisible()) {
-      settingsWindow.show();
+    if (appWindow.isMinimized()) {
+      appWindow.restore();
     }
 
-    settingsWindow.focus();
+    if (!appWindow.isVisible()) {
+      appWindow.show();
+    }
+
+    appWindow.focus();
   }
 
-  private getSenderSettingsWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow {
-    const settingsWindow = BrowserWindow.fromWebContents(event.sender);
-    if (!settingsWindow || settingsWindow.isDestroyed()) {
-      throw new Error("Missing settings window.");
+  private getSenderAppWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow {
+    const appWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!appWindow || appWindow.isDestroyed()) {
+      throw new Error("Missing Softshot window.");
     }
 
-    if (this.settingsWindow !== settingsWindow) {
-      throw new Error("Only the active settings window can change settings.");
+    if (this.appWindow !== appWindow) {
+      throw new Error("Only the Softshot window can change settings.");
     }
 
-    return settingsWindow;
+    return appWindow;
+  }
+
+  private isAppWindowWebContents(sender: Electron.WebContents): boolean {
+    const { appWindow } = this;
+    return appWindow !== null && !appWindow.isDestroyed() && appWindow.webContents === sender;
+  }
+
+  private sendToAppWindow(channel: string, ...values: unknown[]): void {
+    const { appWindow } = this;
+    if (!appWindow || appWindow.isDestroyed() || appWindow.webContents.isDestroyed()) {
+      return;
+    }
+
+    appWindow.webContents.send(channel, ...values);
   }
 
   private showOverlayWindow(overlay: BrowserWindow): void {
@@ -1534,55 +1655,62 @@ class SoftshotApp {
     }
   }
 
-  private async openSettingsWindow(): Promise<void> {
-    if (this.settingsWindow && !this.settingsWindow.isDestroyed()) {
-      this.showSettingsWindow(this.settingsWindow);
+  private async openAppWindow(page: AppPage | null): Promise<void> {
+    if (this.appWindow && !this.appWindow.isDestroyed()) {
+      if (page) {
+        this.sendToAppWindow(appNavigateEventChannel, page);
+      }
+
+      this.showAppWindow(this.appWindow);
       return;
     }
 
-    const settingsWindow = this.createSettingsWindow();
-    const settingsWebContentsId = settingsWindow.webContents.id;
-    this.settingsWindow = settingsWindow;
-    settingsWindow.webContents.on("before-input-event", (event, input): void => {
-      this.handleSettingsKeybindInput(settingsWindow, event, input);
+    const appWindow = this.createAppWindow();
+    const appWebContentsId = appWindow.webContents.id;
+    this.appWindow = appWindow;
+    appWindow.webContents.on("before-input-event", (event, input): void => {
+      this.handleShortcutRecordingInput(appWindow, event, input);
     });
 
-    settingsWindow.once("ready-to-show", (): void => {
-      this.showSettingsWindow(settingsWindow);
+    appWindow.once("ready-to-show", (): void => {
+      this.showAppWindow(appWindow);
     });
 
-    settingsWindow.on("closed", (): void => {
-      if (this.settingsKeybindRecordingWebContentsId === settingsWebContentsId) {
-        this.stopSettingsKeybindRecording();
+    appWindow.on("closed", (): void => {
+      if (this.shortcutRecordingWebContentsId === appWebContentsId) {
+        this.stopShortcutRecording();
       }
 
-      if (this.settingsWindow === settingsWindow) {
-        this.settingsWindow = null;
+      if (this.appWindow === appWindow) {
+        this.appWindow = null;
       }
     });
 
     try {
-      await settingsWindow.loadFile(path.join(app.getAppPath(), "src", "settings.html"));
-      this.showSettingsWindow(settingsWindow);
+      await appWindow.loadFile(
+        path.join(app.getAppPath(), "src", "app-window.html"),
+        page ? { query: { page } } : {}
+      );
+      this.showAppWindow(appWindow);
     } catch (error) {
-      if (!settingsWindow.isDestroyed()) {
-        settingsWindow.close();
+      if (!appWindow.isDestroyed()) {
+        appWindow.close();
       }
 
       throw error;
     }
   }
 
-  private emitSettingsKeybindEvent(settingsWindow: BrowserWindow, data: SettingsKeybindEvent): void {
-    if (settingsWindow.isDestroyed() || settingsWindow.webContents.isDestroyed()) {
+  private emitShortcutRecordingEvent(appWindow: BrowserWindow, data: ShortcutRecordingEvent): void {
+    if (appWindow.isDestroyed() || appWindow.webContents.isDestroyed()) {
       return;
     }
 
-    settingsWindow.webContents.send(settingsKeybindEventChannel, data);
+    appWindow.webContents.send(shortcutRecordingEventChannel, data);
   }
 
-  private handleSettingsKeybindInput(settingsWindow: BrowserWindow, event: Electron.Event, input: Electron.Input): void {
-    if (this.settingsKeybindRecordingWebContentsId !== settingsWindow.webContents.id) {
+  private handleShortcutRecordingInput(appWindow: BrowserWindow, event: Electron.Event, input: Electron.Input): void {
+    if (this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
       return;
     }
 
@@ -1592,151 +1720,143 @@ class SoftshotApp {
       return;
     }
 
+    const target = this.shortcutRecordingTarget;
     const shortcut = shortcutFromInput(input);
     if (!shortcut) {
-      this.emitSettingsKeybindEvent(settingsWindow, {
-        message: "Unsupported key",
-        type: "error"
-      });
+      this.emitShortcutRecordingEvent(appWindow, { message: "Unsupported key", target, type: "error" });
       return;
     }
 
     if (shortcut === "Escape") {
-      this.stopSettingsKeybindRecording();
-      this.emitSettingsKeybindEvent(settingsWindow, { type: "cancelled" });
+      this.stopShortcutRecording();
+      this.emitShortcutRecordingEvent(appWindow, { target, type: "cancelled" });
       return;
     }
 
     if (shortcutKeyCount(shortcut) > maxCaptureShortcutKeyCount) {
-      this.emitSettingsKeybindEvent(settingsWindow, {
-        message: "Use up to 3 keys",
-        type: "error"
-      });
+      this.emitShortcutRecordingEvent(appWindow, { message: "Use up to 3 keys", target, type: "error" });
       return;
     }
 
     if (isModifierOnlyShortcut(shortcut)) {
-      this.emitSettingsKeybindEvent(settingsWindow, {
-        shortcut,
-        type: "preview"
-      });
+      this.emitShortcutRecordingEvent(appWindow, { shortcut, target, type: "preview" });
       return;
     }
 
-    void this.saveSettingsKeybind(settingsWindow, shortcut);
+    void this.saveRecordedShortcut(appWindow, shortcut);
   }
 
-  private async saveSettingsKeybind(settingsWindow: BrowserWindow, shortcut: string): Promise<void> {
-    if (this.isSettingsKeybindSaving) {
+  private async saveRecordedShortcut(appWindow: BrowserWindow, shortcut: string): Promise<void> {
+    if (this.isShortcutRecordingSaving) {
       return;
     }
 
-    this.isSettingsKeybindSaving = true;
+    this.isShortcutRecordingSaving = true;
+    const target = this.shortcutRecordingTarget;
     try {
-      this.releaseSettingsKeybindRecorderShortcut(shortcut);
+      this.unregisterShortcutRecorderShortcuts();
+      await delay(shortcutRecordingRearmDelayMs);
+      this.clips.setShortcutSuspended(false);
       const settings = await this.applySettingsUpdate(
-        { captureShortcut: shortcut },
-        { captureShortcutRegistrationDelayMs: settingsKeybindShortcutRearmDelayMs }
+        target === "capture" ? { captureShortcut: shortcut } : { clips: { shortcut } }
       );
-      this.stopSettingsKeybindRecording();
-      this.emitSettingsKeybindEvent(settingsWindow, {
-        settings,
-        type: "saved"
-      });
+      this.stopShortcutRecording();
+      this.emitShortcutRecordingEvent(appWindow, { settings, target, type: "saved" });
     } catch (error) {
-      this.emitSettingsKeybindEvent(settingsWindow, {
-        message: errorMessage(error),
-        type: "error"
-      });
-      this.registerSettingsKeybindRecorderShortcut(shortcut);
+      this.emitShortcutRecordingEvent(appWindow, { message: errorMessage(error), target, type: "error" });
+      if (this.shortcutRecordingWebContentsId !== null) {
+        this.armShortcutRecorder();
+      }
     } finally {
-      this.isSettingsKeybindSaving = false;
+      this.isShortcutRecordingSaving = false;
     }
   }
 
-  private saveSettingsKeybindFromShortcut(shortcut: string): void {
-    const { settingsWindow } = this;
-    if (!settingsWindow || settingsWindow.isDestroyed()) {
+  private saveRecordedShortcutFromGlobalShortcut(shortcut: string): void {
+    const { appWindow } = this;
+    if (!appWindow || appWindow.isDestroyed()) {
       return;
     }
 
-    if (this.settingsKeybindRecordingWebContentsId !== settingsWindow.webContents.id) {
+    if (this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
       return;
     }
 
-    void this.saveSettingsKeybind(settingsWindow, shortcut);
+    void this.saveRecordedShortcut(appWindow, shortcut);
   }
 
-  private startSettingsKeybindRecording(event: Electron.IpcMainInvokeEvent): void {
-    this.getSenderSettingsWindow(event);
-    this.settingsKeybindRecordingWebContentsId = event.sender.id;
+  private armShortcutRecorder(): void {
     this.clearCaptureShortcutRetry();
     this.unregisterRegisteredCaptureShortcuts();
-    this.registerSettingsKeybindRecorderShortcuts();
+    this.clips.setShortcutSuspended(true);
+    this.registerShortcutRecorderShortcuts();
     this.isCaptureShortcutUnavailable = false;
     this.refreshTrayMenu();
   }
 
-  private stopSettingsKeybindRecording(event?: Electron.IpcMainInvokeEvent): void {
+  private startShortcutRecording(event: Electron.IpcMainInvokeEvent, target: ShortcutTarget): void {
+    const appWindow = this.getSenderAppWindow(event);
+    if (this.shortcutRecordingWebContentsId === event.sender.id && this.shortcutRecordingTarget !== target) {
+      this.emitShortcutRecordingEvent(appWindow, { target: this.shortcutRecordingTarget, type: "cancelled" });
+    }
+
+    this.shortcutRecordingWebContentsId = event.sender.id;
+    this.shortcutRecordingTarget = target;
+    this.armShortcutRecorder();
+  }
+
+  private stopShortcutRecording(event?: Electron.IpcMainInvokeEvent): void {
     if (event) {
-      this.getSenderSettingsWindow(event);
-      if (this.settingsKeybindRecordingWebContentsId !== event.sender.id) {
+      this.getSenderAppWindow(event);
+      if (this.shortcutRecordingWebContentsId !== event.sender.id) {
         return;
       }
     }
 
-    if (this.settingsKeybindRecordingWebContentsId === null) {
+    if (this.shortcutRecordingWebContentsId === null) {
       return;
     }
 
-    this.settingsKeybindRecordingWebContentsId = null;
-    this.unregisterSettingsKeybindRecorderShortcuts();
+    this.shortcutRecordingWebContentsId = null;
+    this.unregisterShortcutRecorderShortcuts();
     this.captureShortcutRetryAttempts = 0;
+    this.clips.setShortcutSuspended(false);
 
     if (!this.registerCurrentCaptureShortcut()) {
       this.scheduleCaptureShortcutRetry();
     }
   }
 
-  private registerSettingsKeybindRecorderShortcut(shortcut: string): void {
-    if (this.settingsKeybindRecorderShortcuts.has(shortcut)) {
+  private registerShortcutRecorderShortcut(shortcut: string): void {
+    if (this.shortcutRecorderShortcuts.has(shortcut)) {
       return;
     }
 
     try {
       if (!globalShortcut.register(shortcut, (): void => {
-        this.saveSettingsKeybindFromShortcut(shortcut);
+        this.saveRecordedShortcutFromGlobalShortcut(shortcut);
       })) {
         return;
       }
 
-      this.settingsKeybindRecorderShortcuts.add(shortcut);
+      this.shortcutRecorderShortcuts.add(shortcut);
     } catch (error) {
       this.debugLog(`could not register keybind recorder shortcut ${shortcut}: ${errorMessage(error)}`);
     }
   }
 
-  private registerSettingsKeybindRecorderShortcuts(): void {
-    for (const shortcut of settingsKeybindRecorderShortcuts()) {
-      this.registerSettingsKeybindRecorderShortcut(shortcut);
+  private registerShortcutRecorderShortcuts(): void {
+    for (const shortcut of allRecorderShortcuts()) {
+      this.registerShortcutRecorderShortcut(shortcut);
     }
   }
 
-  private releaseSettingsKeybindRecorderShortcut(shortcut: string): void {
-    if (!this.settingsKeybindRecorderShortcuts.has(shortcut)) {
-      return;
-    }
-
-    globalShortcut.unregister(shortcut);
-    this.settingsKeybindRecorderShortcuts.delete(shortcut);
-  }
-
-  private unregisterSettingsKeybindRecorderShortcuts(): void {
-    for (const shortcut of this.settingsKeybindRecorderShortcuts) {
+  private unregisterShortcutRecorderShortcuts(): void {
+    for (const shortcut of this.shortcutRecorderShortcuts) {
       globalShortcut.unregister(shortcut);
     }
 
-    this.settingsKeybindRecorderShortcuts.clear();
+    this.shortcutRecorderShortcuts.clear();
   }
 
   private settingsSnapshot(): AppSettings {
@@ -1744,7 +1864,7 @@ class SoftshotApp {
   }
 
   private broadcastSettingsChanged(settings: AppSettings): void {
-    const windows = [this.activeOverlay, this.preparedOverlay, this.settingsWindow];
+    const windows = [this.activeOverlay, this.preparedOverlay, this.appWindow];
     for (const window of windows) {
       if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
         try {
@@ -1777,6 +1897,10 @@ class SoftshotApp {
       nextSettings.captureShortcut = validateCaptureShortcut(update.captureShortcut);
     }
 
+    if ("clips" in update) {
+      nextSettings.clips = clipSettingsWithUpdate(currentSettings.clips, update.clips);
+    }
+
     if ("exportDirectory" in update) {
       nextSettings.exportDirectory = validateExportDirectory(update.exportDirectory);
     }
@@ -1786,60 +1910,36 @@ class SoftshotApp {
     }
 
     if ("launchAtStartup" in update) {
-      if (typeof update.launchAtStartup !== "boolean") {
-        throw new TypeError("Launch at startup must be a boolean.");
-      }
-
-      nextSettings.launchAtStartup = update.launchAtStartup;
+      nextSettings.launchAtStartup = isTrueSetting(update.launchAtStartup, "Launch at startup");
     }
 
     if ("microphoneDeviceId" in update) {
-      if (update.microphoneDeviceId !== null && typeof update.microphoneDeviceId !== "string") {
-        throw new TypeError("Microphone device id must be a string or null.");
-      }
-
-      if (typeof update.microphoneDeviceId === "string" && update.microphoneDeviceId.trim().length === 0) {
-        throw new Error("Microphone device id cannot be empty.");
-      }
-
-      nextSettings.microphoneDeviceId = update.microphoneDeviceId;
+      nextSettings.microphoneDeviceId = validateMicrophoneDeviceId(update.microphoneDeviceId);
     }
 
     if ("systemAudioEnabled" in update) {
-      if (typeof update.systemAudioEnabled !== "boolean") {
-        throw new TypeError("System audio enabled must be a boolean.");
-      }
+      nextSettings.systemAudioEnabled = isTrueSetting(update.systemAudioEnabled, "Desktop audio");
+    }
 
-      nextSettings.systemAudioEnabled = update.systemAudioEnabled;
+    if (nextSettings.clips.shortcut === nextSettings.captureShortcut) {
+      throw new Error(`${nextSettings.captureShortcut} is already used. Capture and Clips need different shortcuts.`);
     }
 
     return nextSettings;
   }
 
-  private async applySettingsUpdate(update: unknown, options: SettingsUpdateOptions = {}): Promise<AppSettings> {
-    const previousUpdate = this.settingsUpdateChain;
-    const { promise, resolve } = Promise.withResolvers<boolean>();
-    this.settingsUpdateChain = promise;
-    await previousUpdate;
-    try {
-      return await this.applySettingsUpdateNow(update, options);
-    } finally {
-      resolve(true);
-    }
+  private async applySettingsUpdate(update: unknown): Promise<AppSettings> {
+    return await this.settingsUpdates.run(async () => await this.applySettingsUpdateNow(update));
   }
 
-  private async applySettingsUpdateNow(update: unknown, options: SettingsUpdateOptions): Promise<AppSettings> {
-    const { captureShortcutRegistrationDelayMs = 0 } = options;
+  private async applySettingsUpdateNow(update: unknown): Promise<AppSettings> {
     const previousSettings = this.settingsSnapshot();
     const nextSettings = this.settingsWithUpdate(update);
 
     try {
       this.settings = nextSettings;
-      if (captureShortcutRegistrationDelayMs > 0) {
-        await delay(captureShortcutRegistrationDelayMs);
-      }
-
       this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
+      this.clips.applySettings(previousSettings.clips, nextSettings.clips);
       this.applyLaunchAtStartup(nextSettings.launchAtStartup);
       await saveAppSettings(app.getPath("userData"), nextSettings);
       const savedSettings = this.settingsSnapshot();
@@ -1847,21 +1947,7 @@ class SoftshotApp {
       return savedSettings;
     } catch (error) {
       this.settings = previousSettings;
-      const restoreErrors: unknown[] = [];
-      try {
-        if (!this.tryUpdateRegisteredCaptureShortcut(nextSettings.captureShortcut, previousSettings.captureShortcut)) {
-          restoreErrors.push(new Error(`Could not restore ${previousSettings.captureShortcut}.`));
-        }
-      } catch (restoreError) {
-        restoreErrors.push(restoreError);
-      }
-
-      try {
-        this.applyLaunchAtStartup(previousSettings.launchAtStartup);
-      } catch (restoreError) {
-        restoreErrors.push(restoreError);
-      }
-
+      const restoreErrors = this.restoreAppliedSettings(nextSettings, previousSettings);
       if (restoreErrors.length > 0) {
         throw new AggregateError(
           [error, ...restoreErrors],
@@ -1874,9 +1960,49 @@ class SoftshotApp {
     }
   }
 
+  private restoreAppliedSettings(failedSettings: AppSettings, previousSettings: AppSettings): unknown[] {
+    const restoreErrors: unknown[] = [];
+    try {
+      if (!this.tryUpdateRegisteredCaptureShortcut(failedSettings.captureShortcut, previousSettings.captureShortcut)) {
+        restoreErrors.push(new Error(`Could not restore ${previousSettings.captureShortcut}.`));
+      }
+    } catch (restoreError) {
+      restoreErrors.push(restoreError);
+    }
+
+    try {
+      this.clips.applySettings(failedSettings.clips, previousSettings.clips);
+    } catch (restoreError) {
+      restoreErrors.push(restoreError);
+    }
+
+    try {
+      this.applyLaunchAtStartup(previousSettings.launchAtStartup);
+    } catch (restoreError) {
+      restoreErrors.push(restoreError);
+    }
+
+    return restoreErrors;
+  }
+
   private async updateSettings(event: Electron.IpcMainInvokeEvent, update: unknown): Promise<AppSettings> {
     this.assertSenderWindow(event);
     return await this.applySettingsUpdate(update);
+  }
+
+  private async chooseClipsDirectory(event: Electron.IpcMainInvokeEvent): Promise<AppSettings | null> {
+    const appWindow = this.getSenderAppWindow(event);
+    const result = await dialog.showOpenDialog(appWindow, {
+      defaultPath: this.clips.clipsDirectory(),
+      properties: ["openDirectory", "createDirectory"],
+      title: "Choose clips folder"
+    });
+    const [directory] = result.filePaths;
+    if (result.canceled || !directory) {
+      return null;
+    }
+
+    return await this.applySettingsUpdate({ clips: { directory } });
   }
 
   private updateRegisteredCaptureShortcut(previousShortcut: string, nextShortcut: string): void {
@@ -2294,7 +2420,7 @@ class SoftshotApp {
     }
 
     const window = BrowserWindow.fromWebContents(webContents);
-    return window === this.activeOverlay;
+    return window === this.activeOverlay || this.clips.isRecorderWindow(window);
   }
 
   private registerNavigationGuards(): void {
@@ -2381,7 +2507,7 @@ class SoftshotApp {
 
     this.registerRecordingIpcHandlers();
     this.registerEditorIpcHandlers();
-    this.registerSettingsIpcHandlers();
+    this.registerAppIpcHandlers();
   }
 
   private registerRecordingIpcHandlers(): void {
@@ -2585,7 +2711,7 @@ class SoftshotApp {
     this.completedEditorWebContents.add(webContentsId);
   }
 
-  private registerSettingsIpcHandlers(): void {
+  private registerAppIpcHandlers(): void {
     ipcMain.handle("settings:get", (event): AppSettings => {
       this.assertSenderWindow(event);
       return this.settingsSnapshot();
@@ -2595,20 +2721,20 @@ class SoftshotApp {
       return await this.updateSettings(event, settings);
     });
 
-    ipcMain.handle("settings:ready-to-show", (event): void => {
-      this.showSettingsWindow(this.getSenderSettingsWindow(event));
+    ipcMain.handle("app:ready-to-show", (event): void => {
+      this.showAppWindow(this.getSenderAppWindow(event));
     });
 
-    ipcMain.handle("settings:close", (event): void => {
-      this.closeSenderWindow(event);
+    ipcMain.handle("app:begin-shortcut-recording", (event, target: unknown): void => {
+      this.startShortcutRecording(event, shortcutTargetFromUnknown(target));
     });
 
-    ipcMain.handle("settings:begin-keybind-recording", (event): void => {
-      this.startSettingsKeybindRecording(event);
+    ipcMain.handle("app:end-shortcut-recording", (event): void => {
+      this.stopShortcutRecording(event);
     });
 
-    ipcMain.handle("settings:end-keybind-recording", (event): void => {
-      this.stopSettingsKeybindRecording(event);
+    ipcMain.handle("clips:choose-directory", async (event): Promise<AppSettings | null> => {
+      return await this.chooseClipsDirectory(event);
     });
   }
 
@@ -2657,11 +2783,11 @@ class SoftshotApp {
     }
   }
 
-  private async openSettingsWindowWithErrorHandling(): Promise<void> {
+  private async openAppWindowWithErrorHandling(page: AppPage | null): Promise<void> {
     try {
-      await this.openSettingsWindow();
+      await this.openAppWindow(page);
     } catch (error) {
-      await this.showErrorSafely("Could not open settings.", error);
+      await this.showErrorSafely("Could not open Softshot.", error);
     }
   }
 
@@ -2684,17 +2810,6 @@ class SoftshotApp {
     if (result.response === 0) {
       await this.openKeyboardSettings();
     }
-  }
-
-  private timestamp(): string {
-    const value = new Date();
-    const year = String(value.getFullYear());
-    const month = padDatePart(value.getMonth() + 1);
-    const day = padDatePart(value.getDate());
-    const hours = padDatePart(value.getHours());
-    const minutes = padDatePart(value.getMinutes());
-    const seconds = padDatePart(value.getSeconds());
-    return `${year}-${month}-${day} ${hours}.${minutes}.${seconds}`;
   }
 
   private trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
@@ -2723,8 +2838,26 @@ class SoftshotApp {
       );
     }
 
+    if (this.currentSettings().clips.enabled) {
+      const clipAccelerator = this.clips.registeredShortcutAccelerator();
+      template.push({
+        ...(clipAccelerator !== null && { accelerator: clipAccelerator }),
+        click: (): void => {
+          this.clips.saveClip();
+        },
+        enabled: this.clips.isRecording(),
+        label: "Save clip"
+      });
+    }
+
     template.push(
       { type: "separator" },
+      {
+        label: "Open Softshot",
+        click: (): void => {
+          void this.openAppWindowWithErrorHandling(null);
+        }
+      },
       {
         label: "Open video...",
         click: (): void => {
@@ -2735,12 +2868,6 @@ class SoftshotApp {
         label: "Recent recordings",
         click: (): void => {
           void this.openRecordingTempDirectoryWithErrorHandling();
-        }
-      },
-      {
-        label: "Settings",
-        click: (): void => {
-          void this.openSettingsWindowWithErrorHandling();
         }
       },
       {
@@ -2891,7 +3018,7 @@ class SoftshotApp {
     const targetDirectory = this.recordingTempDirectory();
     await mkdir(targetDirectory, { recursive: true });
 
-    return path.join(targetDirectory, `${filePrefix}${this.timestamp()} ${randomUUID()}.${fileExtension}`);
+    return path.join(targetDirectory, `${filePrefix}${fileTimestamp(new Date())} ${randomUUID()}.${fileExtension}`);
   }
 
   private async trimEditorVideoEnd(webContentsId: number, endSeconds: number): Promise<PreparedVideoFile> {
@@ -2939,7 +3066,7 @@ class SoftshotApp {
       const [, argv, workingDirectory] = eventArguments;
       const videoFilePaths = videoFilePathsFromArguments(argv, workingDirectory);
       if (videoFilePaths.length === 0) {
-        this.capture();
+        void this.openAppWindowWithErrorHandling(null);
         return;
       }
 
@@ -2952,6 +3079,7 @@ class SoftshotApp {
 
     app.on("will-quit", (): void => {
       this.clearCaptureShortcutRetry();
+      this.clips.stop();
       globalShortcut.unregisterAll();
     });
 
@@ -2962,10 +3090,6 @@ class SoftshotApp {
     this.initialization = this.initializeWhenReady();
     this.openVideoFileEditors(videoFilePathsFromArguments(process.argv, process.cwd()));
   }
-}
-
-function padDatePart(part: number): string {
-  return part.toString().padStart(timestampPartWidth, "0");
 }
 
 function audioTrackLabel(kind: RecordingAudioSourceKind): string {
@@ -3220,7 +3344,7 @@ function shortcutKeyCount(shortcut: string): number {
   return shortcut.split(keySeparator).length;
 }
 
-function settingsKeybindBaseKeys(): string[] {
+function shortcutRecorderBaseKeys(): string[] {
   return [
     ...globalShortcutSingleCharacterKeys,
     ...functionShortcutKeys(),
@@ -3239,7 +3363,7 @@ function functionShortcutKeys(): string[] {
   return keys;
 }
 
-function settingsKeybindModifierCombinations(): string[][] {
+function shortcutRecorderModifierCombinations(): string[][] {
   const combinations: string[][] = [[]];
 
   for (const modifier of modifierShortcutKeys) {
@@ -3252,11 +3376,11 @@ function settingsKeybindModifierCombinations(): string[][] {
   return combinations;
 }
 
-function settingsKeybindRecorderShortcuts(): string[] {
+function allRecorderShortcuts(): string[] {
   const shortcuts: string[] = [];
-  const modifierCombinations = settingsKeybindModifierCombinations();
+  const modifierCombinations = shortcutRecorderModifierCombinations();
 
-  for (const key of settingsKeybindBaseKeys()) {
+  for (const key of shortcutRecorderBaseKeys()) {
     for (const modifiers of modifierCombinations) {
       shortcuts.push([...modifiers, key].join(keySeparator));
     }
@@ -3270,61 +3394,12 @@ function trailingBytes(bytes: Uint8Array, maxByteLength: number): Uint8Array {
   return bytes.slice(start);
 }
 
-async function writeFileDropListToClipboard(filePath: string): Promise<void> {
-  if (process.platform !== "win32") {
-    throw new Error("Copying a recording as a file is only supported on Windows.");
+function shortcutTargetFromUnknown(value: unknown): ShortcutTarget {
+  if (value === "capture" || value === "clips") {
+    return value;
   }
 
-  await runPowershellClipboardScript(filePath);
-}
-
-async function runPowershellClipboardScript(filePath: string): Promise<void> {
-  const script = `
-Add-Type -AssemblyName System.Windows.Forms
-$file = [Environment]::GetEnvironmentVariable("${clipboardFileEnvironmentName}")
-if ([string]::IsNullOrWhiteSpace($file)) {
-  throw "Missing ${clipboardFileEnvironmentName}."
-}
-$files = New-Object System.Collections.Specialized.StringCollection
-[void] $files.Add($file)
-[System.Windows.Forms.Clipboard]::SetFileDropList($files)
-`;
-
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      powershellExecutable,
-      powershellArguments(script),
-      {
-        env: {
-          ...process.env,
-          [clipboardFileEnvironmentName]: filePath
-        },
-        timeout: powershellClipboardTimeoutMs,
-        windowsHide: true
-      },
-      (error, standardOutput, standardError): void => {
-        if (error) {
-          reject(new Error(powershellClipboardErrorMessage(error, standardOutput, standardError)));
-          return;
-        }
-
-        resolve();
-      }
-    );
-  });
-}
-
-function powershellArguments(script: string): string[] {
-  return ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script];
-}
-
-function powershellClipboardErrorMessage(error: Error, standardOutput: string, standardError: string): string {
-  const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
-  if (!output) {
-    return `Could not put the recording file on the clipboard.\n${error.message}`;
-  }
-
-  return `Could not put the recording file on the clipboard.\n${output}`;
+  throw new TypeError("Shortcut target must be capture or clips.");
 }
 
 const softshotApp = new SoftshotApp();

@@ -1,15 +1,15 @@
-import { app, Notification } from "electron";
+import { app } from "electron";
 import { autoUpdater } from "electron-updater";
 
 import { errorMessage } from "./async-errors";
 
-const appName = "Softshot";
 const updateCheckDelayMs = 2500;
 const updateInstallDelayMs = 1200;
 
 interface UpdateCheckOptions {
   canInstallNow(): boolean;
   log(message: string): void;
+  updateReady(): void;
 }
 
 export function startUpdateChecks(options: UpdateCheckOptions): void {
@@ -45,28 +45,17 @@ export function startUpdateChecks(options: UpdateCheckOptions): void {
 function installDownloadedUpdate(options: UpdateCheckOptions): void {
   options.log("update downloaded");
   if (!options.canInstallNow()) {
-    showUpdateReadyNotification();
+    options.updateReady();
     return;
   }
 
   setTimeout((): void => {
     if (!options.canInstallNow()) {
       options.log("update install deferred because Softshot became busy");
-      showUpdateReadyNotification();
+      options.updateReady();
       return;
     }
 
     autoUpdater.quitAndInstall(false, true);
   }, updateInstallDelayMs);
-}
-
-function showUpdateReadyNotification(): void {
-  if (!Notification.isSupported()) {
-    return;
-  }
-
-  new Notification({
-    body: "Softshot will finish updating when it closes.",
-    title: `${appName} update ready`
-  }).show();
 }

@@ -24,6 +24,12 @@ interface AudioRecorder {
   writer: RecordingFileWriter;
 }
 
+export interface AudioMix {
+  context: AudioContext;
+  mixedTrack: MediaStreamTrack;
+  sources: Array<{ kind: RecordingAudioSourceKind; node: MediaStreamAudioSourceNode }>;
+}
+
 interface AudioGraph {
   context: AudioContext;
   mixedTrack: MediaStreamTrack;
@@ -40,25 +46,8 @@ export class RecordingAudio {
     let microphoneStream: MediaStream | null = null;
     const recorders: AudioRecorder[] = [];
     try {
-      const inputs: AudioInput[] = [];
-      if (shouldCaptureSystemAudio) {
-        inputs.push({
-          kind: "system",
-          track: requiredAudioTrack(
-            desktopStream,
-            "Desktop audio capture is enabled, but Windows did not provide a desktop audio track."
-          )
-        });
-      }
-
       microphoneStream = await getMicrophoneStream(microphoneDeviceId);
-      if (microphoneStream) {
-        inputs.push({
-          kind: "microphone",
-          track: requiredAudioTrack(microphoneStream, "The selected microphone did not provide an audio track.")
-        });
-      }
-
+      const inputs = recordingAudioInputs(desktopStream, shouldCaptureSystemAudio, microphoneStream);
       const graph = await createAudioGraph(inputs);
       context = graph?.context ?? null;
       const sourceTracks = graph?.sourceTracks ?? [];
@@ -187,7 +176,33 @@ export class RecordingAudio {
   }
 }
 
-async function createAudioGraph(inputs: readonly AudioInput[]): Promise<AudioGraph | null> {
+export function recordingAudioInputs(
+  desktopStream: MediaStream,
+  shouldCaptureSystemAudio: boolean,
+  microphoneStream: MediaStream | null
+): AudioInput[] {
+  const inputs: AudioInput[] = [];
+  if (shouldCaptureSystemAudio) {
+    inputs.push({
+      kind: "system",
+      track: requiredAudioTrack(
+        desktopStream,
+        "Desktop audio capture is enabled, but Windows did not provide a desktop audio track."
+      )
+    });
+  }
+
+  if (microphoneStream) {
+    inputs.push({
+      kind: "microphone",
+      track: requiredAudioTrack(microphoneStream, "The selected microphone did not provide an audio track.")
+    });
+  }
+
+  return inputs;
+}
+
+export async function createAudioMix(inputs: readonly AudioInput[]): Promise<AudioMix | null> {
   if (inputs.length === 0) {
     return null;
   }
@@ -198,25 +213,42 @@ async function createAudioGraph(inputs: readonly AudioInput[]): Promise<AudioGra
     const mixGain = context.createGain();
     mixGain.gain.value = audioMixGain(inputs.length);
     mixGain.connect(mixedDestination);
-    const sourceTracks = inputs.map((input) => {
-      const source = context.createMediaStreamSource(new MediaStream([input.track]));
-      const destination = context.createMediaStreamDestination();
-      source.connect(destination);
-      source.connect(mixGain);
-      return {
-        kind: input.kind,
-        track: requiredAudioTrack(destination.stream, "Could not create a normalized recording audio track.")
-      };
+    const sources = inputs.map((input) => {
+      const node = context.createMediaStreamSource(new MediaStream([input.track]));
+      node.connect(mixGain);
+      return { kind: input.kind, node };
     });
     await context.resume();
     return {
       context,
       mixedTrack: requiredAudioTrack(mixedDestination.stream, "Could not create the recording audio mix."),
-      sourceTracks
+      sources
     };
   } catch (error) {
     const cleanupResults = await Promise.allSettled([context.close()]);
     throw combinedError("Could not create the recording audio mix.", [error, ...rejectedReasons(cleanupResults)]);
+  }
+}
+
+async function createAudioGraph(inputs: readonly AudioInput[]): Promise<AudioGraph | null> {
+  const mix = await createAudioMix(inputs);
+  if (!mix) {
+    return null;
+  }
+
+  try {
+    const sourceTracks = mix.sources.map(({ kind, node }) => {
+      const destination = mix.context.createMediaStreamDestination();
+      node.connect(destination);
+      return {
+        kind,
+        track: requiredAudioTrack(destination.stream, "Could not create a normalized recording audio track.")
+      };
+    });
+    return { context: mix.context, mixedTrack: mix.mixedTrack, sourceTracks };
+  } catch (error) {
+    const cleanupResults = await Promise.allSettled([mix.context.close()]);
+    throw combinedError("Could not create the recording audio tracks.", [error, ...rejectedReasons(cleanupResults)]);
   }
 }
 
@@ -245,7 +277,7 @@ async function createAudioRecorder(kind: RecordingAudioSourceKind, track: MediaS
   }
 }
 
-async function getMicrophoneStream(deviceId: string | null): Promise<MediaStream | null> {
+export async function getMicrophoneStream(deviceId: string | null): Promise<MediaStream | null> {
   if (deviceId === null) {
     return null;
   }

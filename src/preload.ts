@@ -1,10 +1,16 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type {
+  AppPage,
   AppSettings,
   AppSettingsUpdate,
   AudioSourceKind,
   CapturePipeline,
+  ClipAudioSnapshotRequest,
+  ClipEntry,
+  ClipRecorderConfig,
+  ClipSourceOptions,
+  ClipsStatus,
   CompletedOutputFile,
   EditorBootstrap,
   OutputFileExtension,
@@ -15,17 +21,32 @@ import type {
   RecordingFile,
   SaveDialogResult,
   SaveResult,
-  SettingsChangedEventHandler,
-  SettingsKeybindEvent,
-  SettingsKeybindEventHandler,
+  ShortcutRecordingEvent,
+  ShortcutTarget,
   SoftshotApi,
-  StopRecordingRequestHandler,
+  ToastMessage,
   VideoFps
 } from "./shared";
 
 const stopRecordingRequestChannel = "overlay:stop-recording";
-const settingsKeybindEventChannel = "settings:keybind-event";
+const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
+const appNavigateEventChannel = "app:navigate";
+const clipsStatusChangedEventChannel = "clips:status-changed";
+const clipsLibraryChangedEventChannel = "clips:library-changed";
+const clipAudioSnapshotRequestChannel = "clips:audio-snapshot-request";
+const toastShowChannel = "toast:show";
+
+function subscribe(channel: string, handler: (value: never) => void): () => void {
+  const listener = (...listenerArguments: [Electron.IpcRendererEvent, unknown]): void => {
+    handler(listenerArguments[1] as never);
+  };
+
+  ipcRenderer.on(channel, listener);
+  return (): void => {
+    ipcRenderer.removeListener(channel, listener);
+  };
+}
 
 const api: SoftshotApi = {
   appendRecordingFileChunk: async (recordingId: string, bytes: Uint8Array) =>
@@ -82,46 +103,49 @@ const api: SoftshotApi = {
   setLiveCapture: async (isLive: boolean) => ipcRenderer.invoke("overlay:set-live-capture", isLive) as Promise<void>,
   setLiveCaptureMousePassthrough: async (isPassthrough: boolean) =>
     ipcRenderer.invoke("overlay:set-live-capture-mouse-passthrough", isPassthrough) as Promise<void>,
-  onStopRecordingRequest: (handler: StopRecordingRequestHandler) => {
-    const listener = (): void => {
-      handler();
-    };
-
-    ipcRenderer.on(stopRecordingRequestChannel, listener);
-    return (): void => {
-      ipcRenderer.removeListener(stopRecordingRequestChannel, listener);
-    };
-  },
+  onStopRecordingRequest: (handler: () => void) => subscribe(stopRecordingRequestChannel, handler),
   closeOverlay: async () => ipcRenderer.invoke("overlay:close") as Promise<void>,
   showError: async (message: string) => ipcRenderer.invoke("overlay:show-error", message) as Promise<void>,
-  closeSettings: async () => ipcRenderer.invoke("settings:close") as Promise<void>,
-  beginSettingsKeybindRecording: async () => ipcRenderer.invoke("settings:begin-keybind-recording") as Promise<void>,
-  endSettingsKeybindRecording: async () => ipcRenderer.invoke("settings:end-keybind-recording") as Promise<void>,
+  appReadyToShow: async () => ipcRenderer.invoke("app:ready-to-show") as Promise<void>,
+  beginShortcutRecording: async (target: ShortcutTarget) =>
+    ipcRenderer.invoke("app:begin-shortcut-recording", target) as Promise<void>,
+  endShortcutRecording: async () => ipcRenderer.invoke("app:end-shortcut-recording") as Promise<void>,
   getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
-  onSettingsKeybindEvent: (handler: SettingsKeybindEventHandler) => {
-    const listener = (...listenerArguments: [Electron.IpcRendererEvent, SettingsKeybindEvent]): void => {
-      const data = listenerArguments[1];
-      handler(data);
-    };
-
-    ipcRenderer.on(settingsKeybindEventChannel, listener);
-    return (): void => {
-      ipcRenderer.removeListener(settingsKeybindEventChannel, listener);
-    };
-  },
-  onSettingsChanged: (handler: SettingsChangedEventHandler) => {
-    const listener = (...listenerArguments: [Electron.IpcRendererEvent, AppSettings]): void => {
-      handler(listenerArguments[1]);
-    };
-
-    ipcRenderer.on(settingsChangedEventChannel, listener);
-    return (): void => {
-      ipcRenderer.removeListener(settingsChangedEventChannel, listener);
-    };
-  },
-  settingsReadyToShow: async () => ipcRenderer.invoke("settings:ready-to-show") as Promise<void>,
+  onAppNavigate: (handler: (page: AppPage) => void) => subscribe(appNavigateEventChannel, handler),
+  onShortcutRecordingEvent: (handler: (event: ShortcutRecordingEvent) => void) =>
+    subscribe(shortcutRecordingEventChannel, handler),
+  onSettingsChanged: (handler: (settings: AppSettings) => void) => subscribe(settingsChangedEventChannel, handler),
   updateSettings: async (settings: AppSettingsUpdate) =>
-    ipcRenderer.invoke("settings:update", settings) as Promise<AppSettings>
+    ipcRenderer.invoke("settings:update", settings) as Promise<AppSettings>,
+  chooseClipsDirectory: async () => ipcRenderer.invoke("clips:choose-directory") as Promise<AppSettings | null>,
+  copyClip: async (clipId: string) => ipcRenderer.invoke("clips:copy", clipId) as Promise<void>,
+  deleteClip: async (clipId: string) => ipcRenderer.invoke("clips:delete", clipId) as Promise<void>,
+  getClipsDirectory: async () => ipcRenderer.invoke("clips:get-directory") as Promise<string>,
+  getClipsStatus: async () => ipcRenderer.invoke("clips:get-status") as Promise<ClipsStatus>,
+  listClips: async () => ipcRenderer.invoke("clips:list") as Promise<ClipEntry[]>,
+  listClipSources: async () => ipcRenderer.invoke("clips:list-sources") as Promise<ClipSourceOptions>,
+  onClipsLibraryChanged: (handler: () => void) => subscribe(clipsLibraryChangedEventChannel, handler),
+  onClipsStatusChanged: (handler: (status: ClipsStatus) => void) => subscribe(clipsStatusChangedEventChannel, handler),
+  openClip: async (clipId: string) => ipcRenderer.invoke("clips:open", clipId) as Promise<void>,
+  openClipsDirectory: async () => ipcRenderer.invoke("clips:open-directory") as Promise<void>,
+  restartClips: async () => ipcRenderer.invoke("clips:restart") as Promise<void>,
+  saveClip: async () => ipcRenderer.invoke("clips:save") as Promise<void>,
+  showClipInFolder: async (clipId: string) => ipcRenderer.invoke("clips:show-in-folder", clipId) as Promise<void>,
+  completeClipAudioSnapshot: async (requestId: string, recordingId: string) =>
+    ipcRenderer.invoke("clips:audio-snapshot-ready", requestId, recordingId) as Promise<void>,
+  failClipAudioSnapshot: async (requestId: string, message: string) =>
+    ipcRenderer.invoke("clips:audio-snapshot-failed", requestId, message) as Promise<void>,
+  getClipRecorderConfig: async () => ipcRenderer.invoke("clips:get-recorder-config") as Promise<ClipRecorderConfig>,
+  onClipAudioSnapshotRequest: (handler: (request: ClipAudioSnapshotRequest) => void) =>
+    subscribe(clipAudioSnapshotRequestChannel, handler),
+  reportClipRecorderEnded: async () => ipcRenderer.invoke("clips:recorder-ended") as Promise<void>,
+  reportClipRecorderFailed: async (message: string) => ipcRenderer.invoke("clips:recorder-failed", message) as Promise<void>,
+  reportClipRecorderStarted: async () => ipcRenderer.invoke("clips:recorder-started") as Promise<void>,
+  clickToast: async (toastId: number) => ipcRenderer.invoke("toast:clicked", toastId) as Promise<void>,
+  finishToast: async (toastId: number) => ipcRenderer.invoke("toast:finished", toastId) as Promise<void>,
+  onToastShow: (handler: (toast: ToastMessage) => void) => subscribe(toastShowChannel, handler),
+  setToastPointerInside: async (toastId: number, isInside: boolean) =>
+    ipcRenderer.invoke("toast:set-pointer-inside", toastId, isInside) as Promise<void>
 };
 
 contextBridge.exposeInMainWorld("softshot", api);

@@ -2,6 +2,9 @@ import { recordingAudioConstraints } from "./audio-quality.js";
 import type { VideoFps } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
+const loopbackVideoFrameRate = 1;
+const loopbackVideoSizePx = 64;
+
 interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
   cursor: "never";
   displaySurface: "monitor";
@@ -11,6 +14,11 @@ interface DisplayCaptureVideoConstraints extends MediaTrackConstraints {
 interface DisplayCaptureOptions extends DisplayMediaStreamOptions {
   audio: false | MediaTrackConstraints;
   video: DisplayCaptureVideoConstraints;
+}
+
+interface LoopbackAudioCaptureOptions extends DisplayMediaStreamOptions {
+  audio: MediaTrackConstraints;
+  video: MediaTrackConstraints;
 }
 
 export async function getCursorlessDesktopStream(
@@ -31,6 +39,24 @@ export async function getCursorlessDesktopStream(
     await getSoftshotApi().selectCaptureDisplay(displayId);
     return await navigator.mediaDevices.getDisplayMedia(options);
   });
+}
+
+export async function getLoopbackAudioStream(): Promise<MediaStream> {
+  const options: LoopbackAudioCaptureOptions = {
+    audio: recordingAudioConstraints(),
+    video: {
+      frameRate: loopbackVideoFrameRate,
+      height: { max: loopbackVideoSizePx },
+      width: { max: loopbackVideoSizePx }
+    }
+  };
+  const stream = await navigator.mediaDevices.getDisplayMedia(options);
+  for (const track of stream.getVideoTracks()) {
+    track.stop();
+    stream.removeTrack(track);
+  }
+
+  return stream;
 }
 
 export function stopTracks(stream: MediaStream | null): void {

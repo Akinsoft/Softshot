@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Softshot</title>
+    <link rel="stylesheet" href="./shared-ui.css" />
+    <link rel="stylesheet" href="./app-window.css" />
+  </head>
+  <body>
+    <header class="app-titlebar">
+      <img class="app-logo" src="./assets/app-logo.png" alt="" draggable="false" />
+      <span class="app-title">Softshot</span>
+    </header>
+
+    <nav class="app-sidebar" aria-label="Sections">
+      <div class="nav-group">
+        <button class="nav-item" type="button" data-page="capture">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+            <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+            <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+            <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+          <span>Capture</span>
+        </button>
+        <button class="nav-item" type="button" data-page="clips">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <path d="m10 9.5 4.5 2.5-4.5 2.5Z" />
+          </svg>
+          <span>Clips</span>
+          <span id="nav-clips-indicator" class="nav-indicator" hidden></span>
+        </button>
+        <button class="nav-item nav-subitem" type="button" data-page="gallery">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="4" y="4" width="7" height="7" rx="1" />
+            <rect x="13" y="4" width="7" height="7" rx="1" />
+            <rect x="4" y="13" width="7" height="7" rx="1" />
+            <rect x="13" y="13" width="7" height="7" rx="1" />
+          </svg>
+          <span>Gallery</span>
+        </button>
+      </div>
+
+      <div class="nav-divider" aria-hidden="true"></div>
+
+      <div class="nav-group">
+        <button class="nav-item" type="button" data-page="settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h10" />
+            <path d="M18 7h2" />
+            <circle cx="16" cy="7" r="2" />
+            <path d="M4 17h2" />
+            <path d="M10 17h10" />
+            <circle cx="8" cy="17" r="2" />
+          </svg>
+          <span>Settings</span>
+        </button>
+      </div>
+    </nav>
+
+    <main id="app-content" class="app-content softshot-scroll">
+      <section id="capture-page" class="app-page" data-page="capture" aria-labelledby="capture-heading" hidden>
+        <header class="page-header">
+          <h1 id="capture-heading">Capture</h1>
+        </header>
+
+        <section class="settings-section" aria-labelledby="capture-shortcut-heading">
+          <h2 id="capture-shortcut-heading" class="settings-section-title">Shortcut</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label">Capture shortcut</span>
+              <span id="capture-shortcut-status" class="row-status" aria-live="polite"></span>
+              <button id="capture-shortcut-button" class="softshot-button keybind-button" type="button" aria-label="Change capture shortcut"></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="capture-audio-heading">
+          <h2 id="capture-audio-heading" class="settings-section-title">Recording audio</h2>
+          <div class="settings-card">
+            <label class="settings-row" for="capture-microphone-select">
+              <span class="settings-label">Microphone</span>
+              <select id="capture-microphone-select" class="softshot-select settings-select"></select>
+            </label>
+            <label class="settings-row" for="capture-system-audio-checkbox">
+              <span class="settings-label">Desktop audio</span>
+              <span class="softshot-toggle">
+                <input id="capture-system-audio-checkbox" type="checkbox" />
+                <span class="softshot-toggle-track" aria-hidden="true">
+                  <span class="softshot-toggle-thumb"></span>
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+      </section>
+
+      <section id="clips-page" class="app-page" data-page="clips" aria-labelledby="clips-heading" hidden>
+        <header class="page-header">
+          <h1 id="clips-heading">Clips</h1>
+          <label class="header-toggle" for="clips-enabled-checkbox">
+            <span id="clips-enabled-label" class="header-toggle-label">Off</span>
+            <span class="softshot-toggle">
+              <input id="clips-enabled-checkbox" type="checkbox" aria-label="Turn on Clips" />
+              <span class="softshot-toggle-track" aria-hidden="true">
+                <span class="softshot-toggle-thumb"></span>
+              </span>
+            </span>
+          </label>
+        </header>
+
+        <div id="clips-status-card" class="status-card" data-state="off">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div class="status-text">
+            <span id="clips-status-title" class="status-title" aria-live="polite"></span>
+            <span id="clips-status-detail" class="status-detail"></span>
+          </div>
+          <button id="clips-retry-button" class="softshot-button" type="button" hidden>Try again</button>
+          <button id="clips-save-button" class="softshot-button primary" type="button" hidden>Save clip</button>
+        </div>
+
+        <section class="settings-section" aria-labelledby="clips-source-heading">
+          <h2 id="clips-source-heading" class="settings-section-title">Source</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label">Record</span>
+              <div class="segmented" role="radiogroup" aria-label="Clip source">
+                <button id="clips-source-display" class="segmented-option" type="button" role="radio" data-source-kind="display">Monitor</button>
+                <button id="clips-source-window" class="segmented-option" type="button" role="radio" data-source-kind="window">Application</button>
+              </div>
+            </div>
+            <label id="clips-display-row" class="settings-row" for="clips-display-select">
+              <span class="settings-label">Monitor</span>
+              <select id="clips-display-select" class="softshot-select settings-select wide-select"></select>
+            </label>
+            <div id="clips-window-row" class="settings-row" hidden>
+              <span class="settings-label">Application</span>
+              <div class="row-controls">
+                <select id="clips-window-select" class="softshot-select settings-select wide-select" aria-label="Application"></select>
+                <button id="clips-window-refresh" class="icon-button" type="button" data-tooltip="Refresh list" aria-label="Refresh list">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8" />
+                    <path d="M4 4v4h4" />
+                    <path d="M4 13a8 8 0 0 0 14.3 4.9L20 16" />
+                    <path d="M20 20v-4h-4" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="clips-quality-heading">
+          <h2 id="clips-quality-heading" class="settings-section-title">Quality</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label-group">
+                <label class="settings-label" for="clips-duration-select">Clip length</label>
+                <button id="clips-duration-help" class="help-button" type="button" aria-label="Memory used by each clip length">?</button>
+              </span>
+              <select id="clips-duration-select" class="softshot-select settings-select"></select>
+            </div>
+            <label class="settings-row" for="clips-quality-select">
+              <span class="settings-label">Resolution</span>
+              <select id="clips-quality-select" class="softshot-select settings-select"></select>
+            </label>
+            <label class="settings-row" for="clips-fps-select">
+              <span class="settings-label">Frame rate</span>
+              <select id="clips-fps-select" class="softshot-select settings-select"></select>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="clips-shortcut-heading">
+          <h2 id="clips-shortcut-heading" class="settings-section-title">Shortcut</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label">Save clip</span>
+              <span id="clips-shortcut-status" class="row-status" aria-live="polite"></span>
+              <button id="clips-shortcut-button" class="softshot-button keybind-button" type="button" aria-label="Change save clip shortcut"></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="clips-audio-heading">
+          <h2 id="clips-audio-heading" class="settings-section-title">Audio</h2>
+          <div class="settings-card">
+            <label class="settings-row" for="clips-system-audio-checkbox">
+              <span class="settings-label">Desktop audio</span>
+              <span class="softshot-toggle">
+                <input id="clips-system-audio-checkbox" type="checkbox" />
+                <span class="softshot-toggle-track" aria-hidden="true">
+                  <span class="softshot-toggle-thumb"></span>
+                </span>
+              </span>
+            </label>
+            <div class="settings-row">
+              <span class="settings-label-group">
+                <label class="settings-label" for="clips-microphone-select">Microphone</label>
+                <button class="help-button" type="button" data-tooltip="The microphone stays in use the whole time Clips is on" aria-label="About the microphone">?</button>
+              </span>
+              <select id="clips-microphone-select" class="softshot-select settings-select"></select>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="clips-storage-heading">
+          <h2 id="clips-storage-heading" class="settings-section-title">Storage</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label">Clips folder</span>
+              <span id="clips-directory-path" class="row-value path-text"></span>
+              <div class="row-controls">
+                <button id="clips-directory-open" class="softshot-button" type="button">Open</button>
+                <button id="clips-directory-change" class="softshot-button" type="button">Change</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="gallery-page" class="app-page" data-page="gallery" aria-labelledby="gallery-heading" hidden>
+        <header class="page-header">
+          <div class="page-heading">
+            <h1 id="gallery-heading">Gallery</h1>
+            <p id="gallery-summary" class="page-summary"></p>
+          </div>
+          <button id="gallery-open-folder" class="softshot-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            </svg>
+            Open folder
+          </button>
+        </header>
+
+        <div id="gallery-groups" class="gallery-groups"></div>
+
+        <div id="gallery-empty" class="gallery-empty" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <path d="m10 9.5 4.5 2.5-4.5 2.5Z" />
+          </svg>
+          <h2>No clips yet</h2>
+          <p id="gallery-empty-detail"></p>
+          <button id="gallery-go-to-clips" class="softshot-button primary" type="button">Set up Clips</button>
+        </div>
+      </section>
+
+      <section id="settings-page" class="app-page" data-page="settings" aria-labelledby="settings-heading" hidden>
+        <header class="page-header">
+          <h1 id="settings-heading">Settings</h1>
+        </header>
+
+        <section class="settings-section" aria-labelledby="settings-general-heading">
+          <h2 id="settings-general-heading" class="settings-section-title">General</h2>
+          <div class="settings-card">
+            <label class="settings-row" for="startup-checkbox">
+              <span class="settings-label">Launch at startup</span>
+              <span class="softshot-toggle">
+                <input id="startup-checkbox" type="checkbox" />
+                <span class="softshot-toggle-track" aria-hidden="true">
+                  <span class="softshot-toggle-thumb"></span>
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="app-toast" class="app-toast" role="status" hidden></div>
+
+    <script type="module" src="../dist/browser/app-window.js"></script>
+  </body>
+</html>
