@@ -47,13 +47,20 @@ export interface ClipVideoExit {
 type ClipVideoExitHandler = (exit: ClipVideoExit) => void;
 type FfmpegProcess = ChildProcessByStdio<null, Readable, Readable>;
 
+interface CaptureRun {
+  ffmpeg: FfmpegProcess;
+  fragments: Mp4Fragment[];
+  outputAdvancedAtEpochSeconds: number;
+  outputSeconds: number;
+  reader: Mp4FragmentReader;
+  startEpochSeconds: number;
+  stderr: string;
+  stderrLine: string;
+}
+
 export class ClipVideoCapture {
   static start(options: ClipVideoCaptureOptions): ClipVideoCapture {
-    const ffmpeg = spawn(options.ffmpegPath, captureArguments(options), {
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true
-    });
-    return new ClipVideoCapture(ffmpeg, options.durationSeconds);
+    return new ClipVideoCapture(options);
   }
 
   private readonly exitHandlers = new Set<ClipVideoExitHandler>();
@@ -64,31 +71,59 @@ export class ClipVideoCapture {
 
   private readonly fragmentListeners = new Set<() => void>();
 
-  private readonly fragments: Mp4Fragment[] = [];
+  private readonly retainedSeconds: number;
 
-  private readonly reader = new Mp4FragmentReader();
-
-  private startEpochSeconds = Infinity;
-
-  private stderr = "";
-
-  private stderrLine = "";
+  private run: CaptureRun;
 
   private hasReceivedVideo = false;
 
-  private constructor(private readonly ffmpeg: FfmpegProcess, private readonly durationSeconds: number) {
+  private constructor(private readonly options: ClipVideoCaptureOptions) {
+    this.retainedSeconds = options.durationSeconds + retainedExtraSeconds;
+    this.run = this.startRun();
+  }
+
+  private startRun(): CaptureRun {
+    const ffmpeg = spawn(this.options.ffmpegPath, captureArguments(this.options), {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    const run: CaptureRun = {
+      ffmpeg,
+      fragments: [],
+      outputAdvancedAtEpochSeconds: epochSeconds(),
+      outputSeconds: 0,
+      reader: new Mp4FragmentReader(),
+      startEpochSeconds: Infinity,
+      stderr: "",
+      stderrLine: ""
+    };
     ffmpeg.stdout.on("data", (chunk: Buffer): void => {
-      this.receive(chunk);
+      if (run === this.run) {
+        this.receive(chunk);
+      }
     });
     ffmpeg.stderr.on("data", (chunk: Buffer): void => {
-      this.receiveStderr(chunk.toString());
+      if (run === this.run) {
+        this.receiveStderr(chunk.toString());
+      }
     });
     ffmpeg.on("error", (error): void => {
-      this.finish({ code: null, message: error.message });
+      if (run === this.run) {
+        this.finish({ code: null, message: error.message });
+      }
     });
     ffmpeg.on("exit", (code): void => {
-      this.finish({ code, message: this.stderr.trim() });
+      if (run === this.run) {
+        this.finish({ code, message: run.stderr.trim() });
+      }
     });
+    return run;
+  }
+
+  private restartRun(): void {
+    const previousRun = this.run;
+    this.run = this.startRun();
+    previousRun.ffmpeg.kill();
   }
 
   private finish(exit: ClipVideoExit): void {
@@ -107,28 +142,49 @@ export class ClipVideoCapture {
   }
 
   private receiveStderr(text: string): void {
-    const lines = `${this.stderrLine}${text}`.split(/\r?\n/u);
-    this.stderrLine = lines.pop() ?? "";
+    const { run } = this;
+    const lines = `${run.stderrLine}${text}`.split(/\r?\n/u);
+    run.stderrLine = lines.pop() ?? "";
     for (const line of lines) {
       const progressMatch = progressTimePattern.exec(line.trim());
       if (progressMatch?.groups) {
-        this.updateTimeline(Number(progressMatch.groups.microseconds) / microsecondsPerSecond);
+        const outputSeconds = Number(progressMatch.groups.microseconds) / microsecondsPerSecond;
+        if (this.isFillingLongGap(outputSeconds)) {
+          this.restartRun();
+          return;
+        }
+
+        this.receiveOutputTime(outputSeconds);
       } else if (!progressLinePattern.test(line.trim())) {
-        this.stderr = `${this.stderr}${line}\n`.slice(-stderrLimitCharacters);
+        run.stderr = `${run.stderr}${line}\n`.slice(-stderrLimitCharacters);
       }
     }
   }
 
+  private isFillingLongGap(outputSeconds: number): boolean {
+    return outputSeconds > this.run.outputSeconds
+      && epochSeconds() - this.run.outputAdvancedAtEpochSeconds > this.retainedSeconds;
+  }
+
+  private receiveOutputTime(outputSeconds: number): void {
+    this.updateTimeline(outputSeconds);
+    if (outputSeconds > this.run.outputSeconds) {
+      this.run.outputSeconds = outputSeconds;
+      this.run.outputAdvancedAtEpochSeconds = epochSeconds();
+    }
+  }
+
   private updateTimeline(outputSeconds: number): void {
-    this.startEpochSeconds = Math.min(this.startEpochSeconds, epochSeconds() - outputSeconds);
+    this.run.startEpochSeconds = Math.min(this.run.startEpochSeconds, epochSeconds() - outputSeconds);
   }
 
   private receive(chunk: Buffer): void {
+    const { run } = this;
     let fragments: Mp4Fragment[];
     try {
-      fragments = this.reader.push(chunk);
+      fragments = run.reader.push(chunk);
     } catch (error) {
-      this.ffmpeg.kill();
+      run.ffmpeg.kill();
       this.finish({ code: null, message: errorMessage(error) });
       return;
     }
@@ -137,10 +193,10 @@ export class ClipVideoCapture {
       return;
     }
 
-    const isFirstVideo = this.fragments.length === 0 && !this.hasReceivedVideo;
+    const isFirstVideo = run.fragments.length === 0 && !this.hasReceivedVideo;
     for (const fragment of fragments) {
       this.updateTimeline(fragment.endSeconds);
-      this.fragments.push(fragment);
+      run.fragments.push(fragment);
     }
 
     if (isFirstVideo) {
@@ -150,9 +206,9 @@ export class ClipVideoCapture {
       }
     }
 
-    const oldestKeptEndSeconds = (this.fragments.at(-1)?.endSeconds ?? 0) - this.durationSeconds - retainedExtraSeconds;
-    while (this.fragments.length > 0 && this.fragments[0].endSeconds < oldestKeptEndSeconds) {
-      this.fragments.shift();
+    const oldestKeptEndSeconds = (run.fragments.at(-1)?.endSeconds ?? 0) - this.retainedSeconds;
+    while (run.fragments.length > 0 && run.fragments[0].endSeconds < oldestKeptEndSeconds) {
+      run.fragments.shift();
     }
 
     for (const listener of this.fragmentListeners) {
@@ -161,8 +217,8 @@ export class ClipVideoCapture {
   }
 
   private newestEndEpochSeconds(): number {
-    const newest = this.fragments.at(-1);
-    return newest ? this.startEpochSeconds + newest.endSeconds : -Infinity;
+    const newest = this.run.fragments.at(-1);
+    return newest ? this.run.startEpochSeconds + newest.endSeconds : -Infinity;
   }
 
   private async waitForFragmentEndingAfter(epochSecondsToReach: number): Promise<void> {
@@ -198,19 +254,20 @@ export class ClipVideoCapture {
 
   async snapshot(requestedAtEpochSeconds: number): Promise<ClipVideoSnapshot> {
     await this.waitForFragmentEndingAfter(requestedAtEpochSeconds);
-    if (this.fragments.length === 0) {
+    const { run } = this;
+    if (run.fragments.length === 0) {
       throw new Error("Nothing has been recorded yet. If Clips is following an app, it starts recording once the app draws something.");
     }
 
     return {
-      bytes: Buffer.concat([...this.reader.header(), ...this.fragments.map((fragment) => fragment.bytes)]),
-      startEpochSeconds: this.startEpochSeconds
+      bytes: Buffer.concat([...run.reader.header(), ...run.fragments.map((fragment) => fragment.bytes)]),
+      startEpochSeconds: run.startEpochSeconds
     };
   }
 
   stop(): void {
     if (!this.exit) {
-      this.ffmpeg.kill();
+      this.run.ffmpeg.kill();
     }
   }
 }
