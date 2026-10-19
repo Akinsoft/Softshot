@@ -76,6 +76,8 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly saveButton = getRequiredElement("clips-save-button", HTMLButtonElement);
 
+  private readonly savedToastCheckbox = getRequiredElement("clips-saved-toast-checkbox", HTMLInputElement);
+
   private readonly shortcutButton: ShortcutButton;
 
   private readonly sourceDisplayButton = getRequiredElement("clips-source-display", HTMLButtonElement);
@@ -158,6 +160,9 @@ export class ClipsPage implements AppWindowPage {
     const api = getSoftshotApi();
     this.enabledCheckbox.addEventListener("change", (): void => {
       this.runTask(this.updateClips({ enabled: this.enabledCheckbox.checked }));
+    });
+    this.savedToastCheckbox.addEventListener("change", (): void => {
+      this.runTask(this.updateClips({ savedToastEnabled: this.savedToastCheckbox.checked }));
     });
     this.systemAudioCheckbox.addEventListener("change", (): void => {
       this.runTask(this.updateClips({ systemAudioEnabled: this.systemAudioCheckbox.checked }));
@@ -341,6 +346,7 @@ export class ClipsPage implements AppWindowPage {
     this.renderSource(clips);
     this.renderQuality(clips);
     this.shortcutButton.render(clips.shortcut);
+    this.savedToastCheckbox.checked = clips.savedToastEnabled;
     this.systemAudioCheckbox.checked = clips.systemAudioEnabled;
     this.microphoneSelect.replaceChildren(
       ...microphoneOptions(this.context.microphoneDevices(), clips.microphoneDeviceId)

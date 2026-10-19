@@ -74,6 +74,7 @@ export interface ClipSettings {
   fps: VideoFps;
   microphoneDeviceId: string | null;
   quality: ClipQuality;
+  savedToastEnabled: boolean;
   shortcut: string;
   source: ClipSource;
   systemAudioEnabled: boolean;

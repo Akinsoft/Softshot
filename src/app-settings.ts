@@ -26,6 +26,7 @@ const clipSettingKeys = new Set([
   "fps",
   "microphoneDeviceId",
   "quality",
+  "savedToastEnabled",
   "shortcut",
   "source",
   "systemAudioEnabled"
@@ -55,6 +56,7 @@ function createDefaultClipSettings(): ClipSettings {
     fps: videoFpsOptions.high,
     microphoneDeviceId: null,
     quality: defaultClipQuality,
+    savedToastEnabled: true,
     shortcut: defaultClipShortcut,
     source: { displayId: null, kind: "display" },
     systemAudioEnabled: true
@@ -200,6 +202,9 @@ function clipSettingsFromObject(value: Record<string, unknown>, base: ClipSettin
       ? validateMicrophoneDeviceId(value.microphoneDeviceId)
       : base.microphoneDeviceId,
     quality: "quality" in value ? validateClipQuality(value.quality) : base.quality,
+    savedToastEnabled: "savedToastEnabled" in value
+      ? isTrueSetting(value.savedToastEnabled, "Saved clip popup")
+      : base.savedToastEnabled,
     shortcut: "shortcut" in value ? validateClipShortcut(value.shortcut) : base.shortcut,
     source: "source" in value ? validateClipSource(value.source) : base.source,
     systemAudioEnabled: "systemAudioEnabled" in value

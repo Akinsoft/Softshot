@@ -372,6 +372,10 @@ export class ClipsService {
     }
 
     this.host.libraryChanged();
+    if (!this.host.clipSettings().savedToastEnabled) {
+      return;
+    }
+
     this.host.showToast({
       detail: null,
       onClick: (): void => {
