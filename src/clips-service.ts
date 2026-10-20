@@ -47,7 +47,7 @@ const halfDivisor = 2;
 const invalidFileNameCharacters = /[<>:"/\\|?*\p{Cc}]+/gu;
 const repeatedSpaces = /\s+/gu;
 
-export interface ClipsServiceHost {
+interface ClipsServiceHost {
   clipSettings(): ClipSettings;
   isAppWindowSender(sender: Electron.WebContents): boolean;
   libraryChanged(): void;

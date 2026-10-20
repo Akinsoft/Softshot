@@ -23,7 +23,7 @@ interface StoredClip {
   width: number;
 }
 
-export interface NewClip {
+interface NewClip {
   createdAt: Date;
   durationSeconds: number;
   filePath: string;

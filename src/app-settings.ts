@@ -36,7 +36,7 @@ const modifierKeys = new Set(["Alt", "Control", "Meta", "Shift"]);
 const clipDurationSet: ReadonlySet<unknown> = new Set(clipDurationOptionsSeconds);
 const clipQualitySet: ReadonlySet<unknown> = new Set(clipQualities);
 
-export function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSettings {
+function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSettings {
   return {
     captureShortcut: defaultCaptureShortcut,
     clips: createDefaultClipSettings(),

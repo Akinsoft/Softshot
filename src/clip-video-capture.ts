@@ -22,7 +22,7 @@ const progressPeriodSeconds = "0.25";
 const progressTimePattern = /^out_time_us=(?<microseconds>\d+)$/u;
 const progressLinePattern = /^[a-z_]+=/u;
 
-export interface ClipVideoCaptureOptions {
+interface ClipVideoCaptureOptions {
   bitrate: number;
   durationSeconds: number;
   encoder: ClipVideoEncoder;

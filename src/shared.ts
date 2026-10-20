@@ -42,8 +42,8 @@ export const clipDurationOptionsSeconds = [
 
 export type CaptureMode = "screenshot" | "video";
 export type CapturePipeline = "composited" | "direct";
-export const recordingAudioSourceKinds = ["microphone", "system"] as const;
-export const audioSourceKinds = [...recordingAudioSourceKinds, "clip"] as const;
+const recordingAudioSourceKinds = ["microphone", "system"] as const;
+const audioSourceKinds = [...recordingAudioSourceKinds, "clip"] as const;
 const recordingAudioSourceKindSet: ReadonlySet<unknown> = new Set(recordingAudioSourceKinds);
 const audioSourceKindSet: ReadonlySet<unknown> = new Set(audioSourceKinds);
 
@@ -57,14 +57,14 @@ export const clipAudioTrackNames: Readonly<Record<RecordingAudioSourceKind, stri
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
 export type VideoFileExtension = "mp4" | "webm";
-export const outputFileExtensions = ["mp4", "webm", "gif", "m4a", "wav"] as const;
+const outputFileExtensions = ["mp4", "webm", "gif", "m4a", "wav"] as const;
 export type OutputFileExtension = (typeof outputFileExtensions)[number];
 const outputFileExtensionSet: ReadonlySet<unknown> = new Set(outputFileExtensions);
 export type RecordingEncoder = "hardware" | "compatibility";
 export type ClipQuality = (typeof clipQualities)[number];
 export type ClipDurationSeconds = (typeof clipDurationOptionsSeconds)[number];
 export type ShortcutTarget = "capture" | "clips";
-export const appPages = ["capture", "clips", "gallery", "settings"] as const;
+const appPages = ["capture", "clips", "gallery", "settings"] as const;
 export type AppPage = (typeof appPages)[number];
 export type ClipsState = "error" | "off" | "recording" | "starting" | "waiting";
 
@@ -230,14 +230,14 @@ export type ShortcutRecordingEvent =
   | { shortcut: string; target: ShortcutTarget; type: "preview" }
   | { settings: AppSettings; target: ShortcutTarget; type: "saved" };
 
-export type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
-export type SettingsChangedEventHandler = (settings: AppSettings) => void;
-export type AppNavigateHandler = (page: AppPage) => void;
-export type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
-export type ClipsLibraryChangedHandler = () => void;
+type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
+type SettingsChangedEventHandler = (settings: AppSettings) => void;
+type AppNavigateHandler = (page: AppPage) => void;
+type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
+type ClipsLibraryChangedHandler = () => void;
 
-export type StopRecordingRequestHandler = () => void;
-export type ClipAudioSnapshotRequestHandler = (request: ClipAudioSnapshotRequest) => void;
+type StopRecordingRequestHandler = () => void;
+type ClipAudioSnapshotRequestHandler = (request: ClipAudioSnapshotRequest) => void;
 export type ToastTone = "error" | "info";
 
 export interface ToastMessage {
@@ -248,7 +248,7 @@ export interface ToastMessage {
   tone: ToastTone;
 }
 
-export type ToastShowHandler = (toast: ToastMessage) => void;
+type ToastShowHandler = (toast: ToastMessage) => void;
 
 export interface SoftshotApi {
   appendRecordingFileChunk(recordingId: string, bytes: Uint8Array): Promise<void>;

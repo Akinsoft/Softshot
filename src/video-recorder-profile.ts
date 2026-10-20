@@ -3,23 +3,23 @@ import type { RecordingEncoder, VideoFileExtension, VideoFps } from "./shared.js
 import { videoFileExtension } from "./shared.js";
 import { hardwareVideoCodecs } from "./video-codecs.js";
 
-export interface VideoRecorderProfile {
+interface VideoRecorderProfile {
   encoder: RecordingEncoder;
   fileExtension: VideoFileExtension;
   hardwareVideoCodec: string | null;
   mimeType: string;
 }
 
-export const supportedMp4MimeTypes = [
+const supportedMp4MimeTypes = [
   ...hardwareVideoCodecs.map((codec) => `video/mp4;codecs=${codec}`),
   "video/mp4;codecs=avc1.42E01E"
 ] as const;
-export const supportedAudioVideoMp4MimeTypes = [
+const supportedAudioVideoMp4MimeTypes = [
   ...hardwareVideoCodecs.map((codec) => `video/mp4;codecs=${codec},mp4a.40.2`),
   "video/mp4;codecs=avc1.42E01E,mp4a.40.2"
 ] as const;
-export const supportedWebmMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
-export const supportedAudioVideoWebmMimeTypes = [
+const supportedWebmMimeTypes = ["video/webm;codecs=vp8", "video/webm;codecs=vp9", "video/webm"] as const;
+const supportedAudioVideoWebmMimeTypes = [
   "video/webm;codecs=vp8,opus",
   "video/webm;codecs=vp9,opus",
   "video/webm"

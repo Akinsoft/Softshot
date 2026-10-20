@@ -16,12 +16,12 @@ export interface TimelineLocation {
   timelineStart: number;
 }
 
-export interface TimelineSegmentBounds {
+interface TimelineSegmentBounds {
   timelineEnd: number;
   timelineStart: number;
 }
 
-export interface TimelineSplit {
+interface TimelineSplit {
   rightSegmentId: number;
   segments: TimelineSegment[];
 }
@@ -237,7 +237,7 @@ export function sourceRangesForTimeline(segments: readonly TimelineSegment[]): T
   });
 }
 
-export function sourceRangesForTimelineRange(
+function sourceRangesForTimelineRange(
   segments: readonly TimelineSegment[],
   timelineRange: TrimRange
 ): TrimRange[] {

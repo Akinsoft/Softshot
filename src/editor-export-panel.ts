@@ -56,7 +56,7 @@ const presetGroupIcons: Record<ExportPresetGroup, string> = {
   YouTube: "youtube"
 };
 
-export interface ExportPanelHost {
+interface ExportPanelHost {
   exportFile(plan: ExportPlan, options: ExportOptions): Promise<CompletedOutputFile>;
   exportSource(): ExportSource;
   setBusy(isBusy: boolean): void;

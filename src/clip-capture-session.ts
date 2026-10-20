@@ -38,7 +38,7 @@ export interface ClipCaptureSessionOptions {
   width: number;
 }
 
-export interface ClipCaptureSessionEvents {
+interface ClipCaptureSessionEvents {
   ended(): void;
   failed(message: string): void;
   recorderClosed(webContentsId: number): void;

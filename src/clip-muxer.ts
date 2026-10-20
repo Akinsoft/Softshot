@@ -4,7 +4,7 @@ import type { ClipVideoSnapshot } from "./clip-video-capture";
 
 const endEpsilonSeconds = 1e-6;
 
-export interface ClipMuxOptions {
+interface ClipMuxOptions {
   audioFilePath: string | null;
   durationSeconds: number;
   endEpochSeconds: number;

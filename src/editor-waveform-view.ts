@@ -8,7 +8,7 @@ const half = 0.5;
 const activeWaveformColors = { bars: "rgba(94, 234, 212, 0.88)", clip: "rgba(45, 212, 191, 0.13)" };
 const mutedWaveformColors = { bars: "rgba(180, 188, 198, 0.42)", clip: "rgba(148, 163, 184, 0.08)" };
 
-export function segmentWaveformPeaks(
+function segmentWaveformPeaks(
   sourcePeaks: readonly number[],
   sourceDurationSeconds: number,
   segment: TimelineSegment,

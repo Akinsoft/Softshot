@@ -71,13 +71,13 @@ export interface MonitorGeometry {
   top: number;
 }
 
-export interface WindowGeometry {
+interface WindowGeometry {
   height: number;
   isMinimized: boolean;
   width: number;
 }
 
-export interface CaptureGeometry {
+interface CaptureGeometry {
   monitors: MonitorGeometry[];
   window: WindowGeometry | null;
 }

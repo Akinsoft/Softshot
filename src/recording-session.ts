@@ -32,7 +32,7 @@ const fullDisplayCropTolerancePx = 0.5;
 type HardwareRecordingOutput = Output<Mp4OutputFormat, AppendOnlyStreamTarget>;
 type RecordingSessionErrorHandler = (error: unknown) => void;
 
-export interface RecordingSessionConfig {
+interface RecordingSessionConfig {
   annotations: Annotation[];
   crop: Rect;
   displays: CaptureDisplay[];

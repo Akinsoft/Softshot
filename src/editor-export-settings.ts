@@ -4,13 +4,13 @@ import { videoFpsOptions } from "./shared.js";
 import { videoBitrate } from "./video-bitrate.js";
 
 export type ExportFormat = OutputFileExtension;
-export type ExportFormatKind = "audio" | "gif" | "video";
+type ExportFormatKind = "audio" | "gif" | "video";
 export type ExportVideoCodec = "av1" | "avc" | "hevc" | "vp9";
-export type ExportAudioCodec = "aac" | "opus" | "pcm-s16";
-export type ExportQuality = "high" | "low" | "medium";
-export type ExportResolution = "1080p" | "1440p" | "2160p" | "480p" | "720p" | "source";
-export type ExportBitrateMode = "constant" | "variable";
-export type ExportScaling = "down" | "none" | "up";
+type ExportAudioCodec = "aac" | "opus" | "pcm-s16";
+type ExportQuality = "high" | "low" | "medium";
+type ExportResolution = "1080p" | "1440p" | "2160p" | "480p" | "720p" | "source";
+type ExportBitrateMode = "constant" | "variable";
+type ExportScaling = "down" | "none" | "up";
 export type ExportPresetGroup = "Discord" | "General" | "Other" | "X" | "YouTube";
 
 const lowAudioBitrate = 96_000;
@@ -77,7 +77,7 @@ export interface ExportSource {
   width: number;
 }
 
-export interface ExportVideoSize {
+interface ExportVideoSize {
   height: number;
   width: number;
 }
@@ -109,7 +109,7 @@ export type ExportPlan =
   | { audio: ExportAudioPlan; format: "m4a" | "wav"; kind: "audio" }
   | { format: "gif"; gif: GifPlan; kind: "gif" };
 
-export interface ExportOutputSummary {
+interface ExportOutputSummary {
   fps: number | null;
   height: number | null;
   width: number | null;

@@ -27,7 +27,7 @@ export function displayMicrophoneLabel(device: MediaDeviceInfo, index: number): 
   return device.label || `${microphoneLabelPrefix} ${String(index + 1)}`;
 }
 
-export function isDefaultMicrophoneDevice(deviceId: string): boolean {
+function isDefaultMicrophoneDevice(deviceId: string): boolean {
   return deviceId === defaultDeviceId;
 }
 

@@ -12,12 +12,12 @@ export interface TimelineThumbnail {
   url: string;
 }
 
-export interface TimelineFilmstrip {
+interface TimelineFilmstrip {
   offsetSeconds: number;
   thumbnails: TimelineThumbnail[];
 }
 
-export function timelineThumbnailTimes(durationSeconds: number, thumbnailCount: number): number[] {
+function timelineThumbnailTimes(durationSeconds: number, thumbnailCount: number): number[] {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new RangeError("The thumbnail duration must be positive and finite.");
   }

@@ -13,7 +13,7 @@ const selectionLineInsetPx = 1;
 const selectionLineOffsetPx = 0.5;
 const selectionLineWidthPx = 2;
 
-export interface AnnotationTransform {
+interface AnnotationTransform {
   clip: Rect | null;
   offset: Point;
   scale: Point;

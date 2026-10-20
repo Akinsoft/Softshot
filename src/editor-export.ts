@@ -56,7 +56,7 @@ export interface ExportAudioTrack {
   volume: number;
 }
 
-export interface ExportedFile {
+interface ExportedFile {
   fileExtension: OutputFileExtension;
   recordingId: string;
 }
@@ -66,12 +66,12 @@ export interface ExportOptions {
   signal?: AbortSignal;
 }
 
-export interface VideoEncoderSize {
+interface VideoEncoderSize {
   height: number;
   width: number;
 }
 
-export interface VideoEncoderCheck extends VideoEncoderSize {
+interface VideoEncoderCheck extends VideoEncoderSize {
   bitrate: number;
   framerate: number;
 }

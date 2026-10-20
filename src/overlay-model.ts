@@ -26,18 +26,18 @@ export interface ArrowAnnotation {
   to: Point;
 }
 
-export interface SelectDragState {
+interface SelectDragState {
   current: Point;
   kind: "select";
   start: Point;
 }
 
-export interface PenDragState {
+interface PenDragState {
   annotation: PenAnnotation;
   kind: "pen";
 }
 
-export interface ArrowDragState {
+interface ArrowDragState {
   current: Point;
   kind: "arrow";
   start: Point;
