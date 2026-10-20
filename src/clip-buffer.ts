@@ -1,9 +1,10 @@
-import { MediaStreamAudioTrackSource, Mp4OutputFormat, NullTarget, Output } from "mediabunny";
+import { AudioSampleSource, Mp4OutputFormat, NullTarget, Output } from "mediabunny";
 
-import { combinedError, rejectedReasons } from "./async-errors.js";
+import { combinedError } from "./async-errors.js";
 import { recordingAudioBitrate } from "./audio-quality.js";
+import { ClipAudioMixer } from "./clip-audio-mixer.js";
 import { getLoopbackAudioStream, stopTracks } from "./desktop-capture.js";
-import { type AudioMix, createAudioMix, getMicrophoneStream, recordingAudioInputs } from "./recording-audio.js";
+import { getMicrophoneStream, recordingAudioInputs } from "./recording-audio.js";
 import type { ClipRecorderConfig } from "./shared.js";
 
 const fragmentWaitTimeoutMs = 5000;
@@ -22,29 +23,25 @@ export class ClipAudioBuffer {
   static async create(config: ClipRecorderConfig): Promise<ClipAudioBuffer> {
     let loopbackStream: MediaStream | null = null;
     let microphoneStream: MediaStream | null = null;
-    let audioMix: AudioMix | null = null;
     try {
       loopbackStream = config.systemAudioEnabled ? await getLoopbackAudioStream() : null;
       microphoneStream = await getMicrophoneStream(config.microphoneDeviceId);
-      audioMix = await createAudioMix(recordingAudioInputs(
-        loopbackStream ?? new MediaStream(),
-        config.systemAudioEnabled,
-        microphoneStream
-      ));
-      if (!audioMix) {
+      const inputs = recordingAudioInputs(loopbackStream ?? new MediaStream(), config.systemAudioEnabled, microphoneStream);
+      if (inputs.length === 0) {
         throw new Error("Clips has no audio source to record.");
       }
 
-      const buffer = new ClipAudioBuffer(config, audioMix, [loopbackStream, microphoneStream]);
-      await buffer.output.start();
+      const buffer = new ClipAudioBuffer(config, [loopbackStream, microphoneStream]);
+      await buffer.start(inputs.map((input) => input.track));
       return buffer;
     } catch (error) {
       stopTracks(loopbackStream);
       stopTracks(microphoneStream);
-      const cleanupResults = await Promise.allSettled([audioMix?.context.close()]);
-      throw combinedError("Could not start the clip audio.", [error, ...rejectedReasons(cleanupResults)]);
+      throw combinedError("Could not start the clip audio.", [error]);
     }
   }
+
+  private readonly audioSource = new AudioSampleSource({ bitrate: recordingAudioBitrate, codec: "aac" });
 
   private readonly endedHandlers = new Set<ClipAudioBufferEndedHandler>();
 
@@ -58,20 +55,25 @@ export class ClipAudioBuffer {
 
   private readonly header: Uint8Array[] = [];
 
+  private mixer: ClipAudioMixer | null = null;
+
   private readonly output: Output<Mp4OutputFormat, NullTarget>;
 
   private pendingMoof: ClipAudioFragment | null = null;
 
-  private constructor(
-    private readonly config: ClipRecorderConfig,
-    audioMix: AudioMix,
-    streams: ReadonlyArray<MediaStream | null>
-  ) {
-    this.output = this.createOutput(audioMix);
+  private constructor(private readonly config: ClipRecorderConfig, streams: ReadonlyArray<MediaStream | null>) {
+    this.output = this.createOutput();
     this.watchStreams(streams);
   }
 
-  private createOutput(audioMix: AudioMix): Output<Mp4OutputFormat, NullTarget> {
+  private async start(tracks: readonly MediaStreamTrack[]): Promise<void> {
+    await this.output.start();
+    this.mixer = ClipAudioMixer.start(tracks, this.audioSource, (error): void => {
+      this.notifyError(error);
+    });
+  }
+
+  private createOutput(): Output<Mp4OutputFormat, NullTarget> {
     const output = new Output({
       format: new Mp4OutputFormat({
         fastStart: "fragmented",
@@ -92,15 +94,7 @@ export class ClipAudioBuffer {
       }),
       target: new NullTarget()
     });
-    const audioSource = new MediaStreamAudioTrackSource(
-      audioMix.mixedTrack as MediaStreamAudioTrack,
-      { bitrate: recordingAudioBitrate, codec: "aac" },
-      { timestampBase: "unix" }
-    );
-    void audioSource.errorPromise.catch((error: unknown): void => {
-      this.notifyError(error);
-    });
-    output.addAudioTrack(audioSource);
+    output.addAudioTrack(this.audioSource);
     return output;
   }
 
@@ -121,6 +115,7 @@ export class ClipAudioBuffer {
     }
 
     this.hasStopped = true;
+    this.mixer?.stop();
     for (const handler of this.endedHandlers) {
       handler();
     }
@@ -132,6 +127,7 @@ export class ClipAudioBuffer {
     }
 
     this.hasStopped = true;
+    this.mixer?.stop();
     for (const handler of this.errorHandlers) {
       handler(error);
     }

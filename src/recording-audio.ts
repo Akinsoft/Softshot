@@ -24,7 +24,7 @@ interface AudioRecorder {
   writer: RecordingFileWriter;
 }
 
-export interface AudioMix {
+interface AudioMix {
   context: AudioContext;
   mixedTrack: MediaStreamTrack;
   sources: Array<{ kind: RecordingAudioSourceKind; node: MediaStreamAudioSourceNode }>;
@@ -202,7 +202,7 @@ export function recordingAudioInputs(
   return inputs;
 }
 
-export async function createAudioMix(inputs: readonly AudioInput[]): Promise<AudioMix | null> {
+async function createAudioMix(inputs: readonly AudioInput[]): Promise<AudioMix | null> {
   if (inputs.length === 0) {
     return null;
   }

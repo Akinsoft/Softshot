@@ -8,6 +8,7 @@
     "src/global.d.ts",
     "src/app-window.ts",
     "src/app-window-*.ts",
+    "src/clip-audio-mixer.ts",
     "src/clip-buffer.ts",
     "src/clips-recorder.ts",
     "src/audio-waveform.ts",

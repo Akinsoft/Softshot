@@ -7,6 +7,7 @@ const highVideoWidth = 1920;
 const ultraVideoHeight = 1440;
 const ultraVideoWidth = 2560;
 const timestampPartWidth = 2;
+const millisecondsPerSecond = 1000;
 const shortClipSeconds = 15;
 const standardClipSeconds = 30;
 const minuteClipSeconds = 60;
@@ -313,6 +314,10 @@ export interface SoftshotApi {
   finishToast(toastId: number): Promise<void>;
   onToastShow(handler: ToastShowHandler): () => void;
   setToastPointerInside(toastId: number, isInside: boolean): Promise<void>;
+}
+
+export function epochSeconds(): number {
+  return (performance.timeOrigin + performance.now()) / millisecondsPerSecond;
 }
 
 export function fileTimestamp(value: Date): string {

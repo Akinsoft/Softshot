@@ -13,7 +13,7 @@ import {
   type ResolvedClipSource,
   windowHandle
 } from "./clip-sources";
-import { type ClipCaptureTarget, type ClipVideoEncoder, epochSeconds, findClipVideoEncoder } from "./clip-video-capture";
+import { type ClipCaptureTarget, type ClipVideoEncoder, findClipVideoEncoder } from "./clip-video-capture";
 import { ClipsLibrary } from "./clips-library";
 import { captureGeometry, type MonitorGeometry, writeFileDropListToClipboard } from "./powershell";
 import type {
@@ -24,7 +24,7 @@ import type {
   ClipsState,
   ClipsStatus
 } from "./shared";
-import { clipDurationLabel, clipQualityDimensions, fileTimestamp } from "./shared";
+import { clipDurationLabel, clipQualityDimensions, epochSeconds, fileTimestamp } from "./shared";
 import { TaskQueue } from "./task-queue";
 import type { ToastOptions } from "./toast-window";
 import { videoBitrate } from "./video-bitrate";

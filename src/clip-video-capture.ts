@@ -3,7 +3,7 @@ import type { Readable } from "node:stream";
 
 import { errorMessage } from "./async-errors";
 import { type Mp4Fragment, Mp4FragmentReader } from "./mp4-fragments";
-import type { VideoFps } from "./shared";
+import { epochSeconds, type VideoFps } from "./shared";
 
 export type ClipVideoEncoder = "h264_amf" | "h264_mf" | "h264_nvenc";
 export type ClipCaptureTarget = { handle: string; kind: "display" } | { handle: string; kind: "window" };
@@ -15,7 +15,6 @@ const encoderProbeFps = 30;
 const snapshotWaitMs = 1500;
 const retainedExtraSeconds = 2;
 const stderrLimitCharacters = 4000;
-const millisecondsPerSecond = 1000;
 const maxRateMultiplier = 1.5;
 const bufferSizeMultiplier = 2;
 const microsecondsPerSecond = 1_000_000;
@@ -280,10 +279,6 @@ export async function findClipVideoEncoder(ffmpegPath: string): Promise<ClipVide
   }
 
   throw new Error("Clips needs a hardware video encoder (NVIDIA, AMD, or Intel graphics), and none is available on this PC.");
-}
-
-export function epochSeconds(): number {
-  return (performance.timeOrigin + performance.now()) / millisecondsPerSecond;
 }
 
 async function canUseEncoder(ffmpegPath: string, encoder: ClipVideoEncoder): Promise<boolean> {
