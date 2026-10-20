@@ -42,7 +42,6 @@ export const clipDurationOptionsSeconds = [
 
 export type CaptureMode = "screenshot" | "video";
 export type CapturePipeline = "composited" | "direct";
-export type DrawingTool = "select" | "pen" | "arrow";
 export const recordingAudioSourceKinds = ["microphone", "system"] as const;
 export const audioSourceKinds = [...recordingAudioSourceKinds, "clip"] as const;
 const recordingAudioSourceKindSet: ReadonlySet<unknown> = new Set(recordingAudioSourceKinds);
@@ -288,7 +287,6 @@ export interface SoftshotApi {
   showError(message: string): Promise<void>;
   appReadyToShow(): Promise<void>;
   beginShortcutRecording(target: ShortcutTarget): Promise<void>;
-  endShortcutRecording(): Promise<void>;
   getSettings(): Promise<AppSettings>;
   onAppNavigate(handler: AppNavigateHandler): () => void;
   onShortcutRecordingEvent(handler: ShortcutRecordingEventHandler): () => void;

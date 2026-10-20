@@ -1809,14 +1809,7 @@ class SoftshotApp {
     this.armShortcutRecorder();
   }
 
-  private stopShortcutRecording(event?: Electron.IpcMainInvokeEvent): void {
-    if (event) {
-      this.getSenderAppWindow(event);
-      if (this.shortcutRecordingWebContentsId !== event.sender.id) {
-        return;
-      }
-    }
-
+  private stopShortcutRecording(): void {
     if (this.shortcutRecordingWebContentsId === null) {
       return;
     }
@@ -2768,10 +2761,6 @@ class SoftshotApp {
 
     ipcMain.handle("app:begin-shortcut-recording", (event, target: unknown): void => {
       this.startShortcutRecording(event, shortcutTargetFromUnknown(target));
-    });
-
-    ipcMain.handle("app:end-shortcut-recording", (event): void => {
-      this.stopShortcutRecording(event);
     });
 
     ipcMain.handle("clips:choose-directory", async (event): Promise<AppSettings | null> => {

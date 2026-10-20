@@ -46,14 +46,6 @@ export function timelineLocationAt(segments: readonly TimelineSegment[], timelin
   return locateTimelinePosition(segments, timelineTime, timelineDuration(segments));
 }
 
-export function timelineLocationsAt(
-  segments: readonly TimelineSegment[],
-  timelineTimes: readonly number[]
-): TimelineLocation[] {
-  const duration = timelineDuration(segments);
-  return timelineTimes.map((time) => locateTimelinePosition(segments, time, duration));
-}
-
 function locateTimelinePosition(
   segments: readonly TimelineSegment[],
   timelineTime: number,

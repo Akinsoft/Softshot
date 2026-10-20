@@ -109,7 +109,6 @@ const api: SoftshotApi = {
   appReadyToShow: async () => ipcRenderer.invoke("app:ready-to-show") as Promise<void>,
   beginShortcutRecording: async (target: ShortcutTarget) =>
     ipcRenderer.invoke("app:begin-shortcut-recording", target) as Promise<void>,
-  endShortcutRecording: async () => ipcRenderer.invoke("app:end-shortcut-recording") as Promise<void>,
   getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
   onAppNavigate: (handler: (page: AppPage) => void) => subscribe(appNavigateEventChannel, handler),
   onShortcutRecordingEvent: (handler: (event: ShortcutRecordingEvent) => void) =>
