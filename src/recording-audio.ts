@@ -12,7 +12,7 @@ import type { RecordingAudioSourceKind, RecordingAudioTrack } from "./shared.js"
 
 type RecordingAudioErrorHandler = (error: unknown) => void;
 
-interface AudioInput {
+export interface AudioInput {
   kind: RecordingAudioSourceKind;
   track: MediaStreamTrack;
 }

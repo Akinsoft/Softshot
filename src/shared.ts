@@ -50,6 +50,11 @@ const audioSourceKindSet: ReadonlySet<unknown> = new Set(audioSourceKinds);
 
 export type RecordingAudioSourceKind = (typeof recordingAudioSourceKinds)[number];
 export type AudioSourceKind = (typeof audioSourceKinds)[number];
+export const clipMixedAudioTrackName = "Desktop and microphone";
+export const clipAudioTrackNames: Readonly<Record<RecordingAudioSourceKind, string>> = {
+  microphone: "Microphone",
+  system: "Desktop"
+};
 export type VideoQuality = "720p" | "1080p";
 export type VideoFps = (typeof videoFpsOptions)[keyof typeof videoFpsOptions];
 export type VideoFileExtension = "mp4" | "webm";

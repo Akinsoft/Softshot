@@ -1,9 +1,4 @@
-import type {
-  EncodedAudioPacketSource,
-  EncodedPacket,
-  EncodedPacketSink,
-  EncodedVideoPacketSource
-} from "mediabunny";
+import type { AudioTrackMetadata, EncodedPacket, EncodedPacketSink, InputAudioTrack } from "mediabunny";
 
 import type { ClipVideoSnapshot } from "./clip-video-capture";
 
@@ -24,13 +19,11 @@ interface ClipTimeline {
   startKeyPacket: EncodedPacket;
 }
 
-interface ClipTracks {
-  audioConfig: AudioDecoderConfig | null;
-  audioPackets: AsyncGenerator<EncodedPacket> | null;
-  audioSource: EncodedAudioPacketSource | null;
-  videoConfig: VideoDecoderConfig;
-  videoPackets: AsyncGenerator<EncodedPacket>;
-  videoSource: EncodedVideoPacketSource;
+interface ClipStream {
+  hasStarted: boolean;
+  head: EncodedPacket | null;
+  packets: AsyncGenerator<EncodedPacket>;
+  write(packet: EncodedPacket, isFirstPacket: boolean): Promise<void>;
 }
 
 export async function muxClip(options: ClipMuxOptions): Promise<void> {
@@ -63,25 +56,24 @@ export async function muxClip(options: ClipMuxOptions): Promise<void> {
 
     const videoSink = new PacketSink(videoTrack);
     const timeline = await clipTimeline(videoSink, options);
-    const audioTrack = audioInput ? await audioInput.getPrimaryAudioTrack() : null;
-    const audioConfig = audioTrack ? await audioTrack.getDecoderConfig() : null;
-    const tracks: ClipTracks = {
-      audioConfig,
-      audioPackets: audioTrack
-        ? audioPackets(new PacketSink(audioTrack), timeline.clipStartEpochSeconds, options.endEpochSeconds)
-        : null,
-      audioSource: audioTrack ? new AudioPacketSource("aac") : null,
-      videoConfig,
-      videoPackets: videoPackets(videoSink, timeline),
-      videoSource: new VideoPacketSource("avc")
-    };
-    output.addVideoTrack(tracks.videoSource);
-    if (tracks.audioSource) {
-      output.addAudioTrack(tracks.audioSource);
+    const videoSource = new VideoPacketSource("avc");
+    output.addVideoTrack(videoSource);
+    const streams = [clipStream(videoPackets(videoSink, timeline), async (packet, isFirstPacket): Promise<void> => {
+      await videoSource.add(packet, isFirstPacket ? { decoderConfig: videoConfig } : {});
+    })];
+    const audioTracks = audioInput ? await audioInput.getAudioTracks() : [];
+    for (const audioTrack of audioTracks) {
+      const audioConfig = await audioTrack.getDecoderConfig();
+      const audioSource = new AudioPacketSource("aac");
+      output.addAudioTrack(audioSource, await audioTrackMetadata(audioTrack));
+      const packets = audioPackets(new PacketSink(audioTrack), timeline.clipStartEpochSeconds, options.endEpochSeconds);
+      streams.push(clipStream(packets, async (packet, isFirstPacket): Promise<void> => {
+        await audioSource.add(packet, isFirstPacket && audioConfig ? { decoderConfig: audioConfig } : {});
+      }));
     }
 
     await output.start();
-    await writeInterleaved(tracks);
+    await writeInterleaved(streams);
     await output.finalize();
   } catch (error) {
     if (output.state === "started") {
@@ -146,25 +138,39 @@ async function* audioPackets(
   }
 }
 
-async function writeInterleaved(tracks: ClipTracks): Promise<void> {
-  let nextVideo = await tracks.videoPackets.next();
-  let nextAudio = await tracks.audioPackets?.next() ?? null;
-  let hasWrittenVideo = false;
-  let hasWrittenAudio = false;
-  while (!nextVideo.done || (nextAudio && !nextAudio.done)) {
-    const isVideoNext = !nextVideo.done
-      && (nextAudio === null || nextAudio.done === true || nextVideo.value.timestamp <= nextAudio.value.timestamp);
-    if (isVideoNext && !nextVideo.done) {
-      await tracks.videoSource.add(nextVideo.value, hasWrittenVideo ? {} : { decoderConfig: tracks.videoConfig });
-      hasWrittenVideo = true;
-      nextVideo = await tracks.videoPackets.next();
-    } else if (nextAudio && !nextAudio.done && tracks.audioSource) {
-      await tracks.audioSource.add(
-        nextAudio.value,
-        hasWrittenAudio || tracks.audioConfig === null ? {} : { decoderConfig: tracks.audioConfig }
-      );
-      hasWrittenAudio = true;
-      nextAudio = await tracks.audioPackets?.next() ?? null;
+async function audioTrackMetadata(audioTrack: InputAudioTrack): Promise<AudioTrackMetadata> {
+  const [disposition, name] = await Promise.all([audioTrack.getDisposition(), audioTrack.getName()]);
+  return name === null ? { disposition } : { disposition, name };
+}
+
+function clipStream(packets: AsyncGenerator<EncodedPacket>, write: ClipStream["write"]): ClipStream {
+  return { hasStarted: false, head: null, packets, write };
+}
+
+async function nextPacket(stream: ClipStream): Promise<EncodedPacket | null> {
+  const result = await stream.packets.next();
+  return result.done === true ? null : result.value;
+}
+
+function earliestStream(streams: readonly ClipStream[]): ClipStream | null {
+  let earliest: ClipStream | null = null;
+  for (const stream of streams) {
+    if (stream.head && (!earliest?.head || stream.head.timestamp < earliest.head.timestamp)) {
+      earliest = stream;
     }
+  }
+
+  return earliest;
+}
+
+async function writeInterleaved(streams: readonly ClipStream[]): Promise<void> {
+  for (const stream of streams) {
+    stream.head = await nextPacket(stream);
+  }
+
+  for (let stream = earliestStream(streams); stream?.head; stream = earliestStream(streams)) {
+    await stream.write(stream.head, !stream.hasStarted);
+    stream.hasStarted = true;
+    stream.head = await nextPacket(stream);
   }
 }

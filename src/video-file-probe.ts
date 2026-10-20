@@ -1,6 +1,7 @@
 const frameRateSamplePacketCount = 300;
 
 export interface VideoFileProbe {
+  audioTrackNames: Array<string | null>;
   durationSeconds: number;
   fps: number;
   hasAudio: boolean;
@@ -35,10 +36,12 @@ export async function probeVideoFile(filePath: string): Promise<VideoFileProbe> 
       throw new Error("The video frame rate could not be read.");
     }
 
+    const audioTracks = await input.getAudioTracks();
     return {
+      audioTrackNames: await Promise.all(audioTracks.map(async (audioTrack) => await audioTrack.getName())),
       durationSeconds,
       fps: averagePacketRate,
-      hasAudio: await input.getPrimaryAudioTrack() !== null,
+      hasAudio: audioTracks.length > 0,
       height: await videoTrack.getDisplayHeight(),
       startSeconds: await input.getFirstTimestamp(),
       width: await videoTrack.getDisplayWidth()

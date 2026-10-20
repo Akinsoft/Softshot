@@ -21,6 +21,38 @@ export async function remuxVideoToZeroStart(
   await remuxVideo(sourceFilePath, targetFilePath, fileExtension, null);
 }
 
+export async function extractNamedAudioTrack(
+  sourceFilePath: string,
+  targetFilePath: string,
+  trackName: string
+): Promise<void> {
+  const { ALL_FORMATS, Conversion, FilePathSource, FilePathTarget, Input, Mp4OutputFormat, Output } = await import("mediabunny");
+  const input = new Input({
+    formats: ALL_FORMATS,
+    source: new FilePathSource(sourceFilePath)
+  });
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: false }),
+    target: new FilePathTarget(targetFilePath)
+  });
+  try {
+    const conversion = await Conversion.init({
+      audio: async (track) => await track.getName() === trackName ? {} : { discard: true },
+      input,
+      output,
+      showWarnings: false,
+      video: { discard: true }
+    });
+    if (!conversion.isValid) {
+      throw new Error(`The ${trackName} audio track cannot be extracted.`);
+    }
+
+    await conversion.execute();
+  } finally {
+    input.dispose();
+  }
+}
+
 async function remuxVideo(
   sourceFilePath: string,
   targetFilePath: string,

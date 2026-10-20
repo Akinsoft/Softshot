@@ -2,11 +2,12 @@ import { AudioSampleSource, Mp4OutputFormat, NullTarget, Output } from "mediabun
 
 import { combinedError } from "./async-errors.js";
 import { recordingAudioBitrate } from "./audio-quality.js";
-import { ClipAudioMixer } from "./clip-audio-mixer.js";
+import { ClipAudioMixer, type ClipAudioMixerInput } from "./clip-audio-mixer.js";
 import { getLoopbackAudioStream, stopTracks } from "./desktop-capture.js";
-import { getMicrophoneStream, recordingAudioInputs } from "./recording-audio.js";
-import type { ClipRecorderConfig } from "./shared.js";
+import { type AudioInput, getMicrophoneStream, recordingAudioInputs } from "./recording-audio.js";
+import { clipAudioTrackNames, clipMixedAudioTrackName, type ClipRecorderConfig, type RecordingAudioSourceKind } from "./shared.js";
 
+const clipAudioEncoding = { bitrate: recordingAudioBitrate, codec: "aac" } as const;
 const fragmentWaitTimeoutMs = 5000;
 const minimumFragmentDurationSeconds = 1;
 const retainedExtraSeconds = 4;
@@ -17,6 +18,10 @@ type ClipAudioBufferEndedHandler = () => void;
 interface ClipAudioFragment {
   bytes: Uint8Array;
   timestamp: number;
+}
+
+interface ClipAudioInput extends ClipAudioMixerInput {
+  kind: RecordingAudioSourceKind;
 }
 
 export class ClipAudioBuffer {
@@ -31,8 +36,8 @@ export class ClipAudioBuffer {
         throw new Error("Clips has no audio source to record.");
       }
 
-      const buffer = new ClipAudioBuffer(config, [loopbackStream, microphoneStream]);
-      await buffer.start(inputs.map((input) => input.track));
+      const buffer = new ClipAudioBuffer(config, inputs, [loopbackStream, microphoneStream]);
+      await buffer.start();
       return buffer;
     } catch (error) {
       stopTracks(loopbackStream);
@@ -40,8 +45,6 @@ export class ClipAudioBuffer {
       throw combinedError("Could not start the clip audio.", [error]);
     }
   }
-
-  private readonly audioSource = new AudioSampleSource({ bitrate: recordingAudioBitrate, codec: "aac" });
 
   private readonly endedHandlers = new Set<ClipAudioBufferEndedHandler>();
 
@@ -55,20 +58,34 @@ export class ClipAudioBuffer {
 
   private readonly header: Uint8Array[] = [];
 
+  private readonly inputs: ClipAudioInput[];
+
+  private readonly mixSource = new AudioSampleSource(clipAudioEncoding);
+
   private mixer: ClipAudioMixer | null = null;
 
   private readonly output: Output<Mp4OutputFormat, NullTarget>;
 
   private pendingMoof: ClipAudioFragment | null = null;
 
-  private constructor(private readonly config: ClipRecorderConfig, streams: ReadonlyArray<MediaStream | null>) {
+  private constructor(
+    private readonly config: ClipRecorderConfig,
+    inputs: readonly AudioInput[],
+    streams: ReadonlyArray<MediaStream | null>
+  ) {
+    const hasSeparateTracks = inputs.length > 1;
+    this.inputs = inputs.map((input): ClipAudioInput => ({
+      kind: input.kind,
+      source: hasSeparateTracks ? new AudioSampleSource(clipAudioEncoding) : null,
+      track: input.track
+    }));
     this.output = this.createOutput();
     this.watchStreams(streams);
   }
 
-  private async start(tracks: readonly MediaStreamTrack[]): Promise<void> {
+  private async start(): Promise<void> {
     await this.output.start();
-    this.mixer = ClipAudioMixer.start(tracks, this.audioSource, (error): void => {
+    this.mixer = ClipAudioMixer.start(this.inputs, this.mixSource, (error): void => {
       this.notifyError(error);
     });
   }
@@ -94,7 +111,14 @@ export class ClipAudioBuffer {
       }),
       target: new NullTarget()
     });
-    output.addAudioTrack(this.audioSource);
+    const hasSeparateTracks = this.inputs.some((input) => input.source !== null);
+    output.addAudioTrack(this.mixSource, hasSeparateTracks ? { name: clipMixedAudioTrackName } : {});
+    for (const input of this.inputs) {
+      if (input.source) {
+        output.addAudioTrack(input.source, { disposition: { default: false }, name: clipAudioTrackNames[input.kind] });
+      }
+    }
+
     return output;
   }
 

@@ -34,12 +34,24 @@ interface StereoWeights {
   right: readonly number[];
 }
 
+export interface ClipAudioMixerInput {
+  source: AudioSampleSource | null;
+  track: MediaStreamTrack;
+}
+
 interface MixerInput {
-  gain: number;
   lastLeft: number;
   lastRight: number;
+  left: Float32Array;
   nextFrame: number | null;
   resamplePosition: number;
+  right: Float32Array;
+  source: AudioSampleSource | null;
+}
+
+interface SourceSample {
+  sample: AudioSample;
+  source: AudioSampleSource;
 }
 
 const speakerDownmixWeights: ReadonlyMap<number, StereoWeights> = new Map([
@@ -51,11 +63,14 @@ const speakerDownmixWeights: ReadonlyMap<number, StereoWeights> = new Map([
 ]);
 
 export class ClipAudioMixer {
-  static start(tracks: readonly MediaStreamTrack[], source: AudioSampleSource, onError: ClipAudioMixerErrorHandler): ClipAudioMixer {
-    const mixer = new ClipAudioMixer(source, onError);
-    const gain = audioMixGain(tracks.length);
-    for (const track of tracks) {
-      void mixer.readTrack(track, gain);
+  static start(
+    inputs: readonly ClipAudioMixerInput[],
+    mixSource: AudioSampleSource,
+    onError: ClipAudioMixerErrorHandler
+  ): ClipAudioMixer {
+    const mixer = new ClipAudioMixer(mixSource, audioMixGain(inputs.length), onError);
+    for (const input of inputs) {
+      void mixer.readTrack(input);
     }
 
     return mixer;
@@ -67,24 +82,35 @@ export class ClipAudioMixer {
 
   private hasStopped = false;
 
-  private readonly interval: ReturnType<typeof setInterval>;
+  private readonly inputs: MixerInput[] = [];
 
-  private readonly left = new Float32Array(mixBufferFrames);
+  private readonly interval: ReturnType<typeof setInterval>;
 
   private readonly originEpochSeconds = epochSeconds();
 
-  private readonly right = new Float32Array(mixBufferFrames);
-
   private readonly samples = new TaskQueue();
 
-  private constructor(private readonly source: AudioSampleSource, private readonly onError: ClipAudioMixerErrorHandler) {
+  private constructor(
+    private readonly mixSource: AudioSampleSource,
+    private readonly mixGain: number,
+    private readonly onError: ClipAudioMixerErrorHandler
+  ) {
     this.interval = setInterval((): void => {
       this.emitReadyFrames();
     }, mixIntervalMs);
   }
 
-  private async readTrack(track: MediaStreamTrack, gain: number): Promise<void> {
-    const input: MixerInput = { gain, lastLeft: 0, lastRight: 0, nextFrame: null, resamplePosition: 0 };
+  private async readTrack({ source, track }: ClipAudioMixerInput): Promise<void> {
+    const input: MixerInput = {
+      lastLeft: 0,
+      lastRight: 0,
+      left: new Float32Array(mixBufferFrames),
+      nextFrame: null,
+      resamplePosition: 0,
+      right: new Float32Array(mixBufferFrames),
+      source
+    };
+    this.inputs.push(input);
     const processor = new MediaStreamTrackProcessor({ maxBufferSize: processorBufferSize, track: track as MediaStreamAudioTrack });
     const consumer = new WritableStream<AudioData>({
       write: (audioData): void => {
@@ -122,20 +148,20 @@ export class ClipAudioMixer {
   private place(input: MixerInput, chunk: StereoChunk, position: number, overlappingFrames: number): void {
     const skippedFrames = Math.min(chunk.left.length, overlappingFrames);
     for (let index = skippedFrames; index < chunk.left.length; index += 1) {
-      this.addFrame(position + index - skippedFrames, chunk.left[index] * input.gain, chunk.right[index] * input.gain);
+      this.addFrame(input, position + index - skippedFrames, chunk.left[index], chunk.right[index]);
     }
 
     input.nextFrame = position + chunk.left.length - skippedFrames;
   }
 
-  private addFrame(frame: number, left: number, right: number): void {
+  private addFrame(input: MixerInput, frame: number, left: number, right: number): void {
     if (frame < this.emittedFrame || frame >= this.emittedFrame + mixBufferFrames) {
       return;
     }
 
     const index = frame % mixBufferFrames;
-    this.left[index] += left;
-    this.right[index] += right;
+    input.left[index] += left;
+    input.right[index] += right;
   }
 
   private emitReadyFrames(): void {
@@ -145,37 +171,61 @@ export class ClipAudioMixer {
     }
   }
 
-  private takeFrames(frameCount: number): AudioSample {
-    const data = new Float32Array(frameCount * mixChannelCount);
+  private takeFrames(frameCount: number): SourceSample[] {
+    const mixData = new Float32Array(frameCount * mixChannelCount);
+    const inputData = this.inputs.map((input) => input.source ? new Float32Array(frameCount * mixChannelCount) : null);
     for (let offset = 0; offset < frameCount; offset += 1) {
       const index = (this.emittedFrame + offset) % mixBufferFrames;
-      data[offset] = this.left[index];
-      data[frameCount + offset] = this.right[index];
-      this.left[index] = 0;
-      this.right[index] = 0;
+      for (const [inputIndex, input] of this.inputs.entries()) {
+        const data = inputData[inputIndex];
+        mixData[offset] += input.left[index] * this.mixGain;
+        mixData[frameCount + offset] += input.right[index] * this.mixGain;
+        if (data) {
+          data[offset] = input.left[index];
+          data[frameCount + offset] = input.right[index];
+        }
+
+        input.left[index] = 0;
+        input.right[index] = 0;
+      }
     }
 
-    const sample = new AudioSample({
+    const sourceSamples = [{ sample: this.stereoSample(mixData), source: this.mixSource }];
+    for (const [inputIndex, input] of this.inputs.entries()) {
+      const data = inputData[inputIndex];
+      if (input.source && data) {
+        sourceSamples.push({ sample: this.stereoSample(data), source: input.source });
+      }
+    }
+
+    this.emittedFrame += frameCount;
+    return sourceSamples;
+  }
+
+  private stereoSample(data: Float32Array): AudioSample {
+    return new AudioSample({
       data,
       format: "f32-planar",
       numberOfChannels: mixChannelCount,
       sampleRate: mixSampleRate,
       timestamp: this.originEpochSeconds + this.emittedFrame / mixSampleRate
     });
-    this.emittedFrame += frameCount;
-    return sample;
   }
 
-  private emit(sample: AudioSample): void {
+  private emit(sourceSamples: readonly SourceSample[]): void {
     void this.samples.run(async (): Promise<void> => {
       try {
-        if (!this.hasStopped) {
-          await this.source.add(sample);
+        for (const { sample, source } of sourceSamples) {
+          if (!this.hasStopped) {
+            await source.add(sample);
+          }
         }
       } catch (error) {
         this.fail(error);
       } finally {
-        sample.close();
+        for (const { sample } of sourceSamples) {
+          sample.close();
+        }
       }
     });
   }
