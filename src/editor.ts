@@ -27,7 +27,7 @@ import {
   timelineTimeAfterDeletion
 } from "./editor-timeline.js";
 import { drawTimelineWaveform } from "./editor-waveform-view.js";
-import { playMedia, waitForMediaMetadata } from "./media-element.js";
+import { isInterruptedPlayback, playMedia, waitForMediaMetadata } from "./media-element.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type {
   AudioSourceKind,
@@ -2081,7 +2081,9 @@ class VideoEditorApp {
     } catch (error) {
       this.video.pause();
       this.pauseAudioPreview();
-      throw error;
+      if (!isInterruptedPlayback(error)) {
+        throw error;
+      }
     }
   }
 

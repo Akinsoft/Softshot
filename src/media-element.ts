@@ -13,6 +13,10 @@ export async function playMedia(media: HTMLMediaElement): Promise<void> {
   }
 }
 
+export function isInterruptedPlayback(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export async function waitForMediaMetadata(media: HTMLMediaElement): Promise<void> {
   if (media.readyState >= HTMLMediaElement.HAVE_METADATA) {
     return;
