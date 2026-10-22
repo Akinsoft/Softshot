@@ -36,7 +36,7 @@ import { startUpdateChecks } from "./app-updater";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
 import { ClipsService } from "./clips-service";
-import { extractNamedAudioTrack, remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
+import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
 import { writeFileDropListToClipboard } from "./powershell";
 import type {
   AppPage,
@@ -63,7 +63,6 @@ import type {
   VideoFps
 } from "./shared";
 import {
-  clipAudioTrackNames,
   fileTimestamp,
   isAudioSourceKind,
   isOutputFileExtension,
@@ -122,9 +121,7 @@ const wavWaveSignature = new TextEncoder().encode("WAVE");
 const wavWaveSignatureOffset = 8;
 const fileHeaderByteLength = 12;
 const exportFileLabelPattern = /^[\w ]{1,40}$/u;
-const clipAudioLaneKinds: readonly RecordingAudioSourceKind[] = ["system", "microphone"];
-const extractedAudioFileExtension = "m4a";
-const extractedAudioMimeType = "audio/mp4";
+const clipAudioTrackMimeType = "audio/mp4";
 const outputFileFilterNames: Record<OutputFileExtension, string> = {
   gif: "GIF image",
   m4a: "M4A audio",
@@ -2211,10 +2208,7 @@ class SoftshotApp {
   ): Promise<void> {
     const mimeType = `video/${editedFileExtension}`;
     const sourceUrl = pathToFileURL(editorFilePath).toString();
-    const audioTracks = await this.videoFileAudioTracks(editorFilePath, sourceUrl, mimeType, probe);
-    const extractedAudioFilePaths = audioTracks
-      .map((audioTrack) => audioTrack.sourceFilePath)
-      .filter((filePath) => filePath !== editorFilePath);
+    const audioTracks = await this.videoFileAudioTracks(originalFilePath, editorFilePath, sourceUrl, mimeType, probe);
     const editor = this.createEditor(
       {
         audioTracks,
@@ -2226,44 +2220,29 @@ class SoftshotApp {
         sourceFilePath: editorFilePath,
         sourceUrl
       },
-      [...temporaryFilePaths, ...extractedAudioFilePaths]
+      temporaryFilePaths
     );
     await this.loadEditor(editor);
   }
 
   private async videoFileAudioTracks(
+    originalFilePath: string,
     editorFilePath: string,
     sourceUrl: string,
     mimeType: string,
     probe: VideoFileProbe
   ): Promise<EditorAudioTrack[]> {
-    const hasClipAudioLanes = clipAudioLaneKinds.every((kind) => probe.audioTrackNames.includes(clipAudioTrackNames[kind]));
-    if (!hasClipAudioLanes) {
-      return probe.hasAudio
-        ? [{ kind: "clip", mimeType, sourceFilePath: editorFilePath, sourceUrl }]
-        : [];
-    }
-
-    const audioTracks: EditorAudioTrack[] = [];
-    try {
-      for (const kind of clipAudioLaneKinds) {
-        const filePath = await this.createTemporaryVideoFilePath(extractedAudioFileExtension);
-        audioTracks.push({
-          kind,
-          mimeType: extractedAudioMimeType,
-          sourceFilePath: filePath,
-          sourceUrl: pathToFileURL(filePath).toString()
-        });
-        await extractNamedAudioTrack(editorFilePath, filePath, clipAudioTrackNames[kind]);
-      }
-    } catch (error) {
-      await Promise.all(audioTracks.map(async (audioTrack): Promise<void> => {
-        await rm(audioTrack.sourceFilePath, { force: true });
+    const clipAudioTrackFiles = await this.clips.clipAudioTrackFiles(originalFilePath);
+    if (clipAudioTrackFiles.length > 0) {
+      return clipAudioTrackFiles.map((file): EditorAudioTrack => ({
+        kind: file.kind,
+        mimeType: clipAudioTrackMimeType,
+        sourceFilePath: file.filePath,
+        sourceUrl: pathToFileURL(file.filePath).toString()
       }));
-      throw error;
     }
 
-    return audioTracks;
+    return probe.hasAudio ? [{ kind: "clip", mimeType, sourceFilePath: editorFilePath, sourceUrl }] : [];
   }
 
   private async openVideoFileEditorWithErrorHandling(filePath: string): Promise<void> {

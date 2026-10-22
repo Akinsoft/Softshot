@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import type { ClipEntry } from "./shared";
+import type { ClipEntry, RecordingAudioSourceKind } from "./shared";
 import { TaskQueue } from "./task-queue";
 
 const libraryFileName = "library.json";
@@ -11,6 +10,9 @@ const libraryVersion = 1;
 const libraryIndentSpaces = 2;
 const thumbnailsFolderName = "thumbnails";
 const thumbnailFileExtension = ".jpg";
+const audioTracksFolderName = "audio-tracks";
+const audioTrackFileExtension = ".m4a";
+const audioTrackKinds: readonly RecordingAudioSourceKind[] = ["system", "microphone"];
 const jpegSignature = Buffer.from("ffd8ff", "hex");
 
 interface StoredClip {
@@ -28,8 +30,14 @@ interface NewClip {
   durationSeconds: number;
   filePath: string;
   height: number;
+  id: string;
   sourceName: string;
   width: number;
+}
+
+export interface ClipAudioTrackFile {
+  filePath: string;
+  kind: RecordingAudioSourceKind;
 }
 
 export class ClipsLibrary {
@@ -43,6 +51,17 @@ export class ClipsLibrary {
 
   private thumbnailFilePath(clipId: string): string {
     return path.join(this.directory, thumbnailsFolderName, `${clipId}${thumbnailFileExtension}`);
+  }
+
+  private audioTrackFilePath(clipId: string, kind: RecordingAudioSourceKind): string {
+    return path.join(this.directory, audioTracksFolderName, `${clipId}-${kind}${audioTrackFileExtension}`);
+  }
+
+  private async removeClipFiles(clipId: string): Promise<void> {
+    await Promise.all([this.thumbnailFilePath(clipId), ...this.audioTrackFiles(clipId).map((file) => file.filePath)]
+      .map(async (filePath): Promise<void> => {
+        await rm(filePath, { force: true });
+      }));
   }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -100,7 +119,7 @@ export class ClipsLibrary {
     }
 
     await this.exclusive(async (): Promise<void> => {
-      const storedClip: StoredClip = { ...clip, createdAt: clip.createdAt.toISOString(), id: randomUUID() };
+      const storedClip: StoredClip = { ...clip, createdAt: clip.createdAt.toISOString() };
       const thumbnailFilePath = this.thumbnailFilePath(storedClip.id);
       await mkdir(path.dirname(thumbnailFilePath), { recursive: true });
       await writeFile(thumbnailFilePath, thumbnail);
@@ -131,7 +150,7 @@ export class ClipsLibrary {
       if (deletedClips.size > 0) {
         await this.writeClips(clips.filter((clip) => !deletedClips.has(clip)));
         await Promise.all([...deletedClips].map(async (clip) => {
-          await rm(this.thumbnailFilePath(clip.id), { force: true });
+          await this.removeClipFiles(clip.id);
         }));
       }
 
@@ -150,9 +169,25 @@ export class ClipsLibrary {
       }
 
       await this.writeClips(clips.filter((candidate) => candidate !== clip));
-      await rm(this.thumbnailFilePath(clip.id), { force: true });
+      await this.removeClipFiles(clip.id);
       return clip;
     });
+  }
+
+  audioTrackFiles(clipId: string): ClipAudioTrackFile[] {
+    return audioTrackKinds.map((kind) => ({ filePath: this.audioTrackFilePath(clipId, kind), kind }));
+  }
+
+  async savedAudioTrackFiles(clipFilePath: string): Promise<ClipAudioTrackFile[]> {
+    const clips = await this.exclusive(async () => await this.readClips());
+    const clip = clips.find((candidate) => isSameFilePath(candidate.filePath, clipFilePath));
+    if (!clip) {
+      return [];
+    }
+
+    const files = this.audioTrackFiles(clip.id);
+    const existingFiles = await Promise.all(files.map(async (file) => await fileExists(file.filePath)));
+    return existingFiles.every(Boolean) ? files : [];
   }
 }
 
@@ -221,4 +256,21 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 function isMissingFileError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+function isSameFilePath(first: string, second: string): boolean {
+  return path.resolve(first).toLowerCase() === path.resolve(second).toLowerCase();
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false;
+    }
+
+    throw error;
+  }
 }

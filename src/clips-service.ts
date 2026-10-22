@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { access, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -14,7 +15,7 @@ import {
   windowHandle
 } from "./clip-sources";
 import { type ClipCaptureTarget, type ClipVideoEncoder, findClipVideoEncoder } from "./clip-video-capture";
-import { ClipsLibrary } from "./clips-library";
+import { type ClipAudioTrackFile, ClipsLibrary } from "./clips-library";
 import { captureGeometry, type MonitorGeometry, writeFileDropListToClipboard } from "./powershell";
 import type {
   ClipEntry,
@@ -347,10 +348,14 @@ export class ClipsService {
     await mkdir(directory, { recursive: true });
     const filePath = await availableClipFilePath(directory, clipName, createdAt);
     const { durationSeconds } = this.host.clipSettings();
+    const clipId = randomUUID();
+    const audioTrackFiles = this.library.audioTrackFiles(clipId);
     let savedDurationSeconds: number;
     try {
+      await mkdir(path.dirname(audioTrackFiles[0].filePath), { recursive: true });
       await muxClip({
         audioFilePath: capture.audioFilePath,
+        audioTrackFiles,
         durationSeconds,
         endEpochSeconds,
         outputFilePath: filePath,
@@ -362,12 +367,15 @@ export class ClipsService {
         durationSeconds: probe.durationSeconds,
         filePath,
         height: probe.height,
+        id: clipId,
         sourceName: clipName,
         width: probe.width
       }, thumbnail);
       savedDurationSeconds = Math.min(durationSeconds, Math.round(probe.durationSeconds));
     } catch (error) {
-      await rm(filePath, { force: true });
+      await Promise.all([filePath, ...audioTrackFiles.map((file) => file.filePath)].map(async (createdFilePath): Promise<void> => {
+        await rm(createdFilePath, { force: true });
+      }));
       throw error;
     }
 
@@ -521,6 +529,10 @@ export class ClipsService {
     if (haveCaptureSettingsChanged(previous, next)) {
       this.restartCapture();
     }
+  }
+
+  async clipAudioTrackFiles(clipFilePath: string): Promise<ClipAudioTrackFile[]> {
+    return await this.library.savedAudioTrackFiles(clipFilePath);
   }
 
   clipsDirectory(): string {

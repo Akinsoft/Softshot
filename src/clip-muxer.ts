@@ -1,11 +1,14 @@
-import type { AudioTrackMetadata, EncodedPacket, EncodedPacketSink, InputAudioTrack } from "mediabunny";
+import type { AudioTrackMetadata, EncodedPacket, EncodedPacketSink, InputAudioTrack, Output } from "mediabunny";
 
 import type { ClipVideoSnapshot } from "./clip-video-capture";
+import type { ClipAudioTrackFile } from "./clips-library";
+import { clipAudioTrackNames } from "./shared";
 
 const endEpsilonSeconds = 1e-6;
 
 interface ClipMuxOptions {
   audioFilePath: string | null;
+  audioTrackFiles: readonly ClipAudioTrackFile[];
   durationSeconds: number;
   endEpochSeconds: number;
   outputFilePath: string;
@@ -37,16 +40,30 @@ export async function muxClip(options: ClipMuxOptions): Promise<void> {
     FilePathTarget,
     Input,
     Mp4OutputFormat,
-    Output
+    Output: MediaOutput
   } = await import("mediabunny");
+  const createOutput = (filePath: string): Output => new MediaOutput({
+    format: new Mp4OutputFormat({ fastStart: false }),
+    target: new FilePathTarget(filePath)
+  });
+  const addAudioStream = async (
+    output: Output,
+    audioTrack: InputAudioTrack,
+    metadata: AudioTrackMetadata,
+    timeline: ClipTimeline
+  ): Promise<ClipStream> => {
+    const audioConfig = await audioTrack.getDecoderConfig();
+    const audioSource = new AudioPacketSource("aac");
+    output.addAudioTrack(audioSource, metadata);
+    const packets = audioPackets(new PacketSink(audioTrack), timeline.clipStartEpochSeconds, options.endEpochSeconds);
+    return clipStream(packets, async (packet, isFirstPacket): Promise<void> => {
+      await audioSource.add(packet, isFirstPacket && audioConfig ? { decoderConfig: audioConfig } : {});
+    });
+  };
   const videoInput = new Input({ formats: ALL_FORMATS, source: new BufferSource(options.video.bytes) });
   const audioInput = options.audioFilePath === null
     ? null
     : new Input({ formats: ALL_FORMATS, source: new FilePathSource(options.audioFilePath) });
-  const output = new Output({
-    format: new Mp4OutputFormat({ fastStart: false }),
-    target: new FilePathTarget(options.outputFilePath)
-  });
   try {
     const videoTrack = await videoInput.getPrimaryVideoTrack();
     const videoConfig = await videoTrack?.getDecoderConfig();
@@ -56,22 +73,37 @@ export async function muxClip(options: ClipMuxOptions): Promise<void> {
 
     const videoSink = new PacketSink(videoTrack);
     const timeline = await clipTimeline(videoSink, options);
+    const output = createOutput(options.outputFilePath);
     const videoSource = new VideoPacketSource("avc");
     output.addVideoTrack(videoSource);
     const streams = [clipStream(videoPackets(videoSink, timeline), async (packet, isFirstPacket): Promise<void> => {
       await videoSource.add(packet, isFirstPacket ? { decoderConfig: videoConfig } : {});
     })];
+    const separateTracks: Array<{ audioTrack: InputAudioTrack; file: ClipAudioTrackFile }> = [];
     const audioTracks = audioInput ? await audioInput.getAudioTracks() : [];
     for (const audioTrack of audioTracks) {
-      const audioConfig = await audioTrack.getDecoderConfig();
-      const audioSource = new AudioPacketSource("aac");
-      output.addAudioTrack(audioSource, await audioTrackMetadata(audioTrack));
-      const packets = audioPackets(new PacketSink(audioTrack), timeline.clipStartEpochSeconds, options.endEpochSeconds);
-      streams.push(clipStream(packets, async (packet, isFirstPacket): Promise<void> => {
-        await audioSource.add(packet, isFirstPacket && audioConfig ? { decoderConfig: audioConfig } : {});
-      }));
+      const name = await audioTrack.getName();
+      const file = options.audioTrackFiles.find((candidate) => clipAudioTrackNames[candidate.kind] === name);
+      if (file) {
+        separateTracks.push({ audioTrack, file });
+      } else {
+        streams.push(await addAudioStream(output, audioTrack, await audioTrackMetadata(audioTrack), timeline));
+      }
     }
 
+    await writeOutput(output, streams);
+    for (const { audioTrack, file } of separateTracks) {
+      const trackOutput = createOutput(file.filePath);
+      await writeOutput(trackOutput, [await addAudioStream(trackOutput, audioTrack, { name: clipAudioTrackNames[file.kind] }, timeline)]);
+    }
+  } finally {
+    videoInput.dispose();
+    audioInput?.dispose();
+  }
+}
+
+async function writeOutput(output: Output, streams: readonly ClipStream[]): Promise<void> {
+  try {
     await output.start();
     await writeInterleaved(streams);
     await output.finalize();
@@ -81,9 +113,6 @@ export async function muxClip(options: ClipMuxOptions): Promise<void> {
     }
 
     throw error;
-  } finally {
-    videoInput.dispose();
-    audioInput?.dispose();
   }
 }
 
