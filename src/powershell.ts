@@ -1,7 +1,6 @@
-import { execFile } from "node:child_process";
+import { runWindowsCommand } from "./windows-command";
 
 const powershellExecutable = String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
-const powershellTimeoutMs = 10_000;
 const clipboardFileEnvironmentName = "SOFTSHOT_CLIPBOARD_FILE";
 const windowProcessSeparator = "\t";
 const windowHandleEnvironmentName = "SOFTSHOT_WINDOW_HANDLE";
@@ -133,28 +132,10 @@ async function runPowershellScript(
   environment: Record<string, string>,
   failureMessage: string
 ): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
-    execFile(
-      powershellExecutable,
-      ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
-      {
-        env: { ...process.env, ...environment },
-        timeout: powershellTimeoutMs,
-        windowsHide: true
-      },
-      (error, standardOutput, standardError): void => {
-        if (error) {
-          reject(new Error(powershellErrorMessage(failureMessage, error, standardOutput, standardError)));
-          return;
-        }
-
-        resolve(standardOutput);
-      }
-    );
-  });
-}
-
-function powershellErrorMessage(failureMessage: string, error: Error, standardOutput: string, standardError: string): string {
-  const output = [standardError.trim(), standardOutput.trim()].filter(Boolean).join("\n");
-  return `${failureMessage}\n${output || error.message}`;
+  return await runWindowsCommand(
+    powershellExecutable,
+    ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+    failureMessage,
+    environment
+  );
 }

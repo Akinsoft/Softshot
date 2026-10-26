@@ -70,6 +70,7 @@ import {
   videoFileExtension,
   videoFpsOptions
 } from "./shared";
+import { currentWindowsAccount, syncElevatedStartupTask } from "./startup-task";
 import { TaskQueue } from "./task-queue";
 import {
   recordingRetentionMs,
@@ -830,19 +831,22 @@ class SoftshotApp {
     };
   }
 
-  private applyLaunchAtStartup(isEnabled: boolean): void {
+  private async applyLaunchAtStartup(isEnabled: boolean): Promise<void> {
     if (!app.isPackaged) {
       return;
     }
 
+    const account = await currentWindowsAccount();
+    const isStartupTaskEnabled = await syncElevatedStartupTask(account, app.getPath("exe"), isEnabled);
+    const isLoginItemEnabled = isEnabled && !isStartupTaskEnabled;
     const options = this.loginItemSettingsOptions();
     app.setLoginItemSettings({
       ...options,
-      openAtLogin: isEnabled
+      openAtLogin: isLoginItemEnabled
     });
 
     const loginItemSettings = app.getLoginItemSettings(options);
-    if (loginItemSettings.openAtLogin !== isEnabled) {
+    if (loginItemSettings.openAtLogin !== isLoginItemEnabled) {
       throw new Error("Could not update launch at startup.");
     }
   }
@@ -1083,7 +1087,12 @@ class SoftshotApp {
         app.getPath("userData"),
         app.getLoginItemSettings(this.loginItemSettingsOptions()).openAtLogin
       );
-      this.applyLaunchAtStartup(this.settings.launchAtStartup);
+      const { launchAtStartup } = this.settings;
+      void this.settingsUpdates.run(async () => {
+        await this.applyLaunchAtStartup(launchAtStartup);
+      }).catch((error: unknown): void => {
+        this.reportBackgroundError("Could not update launch at startup.", error);
+      });
       this.registerPermissionRequestHandler();
       this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
@@ -1934,14 +1943,17 @@ class SoftshotApp {
       this.settings = nextSettings;
       this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
       this.clips.applySettings(previousSettings.clips, nextSettings.clips);
-      this.applyLaunchAtStartup(nextSettings.launchAtStartup);
+      if (nextSettings.launchAtStartup !== previousSettings.launchAtStartup) {
+        await this.applyLaunchAtStartup(nextSettings.launchAtStartup);
+      }
+
       await saveAppSettings(app.getPath("userData"), nextSettings);
       const savedSettings = this.settingsSnapshot();
       this.broadcastSettingsChanged(savedSettings);
       return savedSettings;
     } catch (error) {
       this.settings = previousSettings;
-      const restoreErrors = this.restoreAppliedSettings(nextSettings, previousSettings);
+      const restoreErrors = await this.restoreAppliedSettings(nextSettings, previousSettings);
       if (restoreErrors.length > 0) {
         throw new AggregateError(
           [error, ...restoreErrors],
@@ -1954,7 +1966,7 @@ class SoftshotApp {
     }
   }
 
-  private restoreAppliedSettings(failedSettings: AppSettings, previousSettings: AppSettings): unknown[] {
+  private async restoreAppliedSettings(failedSettings: AppSettings, previousSettings: AppSettings): Promise<unknown[]> {
     const restoreErrors: unknown[] = [];
     try {
       if (!this.tryUpdateRegisteredCaptureShortcut(failedSettings.captureShortcut, previousSettings.captureShortcut)) {
@@ -1970,10 +1982,12 @@ class SoftshotApp {
       restoreErrors.push(restoreError);
     }
 
-    try {
-      this.applyLaunchAtStartup(previousSettings.launchAtStartup);
-    } catch (restoreError) {
-      restoreErrors.push(restoreError);
+    if (failedSettings.launchAtStartup !== previousSettings.launchAtStartup) {
+      try {
+        await this.applyLaunchAtStartup(previousSettings.launchAtStartup);
+      } catch (restoreError) {
+        restoreErrors.push(restoreError);
+      }
     }
 
     return restoreErrors;
