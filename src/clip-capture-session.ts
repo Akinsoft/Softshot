@@ -23,7 +23,7 @@ const audioSnapshotLeadSeconds = 2;
 const thumbnailWidthPx = 480;
 const thumbnailHeightPx = 270;
 const thumbnailJpegQuality = 82;
-const sourceGoneMessages = ["Failed to find capture source", "Failed to setup graphics capture"];
+const ffmpegLogContextPattern = /^\[[^\]]*\]\s*/u;
 
 export interface ClipCaptureSessionOptions {
   audioCaptureSource: Electron.DesktopCapturerSource | null;
@@ -104,13 +104,16 @@ export class ClipCaptureSession {
       return;
     }
 
-    if (exit.code === 0 || sourceGoneMessages.some((message) => exit.message.includes(message))) {
+    if (exit.code === 0) {
       this.events.ended();
       return;
     }
 
-    const lastLine = exit.message.split(/\r?\n/u).findLast((line) => line.trim().length > 0);
-    this.events.failed(lastLine ? `FFmpeg stopped: ${lastLine.trim()}` : "FFmpeg stopped unexpectedly.");
+    const firstLine = exit.message
+      .split(/\r?\n/u)
+      .map((line) => line.replace(ffmpegLogContextPattern, "").trim())
+      .find((line) => line.length > 0);
+    this.events.failed(firstLine ? `FFmpeg stopped: ${firstLine}` : "FFmpeg stopped unexpectedly.");
   }
 
   private openRecorder(): void {

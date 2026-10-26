@@ -416,7 +416,9 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | st
     }
 
     case "error": {
-      return [status.message ?? "Something went wrong.", "Try again, or change the source or quality."];
+      const message = document.createElement("span");
+      message.textContent = status.message ?? "Something went wrong.";
+      return [message, "Try again, or change the source or quality."];
     }
 
     default: {
