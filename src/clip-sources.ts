@@ -20,8 +20,8 @@ type WindowClipSource = Extract<ClipSource, { kind: "window" }>;
 export class ClipSourceResolver {
   private readonly processNamesBySourceId = new Map<string, string | null>();
 
-  private async loadProcessNames(windows: readonly Electron.DesktopCapturerSource[], shouldRefresh: boolean): Promise<void> {
-    if (!shouldRefresh && windows.every((window) => this.processNamesBySourceId.has(window.id))) {
+  private async loadProcessNames(windows: readonly Electron.DesktopCapturerSource[]): Promise<void> {
+    if (windows.every((window) => this.processNamesBySourceId.has(window.id))) {
       return;
     }
 
@@ -43,7 +43,7 @@ export class ClipSourceResolver {
       return match ? windowClipSource(match) : null;
     }
 
-    await this.loadProcessNames(windows, false);
+    await this.loadProcessNames(windows);
     const matchingWindows = windows.filter((window) => this.processNamesBySourceId.get(window.id) === saved.processName);
     const match = matchingWindows.find((window) => window.name === saved.title) ?? matchingWindows.at(0);
     return match ? windowClipSource(match) : null;
@@ -51,7 +51,7 @@ export class ClipSourceResolver {
 
   async listOptions(): Promise<ClipSourceOptions> {
     const windows = await capturableWindows(true);
-    await this.loadProcessNames(windows, true);
+    await this.loadProcessNames(windows);
     return {
       displays: displayOptions(),
       windows: windows.map((window): ClipWindowOption => ({

@@ -66,11 +66,15 @@ export class ClipsPage implements AppWindowPage {
 
   private isLoadingSources = false;
 
+  private isSourceListStale = false;
+
   private readonly microphoneSelect = getRequiredElement("clips-microphone-select", HTMLSelectElement);
 
   private pendingSourceKind: ClipSourceKind | null = null;
 
   private readonly qualitySelect = getRequiredElement("clips-quality-select", HTMLSelectElement);
+
+  private readonly page = getRequiredElement("clips-page", HTMLElement);
 
   private readonly retryButton = getRequiredElement("clips-retry-button", HTMLButtonElement);
 
@@ -98,9 +102,7 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly systemAudioCheckbox = getRequiredElement("clips-system-audio-checkbox", HTMLInputElement);
 
-  private readonly windowRefreshButton = getRequiredElement("clips-window-refresh", HTMLButtonElement);
-
-  private readonly windowRow = getRequiredElement("clips-window-row", HTMLDivElement);
+  private readonly windowRow = getRequiredElement("clips-window-row", HTMLLabelElement);
 
   private readonly windowSelect = getRequiredElement("clips-window-select", HTMLSelectElement);
 
@@ -136,8 +138,13 @@ export class ClipsPage implements AppWindowPage {
     this.windowSelect.addEventListener("change", (): void => {
       this.selectWindow(this.windowSelect.value);
     });
-    this.windowRefreshButton.addEventListener("click", (): void => {
-      this.runTask(this.loadSourceOptions());
+    window.addEventListener("blur", (): void => {
+      this.isSourceListStale = true;
+    });
+    window.addEventListener("focus", (): void => {
+      if (this.isSourceListStale && !this.page.hidden) {
+        this.runTask(this.loadSourceOptions());
+      }
     });
   }
 
@@ -345,12 +352,11 @@ export class ClipsPage implements AppWindowPage {
     }
 
     this.isLoadingSources = true;
-    this.windowRefreshButton.disabled = true;
+    this.isSourceListStale = false;
     try {
       this.sourceOptions = await getSoftshotApi().listClipSources();
     } finally {
       this.isLoadingSources = false;
-      this.windowRefreshButton.disabled = false;
     }
 
     this.render(this.context.settings());

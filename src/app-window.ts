@@ -59,7 +59,9 @@ class AppWindowController implements AppWindowContext {
     }
 
     this.content.scrollTop = 0;
-    if (page === "gallery") {
+    if (page === "clips") {
+      void runWithErrorToast(this, this.clipsPage.loadSourceOptions());
+    } else if (page === "gallery") {
       void this.galleryPage.refresh();
     }
   }
@@ -171,7 +173,6 @@ class AppWindowController implements AppWindowContext {
     const requestedPage = new URLSearchParams(location.search).get(pageQueryName);
     this.showPage(isAppPage(requestedPage) ? requestedPage : defaultPage);
     await api.appReadyToShow();
-    void runWithErrorToast(this, this.clipsPage.loadSourceOptions());
     void this.galleryPage.refresh();
   }
 }
