@@ -28,7 +28,6 @@ import {
 import { getSoftshotApi } from "./softshot-api.js";
 import { videoBitrate } from "./video-bitrate.js";
 
-const primaryDisplayValue = "primary";
 const savedWindowValue = "saved";
 const windowOptionPrefix = "window:";
 const bitsPerByte = 8;
@@ -132,10 +131,7 @@ export class ClipsPage implements AppWindowPage {
       this.selectSourceKind("window");
     });
     this.displaySelect.addEventListener("change", (): void => {
-      const { value } = this.displaySelect;
-      this.runTask(this.updateClips({
-        source: { displayId: value === primaryDisplayValue ? null : Number(value), kind: "display" }
-      }));
+      this.runTask(this.updateClips({ source: { displayId: Number(this.displaySelect.value), kind: "display" } }));
     });
     this.windowSelect.addEventListener("change", (): void => {
       this.selectWindow(this.windowSelect.value);
@@ -247,9 +243,11 @@ export class ClipsPage implements AppWindowPage {
   }
 
   private displayOptions(source: ClipSource): HTMLOptionElement[] {
-    const selectedDisplayId = source.kind === "display" ? source.displayId : null;
     const displays = this.sourceOptions?.displays ?? [];
-    const options = [selectOption("Primary monitor", primaryDisplayValue, selectedDisplayId === null)];
+    const selectedDisplayId = source.kind === "display"
+      ? source.displayId ?? displays.find((display) => display.isPrimary)?.id ?? null
+      : null;
+    const options: HTMLOptionElement[] = [];
     if (selectedDisplayId !== null && displays.every((display) => display.id !== selectedDisplayId)) {
       options.push(selectOption("Disconnected monitor", String(selectedDisplayId), true));
     }
