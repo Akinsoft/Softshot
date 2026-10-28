@@ -458,11 +458,37 @@ svg circle {
 }
 
 .wide-select {
-  width: 260px;
+  width: 280px;
 }
 
 .wide-select::picker(select) {
   max-width: 440px;
+}
+
+.wide-select > button {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: inherit;
+  font: inherit;
+}
+
+.wide-select selectedcontent {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wide-select selectedcontent .option-icon {
+  margin-right: 8px;
+  vertical-align: middle;
 }
 
 .option-label {

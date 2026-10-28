@@ -153,12 +153,16 @@
             </div>
             <label id="clips-display-row" class="settings-row" for="clips-display-select">
               <span class="settings-label">Monitor</span>
-              <select id="clips-display-select" class="softshot-select settings-select wide-select"></select>
+              <select id="clips-display-select" class="softshot-select settings-select wide-select">
+                <button type="button"><selectedcontent></selectedcontent></button>
+              </select>
             </label>
             <div id="clips-window-row" class="settings-row" hidden>
               <span class="settings-label">Application</span>
               <div class="row-controls">
-                <select id="clips-window-select" class="softshot-select settings-select wide-select" aria-label="Application"></select>
+                <select id="clips-window-select" class="softshot-select settings-select wide-select" aria-label="Application">
+                  <button type="button"><selectedcontent></selectedcontent></button>
+                </select>
                 <button id="clips-window-refresh" class="icon-button" type="button" data-tooltip="Refresh list" aria-label="Refresh list">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8" />

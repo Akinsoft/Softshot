@@ -23,6 +23,10 @@ export function selectOption(label: string, value: string, isSelected: boolean):
   return option;
 }
 
+export function replaceSelectOptions(select: HTMLSelectElement, options: readonly HTMLOptionElement[]): void {
+  select.replaceChildren(...select.querySelectorAll(":scope > button"), ...options);
+}
+
 export function microphoneOptions(devices: readonly MediaDeviceInfo[], selectedDeviceId: string | null): HTMLOptionElement[] {
   const isSavedDeviceUnavailable = selectedDeviceId !== null
     && selectedDeviceId !== defaultDeviceId

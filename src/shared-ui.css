@@ -156,6 +156,7 @@
 .softshot-select::picker-icon {
   width: 16px;
   height: 16px;
+  flex: 0 0 auto;
   margin-left: auto;
   background: var(--ui-text-muted);
   content: "";

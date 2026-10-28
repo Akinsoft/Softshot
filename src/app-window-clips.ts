@@ -2,6 +2,7 @@ import {
   type AppWindowContext,
   type AppWindowPage,
   microphoneOptions,
+  replaceSelectOptions,
   runWithErrorToast,
   selectOption
 } from "./app-window-controls.js";
@@ -240,8 +241,8 @@ export class ClipsPage implements AppWindowPage {
     this.sourceWindowButton.setAttribute("aria-checked", String(kind === "window"));
     this.displayRow.hidden = kind !== "display";
     this.windowRow.hidden = kind !== "window";
-    this.displaySelect.replaceChildren(...this.displayOptions(clips.source));
-    this.windowSelect.replaceChildren(...this.windowOptions(clips.source));
+    replaceSelectOptions(this.displaySelect, this.displayOptions(clips.source));
+    replaceSelectOptions(this.windowSelect, this.windowOptions(clips.source));
     this.windowSelect.disabled = this.sourceOptions === null;
   }
 
