@@ -145,6 +145,7 @@ const appSettingsUpdateKeys = new Set([
   "exportPresetId",
   "launchAtStartup",
   "microphoneDeviceId",
+  "sidebarCollapsed",
   "systemAudioEnabled"
 ]);
 const shortcutRecordingRearmDelayMs = 250;
@@ -1918,6 +1919,10 @@ class SoftshotApp {
 
     if ("microphoneDeviceId" in update) {
       nextSettings.microphoneDeviceId = validateMicrophoneDeviceId(update.microphoneDeviceId);
+    }
+
+    if ("sidebarCollapsed" in update) {
+      nextSettings.sidebarCollapsed = isTrueSetting(update.sidebarCollapsed, "Sidebar collapsed");
     }
 
     if ("systemAudioEnabled" in update) {

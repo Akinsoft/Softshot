@@ -17,6 +17,7 @@ const defaultExportDirectory = null;
 const defaultExportPresetId = null;
 const defaultMicrophoneDeviceId = null;
 const isSystemAudioEnabledByDefault = true;
+const isSidebarCollapsedByDefault = false;
 const keySeparator = "+";
 const exportPresetIdPattern = /^[a-z\d-]{1,40}$/u;
 const clipSettingKeys = new Set([
@@ -44,6 +45,7 @@ function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSetting
     exportPresetId: defaultExportPresetId,
     launchAtStartup: isLaunchAtStartupEnabled,
     microphoneDeviceId: defaultMicrophoneDeviceId,
+    sidebarCollapsed: isSidebarCollapsedByDefault,
     systemAudioEnabled: isSystemAudioEnabledByDefault
   };
 }
@@ -163,6 +165,7 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
     exportPresetId: exportPresetIdFromJson(value),
     launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
     microphoneDeviceId: microphoneDeviceIdFromJson(value),
+    sidebarCollapsed: isSidebarCollapsedFromJson(value),
     systemAudioEnabled: isSystemAudioEnabledFromJson(value)
   };
 }
@@ -331,6 +334,14 @@ function microphoneDeviceIdFromJson(value: Record<string, unknown>): string | nu
   }
 
   return validateMicrophoneDeviceId(value.microphoneDeviceId);
+}
+
+function isSidebarCollapsedFromJson(value: Record<string, unknown>): boolean {
+  if (!("sidebarCollapsed" in value)) {
+    return isSidebarCollapsedByDefault;
+  }
+
+  return isTrueSetting(value.sidebarCollapsed, "Settings sidebarCollapsed");
 }
 
 function isSystemAudioEnabledFromJson(value: Record<string, unknown>): boolean {

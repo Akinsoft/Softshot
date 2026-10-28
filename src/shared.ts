@@ -212,6 +212,7 @@ export interface AppSettings {
   exportPresetId: string | null;
   launchAtStartup: boolean;
   microphoneDeviceId: string | null;
+  sidebarCollapsed: boolean;
   systemAudioEnabled: boolean;
 }
 
@@ -221,6 +222,7 @@ export interface AppSettingsUpdate {
   exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;
+  sidebarCollapsed?: boolean;
   systemAudioEnabled?: boolean;
 }
 

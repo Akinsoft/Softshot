@@ -3,6 +3,7 @@ import { ClipsPage } from "./app-window-clips.js";
 import { type AppWindowContext, runWithErrorToast } from "./app-window-controls.js";
 import { GalleryPage } from "./app-window-gallery.js";
 import { SettingsPage } from "./app-window-settings.js";
+import { AppSidebar } from "./app-window-sidebar.js";
 import { errorMessage } from "./async-errors.js";
 import { audioInputDevices } from "./audio-devices.js";
 import { getRequiredElement } from "./overlay-dom.js";
@@ -35,6 +36,8 @@ class AppWindowController implements AppWindowContext {
 
   private readonly settingsPage = new SettingsPage(this);
 
+  private readonly sidebar = new AppSidebar(this);
+
   private readonly toast = getRequiredElement("app-toast", HTMLDivElement);
 
   private toastTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -43,7 +46,7 @@ class AppWindowController implements AppWindowContext {
 
   private renderPages(): void {
     const settings = this.settings();
-    for (const page of [this.capturePage, this.clipsPage, this.galleryPage, this.settingsPage]) {
+    for (const page of [this.sidebar, this.capturePage, this.clipsPage, this.galleryPage, this.settingsPage]) {
       page.render(settings);
     }
   }
@@ -163,6 +166,7 @@ class AppWindowController implements AppWindowContext {
     this.tooltips.bind();
     this.currentSettings = await api.getSettings();
     await this.refreshMicrophoneDevices();
+    this.sidebar.bind();
     this.capturePage.bind();
     this.clipsPage.bind();
     this.galleryPage.bind();
