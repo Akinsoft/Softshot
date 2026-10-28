@@ -139,6 +139,40 @@ body.sidebar-collapsed {
   visibility: hidden;
 }
 
+.nav-footer {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.nav-item.update-button {
+  color: var(--ui-accent);
+}
+
+.nav-item.update-button:hover {
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--ui-accent-hover);
+}
+
+.nav-item[hidden] {
+  display: none;
+}
+
+.app-version {
+  overflow: hidden;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.sidebar-collapsed .app-version {
+  margin: 0 -10px;
+  padding: 0;
+  letter-spacing: 0;
+  text-align: center;
+}
+
 .nav-indicator {
   width: 7px;
   height: 7px;
@@ -318,14 +352,20 @@ svg circle {
   gap: 8px;
 }
 
-.settings-section-title {
+.settings-section-title,
+.gallery-group-title,
+.app-version {
   margin: 0;
-  padding: 0 2px;
   color: var(--ui-text-faint);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.settings-section-title,
+.gallery-group-title {
+  padding: 0 2px;
 }
 
 .settings-card {
@@ -553,16 +593,6 @@ svg circle {
 .gallery-group {
   display: grid;
   gap: 10px;
-}
-
-.gallery-group-title {
-  margin: 0;
-  padding: 0 2px;
-  color: var(--ui-text-faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .gallery-grid {

@@ -1,6 +1,7 @@
-import type { AppWindowContext, AppWindowPage } from "./app-window-controls.js";
+import { type AppWindowContext, type AppWindowPage, runWithErrorToast } from "./app-window-controls.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AppSettings } from "./shared.js";
+import { getSoftshotApi } from "./softshot-api.js";
 
 const collapsedClassName = "sidebar-collapsed";
 
@@ -9,12 +10,29 @@ export class AppSidebar implements AppWindowPage {
 
   private readonly toggleButton = getRequiredElement("sidebar-toggle", HTMLButtonElement);
 
+  private readonly updateButton = getRequiredElement("app-update-button", HTMLButtonElement);
+
+  private readonly version = getRequiredElement("app-version", HTMLSpanElement);
+
   constructor(private readonly context: AppWindowContext) {}
 
   bind(): void {
+    const api = getSoftshotApi();
     this.toggleButton.addEventListener("click", (): void => {
       void this.context.updateSettings({ sidebarCollapsed: !this.context.settings().sidebarCollapsed });
     });
+    this.updateButton.addEventListener("click", (): void => {
+      void runWithErrorToast(this.context, api.installUpdate());
+    });
+    api.onAppUpdateReady((): void => {
+      this.updateButton.hidden = false;
+    });
+  }
+
+  async loadAppInfo(): Promise<void> {
+    const { isUpdateReady, version } = await getSoftshotApi().getAppInfo();
+    this.version.textContent = `v${version}`;
+    this.updateButton.hidden = !isUpdateReady;
   }
 
   render(settings: AppSettings): void {

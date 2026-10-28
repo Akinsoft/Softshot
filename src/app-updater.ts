@@ -56,6 +56,10 @@ function installDownloadedUpdate(options: UpdateCheckOptions): void {
       return;
     }
 
-    autoUpdater.quitAndInstall(false, true);
+    installUpdate();
   }, updateInstallDelayMs);
+}
+
+export function installUpdate(): void {
+  autoUpdater.quitAndInstall(false, true);
 }

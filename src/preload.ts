@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import type {
+  AppInfo,
   AppPage,
   AppSettings,
   AppSettingsUpdate,
@@ -32,6 +33,7 @@ const stopRecordingRequestChannel = "overlay:stop-recording";
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
+const appUpdateReadyEventChannel = "app:update-ready";
 const clipsStatusChangedEventChannel = "clips:status-changed";
 const clipsLibraryChangedEventChannel = "clips:library-changed";
 const clipAudioSnapshotRequestChannel = "clips:audio-snapshot-request";
@@ -109,8 +111,11 @@ const api: SoftshotApi = {
   appReadyToShow: async () => ipcRenderer.invoke("app:ready-to-show") as Promise<void>,
   beginShortcutRecording: async (target: ShortcutTarget) =>
     ipcRenderer.invoke("app:begin-shortcut-recording", target) as Promise<void>,
+  getAppInfo: async () => ipcRenderer.invoke("app:get-info") as Promise<AppInfo>,
   getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
+  installUpdate: async () => ipcRenderer.invoke("app:install-update") as Promise<void>,
   onAppNavigate: (handler: (page: AppPage) => void) => subscribe(appNavigateEventChannel, handler),
+  onAppUpdateReady: (handler: () => void) => subscribe(appUpdateReadyEventChannel, handler),
   onShortcutRecordingEvent: (handler: (event: ShortcutRecordingEvent) => void) =>
     subscribe(shortcutRecordingEventChannel, handler),
   onSettingsChanged: (handler: (settings: AppSettings) => void) => subscribe(settingsChangedEventChannel, handler),

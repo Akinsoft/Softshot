@@ -32,7 +32,7 @@ class AppWindowController implements AppWindowContext {
 
   private readonly navIndicator = getRequiredElement("nav-clips-indicator", HTMLSpanElement);
 
-  private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item")];
+  private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
 
   private readonly settingsPage = new SettingsPage(this);
 
@@ -174,6 +174,7 @@ class AppWindowController implements AppWindowContext {
     this.bindEvents();
     this.renderPages();
     this.setClipsStatus(await api.getClipsStatus());
+    await this.sidebar.loadAppInfo();
     const requestedPage = new URLSearchParams(location.search).get(pageQueryName);
     this.showPage(isAppPage(requestedPage) ? requestedPage : defaultPage);
     await api.appReadyToShow();

@@ -32,13 +32,14 @@ import {
   validateExportPresetId,
   validateMicrophoneDeviceId
 } from "./app-settings";
-import { startUpdateChecks } from "./app-updater";
+import { installUpdate, startUpdateChecks } from "./app-updater";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
 import { ClipsService } from "./clips-service";
 import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
 import { writeFileDropListToClipboard } from "./powershell";
 import type {
+  AppInfo,
   AppPage,
   AppSettings,
   AudioSourceKind,
@@ -136,6 +137,7 @@ const mediaPermissionName = "media";
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
+const appUpdateReadyEventChannel = "app:update-ready";
 const clipsStatusChangedEventChannel = "clips:status-changed";
 const clipsLibraryChangedEventChannel = "clips:library-changed";
 const appSettingsUpdateKeys = new Set([
@@ -302,6 +304,8 @@ class SoftshotApp {
   private readonly shortcutRecorderShortcuts = new Set<string>();
 
   private appWindow: BrowserWindow | null = null;
+
+  private isUpdateReady = false;
 
   private readonly clips = this.createClipsService();
 
@@ -1190,11 +1194,25 @@ class SoftshotApp {
     }
   }
 
+  private isCaptureWorkActive(): boolean {
+    return this.activeOverlay !== null || this.activeEditorWindows.size > 0 || this.clips.isBusy();
+  }
+
   private canInstallUpdatesNow(): boolean {
-    return !this.activeOverlay
-      && this.activeEditorWindows.size === 0
-      && !this.clips.isBusy()
-      && (!this.appWindow || this.appWindow.isDestroyed());
+    return !this.isCaptureWorkActive() && (!this.appWindow || this.appWindow.isDestroyed());
+  }
+
+  private installReadyUpdate(event: Electron.IpcMainInvokeEvent): void {
+    this.getSenderAppWindow(event);
+    if (!this.isUpdateReady) {
+      throw new Error("No Softshot update is ready to install.");
+    }
+
+    if (this.isCaptureWorkActive()) {
+      throw new Error("Finish the current capture, editor or clip save first, then update.");
+    }
+
+    installUpdate();
   }
 
   private requestActiveOverlayStop(): boolean {
@@ -1287,6 +1305,8 @@ class SoftshotApp {
         this.debugLog(message);
       },
       updateReady: (): void => {
+        this.isUpdateReady = true;
+        this.sendToAppWindow(appUpdateReadyEventChannel);
         this.toasts.show({
           detail: "It finishes installing when Softshot closes.",
           onClick: null,
@@ -2755,6 +2775,15 @@ class SoftshotApp {
 
     ipcMain.handle("app:ready-to-show", (event): void => {
       this.showAppWindow(this.getSenderAppWindow(event));
+    });
+
+    ipcMain.handle("app:get-info", (event): AppInfo => {
+      this.getSenderAppWindow(event);
+      return { isUpdateReady: this.isUpdateReady, version: app.getVersion() };
+    });
+
+    ipcMain.handle("app:install-update", (event): void => {
+      this.installReadyUpdate(event);
     });
 
     ipcMain.handle("app:begin-shortcut-recording", (event, target: unknown): void => {

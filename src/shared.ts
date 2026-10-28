@@ -226,6 +226,11 @@ export interface AppSettingsUpdate {
   systemAudioEnabled?: boolean;
 }
 
+export interface AppInfo {
+  isUpdateReady: boolean;
+  version: string;
+}
+
 export type ShortcutRecordingEvent =
   | { target: ShortcutTarget; type: "cancelled" }
   | { message: string; target: ShortcutTarget; type: "error" }
@@ -235,6 +240,7 @@ export type ShortcutRecordingEvent =
 type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
 type SettingsChangedEventHandler = (settings: AppSettings) => void;
 type AppNavigateHandler = (page: AppPage) => void;
+type AppUpdateReadyHandler = () => void;
 type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
 type ClipsLibraryChangedHandler = () => void;
 
@@ -289,8 +295,11 @@ export interface SoftshotApi {
   showError(message: string): Promise<void>;
   appReadyToShow(): Promise<void>;
   beginShortcutRecording(target: ShortcutTarget): Promise<void>;
+  getAppInfo(): Promise<AppInfo>;
   getSettings(): Promise<AppSettings>;
+  installUpdate(): Promise<void>;
   onAppNavigate(handler: AppNavigateHandler): () => void;
+  onAppUpdateReady(handler: AppUpdateReadyHandler): () => void;
   onShortcutRecordingEvent(handler: ShortcutRecordingEventHandler): () => void;
   onSettingsChanged(handler: SettingsChangedEventHandler): () => void;
   updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
