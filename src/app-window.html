@@ -36,7 +36,6 @@
             <path d="m10 9.5 4.5 2.5-4.5 2.5Z" />
           </svg>
           <span>Clips</span>
-          <span id="nav-clips-indicator" class="nav-indicator" hidden></span>
         </button>
         <button class="nav-item nav-subitem" type="button" data-page="gallery">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -132,11 +131,14 @@
         <div id="clips-status-card" class="status-card" data-state="off">
           <span class="status-dot" aria-hidden="true"></span>
           <div class="status-text">
-            <span id="clips-status-title" class="status-title" aria-live="polite"></span>
+            <span class="status-title" aria-live="polite">
+              <img id="clips-status-icon" class="status-icon" alt="" hidden />
+              <span id="clips-status-title" class="status-title-text"></span>
+            </span>
             <span id="clips-status-detail" class="status-detail"></span>
           </div>
+          <span id="clips-status-hint" class="status-detail status-hint"></span>
           <button id="clips-retry-button" class="softshot-button" type="button" hidden>Try again</button>
-          <button id="clips-save-button" class="softshot-button primary" type="button" hidden>Save clip</button>
         </div>
 
         <section class="settings-section" aria-labelledby="clips-source-heading">

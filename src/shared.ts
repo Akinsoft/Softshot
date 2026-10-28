@@ -315,7 +315,6 @@ export interface SoftshotApi {
   openClip(clipId: string): Promise<void>;
   openClipsDirectory(): Promise<void>;
   restartClips(): Promise<void>;
-  saveClip(): Promise<void>;
   showClipInFolder(clipId: string): Promise<void>;
   completeClipAudioSnapshot(requestId: string, recordingId: string): Promise<void>;
   failClipAudioSnapshot(requestId: string, message: string): Promise<void>;

@@ -74,8 +74,6 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly retryButton = getRequiredElement("clips-retry-button", HTMLButtonElement);
 
-  private readonly saveButton = getRequiredElement("clips-save-button", HTMLButtonElement);
-
   private readonly savedToastCheckbox = getRequiredElement("clips-saved-toast-checkbox", HTMLInputElement);
 
   private readonly shortcutButton: ShortcutButton;
@@ -91,6 +89,10 @@ export class ClipsPage implements AppWindowPage {
   private readonly statusCard = getRequiredElement("clips-status-card", HTMLDivElement);
 
   private readonly statusDetail = getRequiredElement("clips-status-detail", HTMLSpanElement);
+
+  private readonly statusHint = getRequiredElement("clips-status-hint", HTMLSpanElement);
+
+  private readonly statusIcon = getRequiredElement("clips-status-icon", HTMLImageElement);
 
   private readonly statusTitle = getRequiredElement("clips-status-title", HTMLSpanElement);
 
@@ -177,9 +179,6 @@ export class ClipsPage implements AppWindowPage {
     });
     this.directoryChangeButton.addEventListener("click", (): void => {
       this.runTask(this.chooseDirectory());
-    });
-    this.saveButton.addEventListener("click", (): void => {
-      this.runTask(api.saveClip());
     });
     this.retryButton.addEventListener("click", (): void => {
       this.runTask(api.restartClips());
@@ -305,14 +304,33 @@ export class ClipsPage implements AppWindowPage {
     this.runTask(this.refreshDirectory());
   }
 
+  private recordingIcon(): string | null {
+    const { source } = this.context.settings().clips;
+    if (this.status.state !== "recording" || source.kind !== "window" || !this.sourceOptions) {
+      return null;
+    }
+
+    const { windows } = this.sourceOptions;
+    const index = savedWindowIndex(windows, source);
+    return index === -1 ? null : windows[index].iconDataUrl;
+  }
+
   private renderStatus(): void {
     const { clips } = this.context.settings();
     const { status } = this;
+    const isRecording = status.state === "recording";
+    const detail = statusDetail(status, clips);
+    const icon = this.recordingIcon();
     this.statusCard.dataset.state = status.state;
-    this.saveButton.hidden = status.state !== "recording";
     this.retryButton.hidden = status.state !== "error";
+    this.statusIcon.hidden = icon === null;
+    if (icon !== null) {
+      this.statusIcon.src = icon;
+    }
+
     this.statusTitle.textContent = statusTitle(status);
-    this.statusDetail.replaceChildren(...statusDetail(status, clips));
+    this.statusDetail.replaceChildren(...(isRecording ? [] : detail));
+    this.statusHint.replaceChildren(...(isRecording ? detail : []));
   }
 
   bind(): void {
@@ -356,8 +374,13 @@ export class ClipsPage implements AppWindowPage {
   }
 
   setStatus(status: ClipsStatus): void {
+    const wasRecording = this.status.state === "recording";
     this.status = status;
     this.renderStatus();
+    if (!wasRecording && status.state === "recording" && this.sourceOptions !== null
+      && this.context.settings().clips.source.kind === "window" && this.recordingIcon() === null) {
+      this.runTask(this.loadSourceOptions());
+    }
   }
 }
 
@@ -373,7 +396,7 @@ function statusTitle(status: ClipsStatus): string {
     }
 
     case "recording": {
-      return `Recording ${sourceName}`;
+      return `${sourceName} is being recorded`;
     }
 
     case "waiting": {

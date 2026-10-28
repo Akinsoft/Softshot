@@ -469,11 +469,6 @@ export class ClipsService {
       return await this.sources.listOptions();
     });
 
-    ipcMain.handle("clips:save", (event): void => {
-      this.assertAppSender(event);
-      this.saveClip();
-    });
-
     ipcMain.handle("clips:restart", (event): void => {
       this.assertAppSender(event);
       this.restartCapture();

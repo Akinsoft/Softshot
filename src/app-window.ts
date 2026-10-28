@@ -7,7 +7,7 @@ import { AppSidebar } from "./app-window-sidebar.js";
 import { errorMessage } from "./async-errors.js";
 import { audioInputDevices } from "./audio-devices.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { AppPage, AppSettings, AppSettingsUpdate, ClipsStatus } from "./shared.js";
+import type { AppPage, AppSettings, AppSettingsUpdate } from "./shared.js";
 import { isAppPage } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 import { TooltipController } from "./ui-tooltip.js";
@@ -29,8 +29,6 @@ class AppWindowController implements AppWindowContext {
   private devices: MediaDeviceInfo[] = [];
 
   private readonly galleryPage = new GalleryPage(this);
-
-  private readonly navIndicator = getRequiredElement("nav-clips-indicator", HTMLSpanElement);
 
   private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
 
@@ -64,11 +62,6 @@ class AppWindowController implements AppWindowContext {
     if (page === "gallery") {
       void this.galleryPage.refresh();
     }
-  }
-
-  private setClipsStatus(status: ClipsStatus): void {
-    this.clipsPage.setStatus(status);
-    this.navIndicator.hidden = status.state !== "recording";
   }
 
   private showToast(message: string, isError: boolean): void {
@@ -110,7 +103,7 @@ class AppWindowController implements AppWindowContext {
       this.applySettings(settings);
     });
     api.onClipsStatusChanged((status): void => {
-      this.setClipsStatus(status);
+      this.clipsPage.setStatus(status);
     });
     api.onClipsLibraryChanged((): void => {
       void this.galleryPage.refresh();
@@ -173,7 +166,7 @@ class AppWindowController implements AppWindowContext {
     this.settingsPage.bind();
     this.bindEvents();
     this.renderPages();
-    this.setClipsStatus(await api.getClipsStatus());
+    this.clipsPage.setStatus(await api.getClipsStatus());
     await this.sidebar.loadAppInfo();
     const requestedPage = new URLSearchParams(location.search).get(pageQueryName);
     this.showPage(isAppPage(requestedPage) ? requestedPage : defaultPage);

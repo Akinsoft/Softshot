@@ -133,7 +133,6 @@ const api: SoftshotApi = {
   openClip: async (clipId: string) => ipcRenderer.invoke("clips:open", clipId) as Promise<void>,
   openClipsDirectory: async () => ipcRenderer.invoke("clips:open-directory") as Promise<void>,
   restartClips: async () => ipcRenderer.invoke("clips:restart") as Promise<void>,
-  saveClip: async () => ipcRenderer.invoke("clips:save") as Promise<void>,
   showClipInFolder: async (clipId: string) => ipcRenderer.invoke("clips:show-in-folder", clipId) as Promise<void>,
   completeClipAudioSnapshot: async (requestId: string, recordingId: string) =>
     ipcRenderer.invoke("clips:audio-snapshot-ready", requestId, recordingId) as Promise<void>,
