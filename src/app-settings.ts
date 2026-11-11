@@ -1,13 +1,21 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { isTriggerKeyCode } from "./keyboard-keys";
 import type { AppSettings, ClipDurationSeconds, ClipQuality, ClipSettings, ClipSource, VideoFps } from "./shared";
 import { clipDurationOptionsSeconds, clipQualities, videoFpsOptions } from "./shared";
+import {
+  isAcceleratorShortcut,
+  isModifierKey,
+  isModifierKeyCode,
+  keySeparator,
+  maxShortcutKeyCount,
+  shortcutKeys
+} from "./shortcut-keys";
 
 const settingsFileName = "settings.json";
 const settingsTemporaryFileName = `${settingsFileName}.tmp`;
 const settingsIndentSpaces = 2;
-const maxShortcutKeyCount = 3;
 const maxWindowTitleLength = 260;
 const defaultCaptureShortcut = "PrintScreen";
 const defaultClipShortcut = "Alt+F10";
@@ -18,7 +26,6 @@ const defaultExportPresetId = null;
 const defaultMicrophoneDeviceId = null;
 const isSystemAudioEnabledByDefault = true;
 const isSidebarCollapsedByDefault = false;
-const keySeparator = "+";
 const exportPresetIdPattern = /^[a-z\d-]{1,40}$/u;
 const clipSettingKeys = new Set([
   "directory",
@@ -33,7 +40,6 @@ const clipSettingKeys = new Set([
   "systemAudioEnabled"
 ]);
 
-const modifierKeys = new Set(["Alt", "Control", "Meta", "Shift"]);
 const clipDurationSet: ReadonlySet<unknown> = new Set(clipDurationOptionsSeconds);
 const clipQualitySet: ReadonlySet<unknown> = new Set(clipQualities);
 
@@ -91,7 +97,7 @@ export async function saveAppSettings(userDataPath: string, settings: AppSetting
 }
 
 function validateShortcut(shortcut: string, label: string): string {
-  const keys = shortcut.split(keySeparator).map((key) => key.trim());
+  const keys = shortcutKeys(shortcut).map((key) => key.trim());
   if (keys.length === 0 || keys.some((key) => key.length === 0)) {
     throw new Error(`${label} cannot be empty.`);
   }
@@ -105,11 +111,22 @@ function validateShortcut(shortcut: string, label: string): string {
     throw new Error(`${label} cannot use the same key twice.`);
   }
 
-  if (keys.every((key) => modifierKeys.has(key))) {
+  if (keys.every((key) => isModifierKey(key))) {
     throw new Error(`${label} needs one non-modifier key.`);
   }
 
+  if (!isAcceleratorShortcut(keys)) {
+    validateKeyChord(keys, label);
+  }
+
   return keys.join(keySeparator);
+}
+
+function validateKeyChord(keys: string[], label: string): void {
+  const [trigger, ...modifiers] = keys.toReversed();
+  if (!isTriggerKeyCode(trigger) || modifiers.some((key) => !isModifierKeyCode(key))) {
+    throw new Error(`${label} uses a key Softshot does not recognise.`);
+  }
 }
 
 export function validateCaptureShortcut(shortcut: string): string {

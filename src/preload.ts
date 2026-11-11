@@ -22,6 +22,7 @@ import type {
   RecordingFile,
   SaveDialogResult,
   SaveResult,
+  ShortcutKeyLabels,
   ShortcutRecordingEvent,
   ShortcutTarget,
   SoftshotApi,
@@ -112,6 +113,7 @@ const api: SoftshotApi = {
   beginShortcutRecording: async (target: ShortcutTarget) =>
     ipcRenderer.invoke("app:begin-shortcut-recording", target) as Promise<void>,
   getAppInfo: async () => ipcRenderer.invoke("app:get-info") as Promise<AppInfo>,
+  getKeyLabels: async () => ipcRenderer.invoke("app:get-key-labels") as Promise<ShortcutKeyLabels>,
   getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
   installUpdate: async () => ipcRenderer.invoke("app:install-update") as Promise<void>,
   onAppNavigate: (handler: (page: AppPage) => void) => subscribe(appNavigateEventChannel, handler),

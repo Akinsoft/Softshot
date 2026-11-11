@@ -1,3 +1,4 @@
+import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { defaultDeviceId, displayMicrophoneLabel, microphoneDeviceOptionValue } from "./audio-devices.js";
 import type { AppPage, AppSettings, AppSettingsUpdate } from "./shared.js";
 
@@ -6,6 +7,7 @@ export interface AppWindowContext {
   microphoneDevices(): MediaDeviceInfo[];
   navigate(page: AppPage): void;
   settings(): AppSettings;
+  shortcutLabels(): ShortcutLabels;
   showError(error: unknown): void;
   showMessage(message: string): void;
   updateSettings(update: AppSettingsUpdate): Promise<void>;

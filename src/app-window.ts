@@ -3,6 +3,7 @@ import { ClipsPage } from "./app-window-clips.js";
 import { type AppWindowContext, runWithErrorToast } from "./app-window-controls.js";
 import { GalleryPage } from "./app-window-gallery.js";
 import { SettingsPage } from "./app-window-settings.js";
+import { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { AppSidebar } from "./app-window-sidebar.js";
 import { errorMessage } from "./async-errors.js";
 import { audioInputDevices } from "./audio-devices.js";
@@ -25,6 +26,8 @@ class AppWindowController implements AppWindowContext {
   private readonly content = getRequiredElement("app-content", HTMLElement);
 
   private currentSettings: AppSettings | null = null;
+
+  private currentShortcutLabels: ShortcutLabels | null = null;
 
   private devices: MediaDeviceInfo[] = [];
 
@@ -139,6 +142,14 @@ class AppWindowController implements AppWindowContext {
     return this.currentSettings;
   }
 
+  shortcutLabels(): ShortcutLabels {
+    if (!this.currentShortcutLabels) {
+      throw new Error("Shortcut key names have not loaded.");
+    }
+
+    return this.currentShortcutLabels;
+  }
+
   showError(error: unknown): void {
     this.showToast(errorMessage(error), true);
   }
@@ -160,6 +171,7 @@ class AppWindowController implements AppWindowContext {
     const api = getSoftshotApi();
     this.tooltips.bind();
     this.currentSettings = await api.getSettings();
+    this.currentShortcutLabels = new ShortcutLabels(await api.getKeyLabels());
     await this.refreshMicrophoneDevices();
     this.sidebar.bind();
     this.capturePage.bind();

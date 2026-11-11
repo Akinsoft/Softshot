@@ -1,5 +1,4 @@
 import { type AppWindowContext, type AppWindowPage, runWithErrorToast } from "./app-window-controls.js";
-import { shortcutKeycaps } from "./app-window-shortcut.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AppSettings, ClipEntry } from "./shared.js";
 import { clipDurationLabel } from "./shared.js";
@@ -188,10 +187,11 @@ export class GalleryPage implements AppWindowPage {
 
   render(settings: AppSettings): void {
     const { clips } = settings;
+    const shortcutKeycaps = this.context.shortcutLabels().keycaps(clips.shortcut);
     this.goToClipsButton.hidden = clips.enabled;
     this.emptyDetail.replaceChildren(...clips.enabled
-      ? ["Press", shortcutKeycaps(clips.shortcut), `to save the last ${clipDurationLabel(clips.durationSeconds)}.`]
-      : ["Turn on Clips, then press", shortcutKeycaps(clips.shortcut), "to save what just happened."]);
+      ? ["Press", shortcutKeycaps, `to save the last ${clipDurationLabel(clips.durationSeconds)}.`]
+      : ["Turn on Clips, then press", shortcutKeycaps, "to save what just happened."]);
     this.renderClips();
   }
 }

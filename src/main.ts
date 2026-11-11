@@ -11,7 +11,6 @@ import {
   desktopCapturer,
   dialog,
   Display,
-  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -37,7 +36,9 @@ import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } fr
 import { desktopBounds } from "./capture-layout";
 import { ClipsService } from "./clips-service";
 import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
+import { GlobalShortcuts, shortcutAccelerator } from "./global-shortcuts";
 import { writeFileDropListToClipboard } from "./powershell";
+import { RawKeyboard } from "./raw-keyboard";
 import type {
   AppInfo,
   AppPage,
@@ -58,6 +59,7 @@ import type {
   RecordingFile,
   SaveDialogResult,
   SaveResult,
+  ShortcutKeyLabels,
   ShortcutRecordingEvent,
   ShortcutTarget,
   VideoFileExtension,
@@ -71,6 +73,7 @@ import {
   videoFileExtension,
   videoFpsOptions
 } from "./shared";
+import { ShortcutRecorder, type ShortcutRecorderEvent } from "./shortcut-recorder";
 import { currentWindowsAccount, syncElevatedStartupTask } from "./startup-task";
 import { TaskQueue } from "./task-queue";
 import {
@@ -88,7 +91,6 @@ const appId = "com.akinsoft.softshot";
 const developmentAppId = `${appId}.dev`;
 const captureShortcutRetryDelayMs = 1000;
 const captureShortcutRetryLimit = 12;
-const keySeparator = "+";
 const overlayReadyTimeoutMs = 15_000;
 const captureOnReadyDelayMs = 300;
 const pngSignature = Buffer.from("89504e470d0a1a0a", "hex");
@@ -132,7 +134,6 @@ const outputFileFilterNames: Record<OutputFileExtension, string> = {
   webm: "WebM video"
 };
 const missingEditorRecordingDataMessage = "Missing editor recording data.";
-const noKeyValue = "Unidentified";
 const mediaPermissionName = "media";
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
@@ -151,108 +152,7 @@ const appSettingsUpdateKeys = new Set([
   "systemAudioEnabled"
 ]);
 const shortcutRecordingRearmDelayMs = 250;
-const maxCaptureShortcutKeyCount = 3;
-const firstFunctionKey = 1;
-const lastFunctionKey = 24;
-const maxShortcutModifierKeyCount = maxCaptureShortcutKeyCount - 1;
 const openableVideoFileExtensions: ReadonlySet<string> = new Set(["mkv", "mov", "mp4", "webm"]);
-
-const modifierShortcutKeys = ["Control", "Alt", "Shift", "Meta"] as const;
-const modifierKeys = new Set<string>(modifierShortcutKeys);
-const namedKeys = new Map([
-  [" ", "Space"],
-  ["AudioVolumeDown", "VolumeDown"],
-  ["AudioVolumeMute", "VolumeMute"],
-  ["AudioVolumeUp", "VolumeUp"],
-  ["ArrowDown", "Down"],
-  ["ArrowLeft", "Left"],
-  ["ArrowRight", "Right"],
-  ["ArrowUp", "Up"],
-  ["Esc", "Escape"],
-  ["MediaTrackNext", "MediaNextTrack"],
-  ["MediaTrackPrevious", "MediaPreviousTrack"],
-  ["PageDown", "PageDown"],
-  ["PageUp", "PageUp"],
-  ["PrintScreen", "PrintScreen"]
-]);
-const globalShortcutBaseKeys = [
-  "Backspace",
-  "Delete",
-  "Down",
-  "End",
-  "Enter",
-  "Escape",
-  "Home",
-  "Insert",
-  "Left",
-  "MediaNextTrack",
-  "MediaPlayPause",
-  "MediaPreviousTrack",
-  "MediaStop",
-  "PageDown",
-  "PageUp",
-  "PrintScreen",
-  "Right",
-  "Space",
-  "Tab",
-  "Up",
-  "VolumeDown",
-  "VolumeMute",
-  "VolumeUp"
-] as const;
-const numpadKeys = new Map([
-  ["Numpad0", "num0"],
-  ["Numpad1", "num1"],
-  ["Numpad2", "num2"],
-  ["Numpad3", "num3"],
-  ["Numpad4", "num4"],
-  ["Numpad5", "num5"],
-  ["Numpad6", "num6"],
-  ["Numpad7", "num7"],
-  ["Numpad8", "num8"],
-  ["Numpad9", "num9"],
-  ["NumpadAdd", "numadd"],
-  ["NumpadDecimal", "numdec"],
-  ["NumpadDivide", "numdiv"],
-  ["NumpadMultiply", "nummult"],
-  ["NumpadSubtract", "numsub"]
-]);
-const punctuationKeys = new Map([
-  ["`", "`"],
-  [",", "Comma"],
-  ["-", "Minus"],
-  [".", "Period"],
-  ["/", "Slash"],
-  [";", "Semicolon"],
-  ["=", "Plus"],
-  ["+", "Plus"]
-]);
-const globalShortcutNumpadKeys = [
-  "num0",
-  "num1",
-  "num2",
-  "num3",
-  "num4",
-  "num5",
-  "num6",
-  "num7",
-  "num8",
-  "num9",
-  "numadd",
-  "numdec",
-  "numdiv",
-  "nummult",
-  "numsub"
-] as const;
-const globalShortcutPunctuationKeys = [
-  "Comma",
-  "Minus",
-  "Period",
-  "Plus",
-  "Semicolon",
-  "Slash"
-] as const;
-const globalShortcutSingleCharacterKeys = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("");
 
 interface PendingOverlayBootstrap {
   promise: Promise<OverlayBootstrap>;
@@ -301,11 +201,19 @@ class SoftshotApp {
 
   private isShortcutRecordingSaving = false;
 
-  private readonly shortcutRecorderShortcuts = new Set<string>();
-
   private appWindow: BrowserWindow | null = null;
 
   private isUpdateReady = false;
+
+  private readonly keyboard = new RawKeyboard((error): void => {
+    this.reportBackgroundError("Could not read a key press.", error);
+  });
+
+  private readonly shortcuts = new GlobalShortcuts(this.keyboard);
+
+  private readonly shortcutRecorder = new ShortcutRecorder(this.keyboard, (event): void => {
+    this.handleShortcutRecorderEvent(event);
+  });
 
   private readonly clips = this.createClipsService();
 
@@ -770,7 +678,7 @@ class SoftshotApp {
       },
       takeClipRecording: async (recordingId, ownerWebContentsId) =>
         await this.takeClipRecording(recordingId, ownerWebContentsId)
-    });
+    }, this.shortcuts);
   }
 
   private async takeClipRecording(recordingId: string, ownerWebContentsId: number): Promise<string> {
@@ -1699,8 +1607,8 @@ class SoftshotApp {
     const appWindow = this.createAppWindow();
     const appWebContentsId = appWindow.webContents.id;
     this.appWindow = appWindow;
-    appWindow.webContents.on("before-input-event", (event, input): void => {
-      this.handleShortcutRecordingInput(appWindow, event, input);
+    appWindow.webContents.on("before-input-event", (event): void => {
+      this.handleShortcutRecordingInput(appWindow, event);
     });
 
     appWindow.once("ready-to-show", (): void => {
@@ -1740,41 +1648,45 @@ class SoftshotApp {
     appWindow.webContents.send(shortcutRecordingEventChannel, data);
   }
 
-  private handleShortcutRecordingInput(appWindow: BrowserWindow, event: Electron.Event, input: Electron.Input): void {
-    if (this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
-      return;
+  private handleShortcutRecordingInput(appWindow: BrowserWindow, event: Electron.Event): void {
+    if (this.shortcutRecordingWebContentsId === appWindow.webContents.id) {
+      event.preventDefault();
     }
+  }
 
-    event.preventDefault();
-
-    if (input.type !== "keyDown" || input.isAutoRepeat) {
+  private handleShortcutRecorderEvent(event: ShortcutRecorderEvent): void {
+    const { appWindow } = this;
+    if (!appWindow || appWindow.isDestroyed() || this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
       return;
     }
 
     const target = this.shortcutRecordingTarget;
-    const shortcut = shortcutFromInput(input);
-    if (!shortcut) {
-      this.emitShortcutRecordingEvent(appWindow, { message: "Unsupported key", target, type: "error" });
-      return;
-    }
+    switch (event.type) {
+      case "cancelled": {
+        this.stopShortcutRecording();
+        this.emitShortcutRecordingEvent(appWindow, { target, type: "cancelled" });
+        break;
+      }
 
-    if (shortcut === "Escape") {
-      this.stopShortcutRecording();
-      this.emitShortcutRecordingEvent(appWindow, { target, type: "cancelled" });
-      return;
-    }
+      case "error": {
+        this.emitShortcutRecordingEvent(appWindow, { message: event.message, target, type: "error" });
+        break;
+      }
 
-    if (shortcutKeyCount(shortcut) > maxCaptureShortcutKeyCount) {
-      this.emitShortcutRecordingEvent(appWindow, { message: "Use up to 3 keys", target, type: "error" });
-      return;
-    }
+      case "preview": {
+        this.emitShortcutRecordingEvent(appWindow, { shortcut: event.shortcut, target, type: "preview" });
+        break;
+      }
 
-    if (isModifierOnlyShortcut(shortcut)) {
-      this.emitShortcutRecordingEvent(appWindow, { shortcut, target, type: "preview" });
-      return;
-    }
+      case "recorded": {
+        void this.saveRecordedShortcut(appWindow, event.shortcut);
+        break;
+      }
 
-    void this.saveRecordedShortcut(appWindow, shortcut);
+      default: {
+        throw new Error(`Unexpected shortcut recorder event: ${JSON.stringify(event)}`);
+      }
+    }
   }
 
   private async saveRecordedShortcut(appWindow: BrowserWindow, shortcut: string): Promise<void> {
@@ -1785,7 +1697,7 @@ class SoftshotApp {
     this.isShortcutRecordingSaving = true;
     const target = this.shortcutRecordingTarget;
     try {
-      this.unregisterShortcutRecorderShortcuts();
+      this.shortcutRecorder.stop();
       await delay(shortcutRecordingRearmDelayMs);
       this.clips.setShortcutSuspended(false);
       const settings = await this.applySettingsUpdate(
@@ -1803,24 +1715,11 @@ class SoftshotApp {
     }
   }
 
-  private saveRecordedShortcutFromGlobalShortcut(shortcut: string): void {
-    const { appWindow } = this;
-    if (!appWindow || appWindow.isDestroyed()) {
-      return;
-    }
-
-    if (this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
-      return;
-    }
-
-    void this.saveRecordedShortcut(appWindow, shortcut);
-  }
-
   private armShortcutRecorder(): void {
     this.clearCaptureShortcutRetry();
     this.unregisterRegisteredCaptureShortcuts();
     this.clips.setShortcutSuspended(true);
-    this.registerShortcutRecorderShortcuts();
+    this.shortcutRecorder.start();
     this.isCaptureShortcutUnavailable = false;
     this.refreshTrayMenu();
   }
@@ -1842,45 +1741,13 @@ class SoftshotApp {
     }
 
     this.shortcutRecordingWebContentsId = null;
-    this.unregisterShortcutRecorderShortcuts();
+    this.shortcutRecorder.stop();
     this.captureShortcutRetryAttempts = 0;
     this.clips.setShortcutSuspended(false);
 
     if (!this.registerCurrentCaptureShortcut()) {
       this.scheduleCaptureShortcutRetry();
     }
-  }
-
-  private registerShortcutRecorderShortcut(shortcut: string): void {
-    if (this.shortcutRecorderShortcuts.has(shortcut)) {
-      return;
-    }
-
-    try {
-      if (!globalShortcut.register(shortcut, (): void => {
-        this.saveRecordedShortcutFromGlobalShortcut(shortcut);
-      })) {
-        return;
-      }
-
-      this.shortcutRecorderShortcuts.add(shortcut);
-    } catch (error) {
-      this.debugLog(`could not register keybind recorder shortcut ${shortcut}: ${errorMessage(error)}`);
-    }
-  }
-
-  private registerShortcutRecorderShortcuts(): void {
-    for (const shortcut of allRecorderShortcuts()) {
-      this.registerShortcutRecorderShortcut(shortcut);
-    }
-  }
-
-  private unregisterShortcutRecorderShortcuts(): void {
-    for (const shortcut of this.shortcutRecorderShortcuts) {
-      globalShortcut.unregister(shortcut);
-    }
-
-    this.shortcutRecorderShortcuts.clear();
   }
 
   private settingsSnapshot(): AppSettings {
@@ -2416,7 +2283,7 @@ class SoftshotApp {
       return true;
     }
 
-    const didRegisterShortcut = globalShortcut.register(shortcut, (): void => {
+    const didRegisterShortcut = this.shortcuts.register(shortcut, (): void => {
       this.capture();
     });
 
@@ -2425,7 +2292,7 @@ class SoftshotApp {
 
   private unregisterRegisteredCaptureShortcuts(): void {
     for (const shortcut of this.registeredShortcuts) {
-      globalShortcut.unregister(shortcut);
+      this.shortcuts.unregister(shortcut);
     }
 
     this.registeredShortcuts = [];
@@ -2790,6 +2657,11 @@ class SoftshotApp {
       this.startShortcutRecording(event, shortcutTargetFromUnknown(target));
     });
 
+    ipcMain.handle("app:get-key-labels", (event): ShortcutKeyLabels => {
+      this.getSenderAppWindow(event);
+      return this.keyboard.characterKeyLabels();
+    });
+
     ipcMain.handle("clips:choose-directory", async (event): Promise<AppSettings | null> => {
       return await this.chooseClipsDirectory(event);
     });
@@ -2873,7 +2745,7 @@ class SoftshotApp {
     const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: "Capture",
-        accelerator: this.registeredShortcuts[0],
+        accelerator: this.registeredShortcuts.find((shortcut) => shortcutAccelerator(shortcut) !== null),
         click: (): void => {
           this.capture();
         }
@@ -3137,7 +3009,7 @@ class SoftshotApp {
     app.on("will-quit", (): void => {
       this.clearCaptureShortcutRetry();
       this.clips.stop();
-      globalShortcut.unregisterAll();
+      this.shortcuts.unregisterAll();
     });
 
     app.on("window-all-closed", (): void => {
@@ -3335,115 +3207,6 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve): void => {
     setTimeout(resolve, milliseconds);
   });
-}
-
-function isModifierOnlyShortcut(shortcut: string): boolean {
-  return shortcut.split(keySeparator).every((key) => modifierKeys.has(key));
-}
-
-function keyFromInput(input: Electron.Input): string | null {
-  if (modifierKeys.has(input.key)) {
-    return input.key;
-  }
-
-  const namedKey = namedKeys.get(input.key);
-  if (namedKey) {
-    return namedKey;
-  }
-
-  const punctuationKey = punctuationKeys.get(input.key);
-  if (punctuationKey) {
-    return punctuationKey;
-  }
-
-  const numpadKey = numpadKeys.get(input.code);
-  if (numpadKey) {
-    return numpadKey;
-  }
-
-  if (input.code.startsWith("Key")) {
-    return input.code.slice("Key".length);
-  }
-
-  if (input.code.startsWith("Digit")) {
-    return input.code.slice("Digit".length);
-  }
-
-  if (input.key !== noKeyValue && !input.key.includes(keySeparator)) {
-    return input.key;
-  }
-
-  return input.code && input.code !== noKeyValue ? input.code : null;
-}
-
-function pushModifierKey(keys: string[], key: string, isPressed: boolean): void {
-  if (isPressed) {
-    keys.push(key);
-  }
-}
-
-function shortcutFromInput(input: Electron.Input): string | null {
-  const keys: string[] = [];
-  pushModifierKey(keys, "Control", input.control);
-  pushModifierKey(keys, "Alt", input.alt);
-  pushModifierKey(keys, "Shift", input.shift);
-  pushModifierKey(keys, "Meta", input.meta);
-
-  const key = keyFromInput(input);
-  if (key && !modifierKeys.has(key)) {
-    keys.push(key);
-  }
-
-  return keys.length > 0 ? keys.join(keySeparator) : null;
-}
-
-function shortcutKeyCount(shortcut: string): number {
-  return shortcut.split(keySeparator).length;
-}
-
-function shortcutRecorderBaseKeys(): string[] {
-  return [
-    ...globalShortcutSingleCharacterKeys,
-    ...functionShortcutKeys(),
-    ...globalShortcutBaseKeys,
-    ...globalShortcutNumpadKeys,
-    ...globalShortcutPunctuationKeys
-  ];
-}
-
-function functionShortcutKeys(): string[] {
-  const keys: string[] = [];
-  for (let keyNumber = firstFunctionKey; keyNumber <= lastFunctionKey; keyNumber += 1) {
-    keys.push(`F${String(keyNumber)}`);
-  }
-
-  return keys;
-}
-
-function shortcutRecorderModifierCombinations(): string[][] {
-  const combinations: string[][] = [[]];
-
-  for (const modifier of modifierShortcutKeys) {
-    const additions = combinations
-      .filter((combination) => combination.length < maxShortcutModifierKeyCount)
-      .map((combination) => [...combination, modifier]);
-    combinations.push(...additions);
-  }
-
-  return combinations;
-}
-
-function allRecorderShortcuts(): string[] {
-  const shortcuts: string[] = [];
-  const modifierCombinations = shortcutRecorderModifierCombinations();
-
-  for (const key of shortcutRecorderBaseKeys()) {
-    for (const modifiers of modifierCombinations) {
-      shortcuts.push([...modifiers, key].join(keySeparator));
-    }
-  }
-
-  return shortcuts;
 }
 
 function trailingBytes(bytes: Uint8Array, maxByteLength: number): Uint8Array {

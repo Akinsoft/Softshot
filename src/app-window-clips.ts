@@ -6,7 +6,8 @@ import {
   runWithErrorToast,
   selectOption
 } from "./app-window-controls.js";
-import { ShortcutButton, shortcutKeycaps, shortcutText } from "./app-window-shortcut.js";
+import { ShortcutButton } from "./app-window-shortcut.js";
+import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { normalizeMicrophoneDeviceId } from "./audio-devices.js";
 import { recordingAudioBitrate } from "./audio-quality.js";
 import { getRequiredElement } from "./overlay-dom.js";
@@ -111,9 +112,7 @@ export class ClipsPage implements AppWindowPage {
       getRequiredElement("clips-shortcut-button", HTMLButtonElement),
       getRequiredElement("clips-shortcut-status", HTMLSpanElement),
       "clips",
-      (settings): void => {
-        context.applySettings(settings);
-      }
+      context
     );
   }
 
@@ -325,7 +324,7 @@ export class ClipsPage implements AppWindowPage {
     const { clips } = this.context.settings();
     const { status } = this;
     const isRecording = status.state === "recording";
-    const detail = statusDetail(status, clips);
+    const detail = statusDetail(status, clips, this.context.shortcutLabels());
     const icon = this.recordingIcon();
     this.statusCard.dataset.state = status.state;
     this.retryButton.hidden = status.state !== "error";
@@ -418,7 +417,7 @@ function statusTitle(status: ClipsStatus): string {
   }
 }
 
-function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | string> {
+function statusDetail(status: ClipsStatus, clips: ClipSettings, shortcutLabels: ShortcutLabels): Array<Node | string> {
   const durationLabel = clipDurationLabel(clips.durationSeconds);
   switch (status.state) {
     case "off": {
@@ -433,8 +432,8 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | st
 
     case "recording": {
       return status.isShortcutAvailable
-        ? ["Press", shortcutKeycaps(clips.shortcut), `to save the last ${durationLabel}.`]
-        : [`${shortcutText(clips.shortcut)} is used by another app. Pick a different shortcut below.`];
+        ? ["Press", shortcutLabels.keycaps(clips.shortcut), `to save the last ${durationLabel}.`]
+        : [`${shortcutLabels.text(clips.shortcut)} is used by another app. Pick a different shortcut below.`];
     }
 
     case "waiting": {

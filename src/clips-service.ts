@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
-import { app, BrowserWindow, type Display, globalShortcut, ipcMain, screen, shell } from "electron";
+import { app, BrowserWindow, type Display, ipcMain, screen, shell } from "electron";
 
 import { errorMessage } from "./async-errors";
 import { ClipCaptureSession, type ClipCaptureSessionOptions, type ClipCaptureSnapshot } from "./clip-capture-session";
@@ -16,6 +16,7 @@ import {
 } from "./clip-sources";
 import { type ClipCaptureTarget, type ClipVideoEncoder, findClipVideoEncoder } from "./clip-video-capture";
 import { type ClipAudioTrackFile, ClipsLibrary } from "./clips-library";
+import { type GlobalShortcuts, shortcutAccelerator } from "./global-shortcuts";
 import { captureGeometry, type MonitorGeometry, writeFileDropListToClipboard } from "./powershell";
 import type {
   ClipEntry,
@@ -93,7 +94,10 @@ export class ClipsService {
 
   private status: ClipsStatus = { isShortcutAvailable: true, message: null, sourceName: null, state: "off" };
 
-  constructor(private readonly host: ClipsServiceHost) {}
+  constructor(
+    private readonly host: ClipsServiceHost,
+    private readonly shortcuts: GlobalShortcuts
+  ) {}
 
   private get library(): ClipsLibrary {
     this.libraryInstance ??= new ClipsLibrary(path.join(app.getPath("userData"), clipsLibraryFolderName));
@@ -116,7 +120,7 @@ export class ClipsService {
     }
 
     if (this.registeredShortcut !== null) {
-      globalShortcut.unregister(this.registeredShortcut);
+      this.shortcuts.unregister(this.registeredShortcut);
       this.registeredShortcut = null;
     }
 
@@ -125,7 +129,7 @@ export class ClipsService {
       return true;
     }
 
-    const isRegistered = globalShortcut.register(desiredShortcut, (): void => {
+    const isRegistered = this.shortcuts.register(desiredShortcut, (): void => {
       this.saveClip();
     });
     this.registeredShortcut = isRegistered ? desiredShortcut : null;
@@ -555,7 +559,7 @@ export class ClipsService {
   }
 
   registeredShortcutAccelerator(): string | null {
-    return this.registeredShortcut;
+    return this.registeredShortcut === null ? null : shortcutAccelerator(this.registeredShortcut);
   }
 
   saveClip(): void {

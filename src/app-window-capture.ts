@@ -16,9 +16,7 @@ export class CapturePage implements AppWindowPage {
       getRequiredElement("capture-shortcut-button", HTMLButtonElement),
       getRequiredElement("capture-shortcut-status", HTMLSpanElement),
       "capture",
-      (settings): void => {
-        context.applySettings(settings);
-      }
+      context
     );
   }
 

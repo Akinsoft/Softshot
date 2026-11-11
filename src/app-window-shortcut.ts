@@ -1,36 +1,10 @@
+import type { AppWindowContext } from "./app-window-controls.js";
 import { errorMessage } from "./async-errors.js";
-import type { AppSettings, ShortcutRecordingEvent, ShortcutTarget } from "./shared.js";
+import type { ShortcutRecordingEvent, ShortcutTarget } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const statusClearDelayMs = 1400;
-const keySeparator = "+";
 const recordingButtonText = "Press keys";
-
-const displayNames = new Map([
-  ["Control", "Ctrl"],
-  ["Meta", "Win"],
-  ["num0", "Num 0"],
-  ["num1", "Num 1"],
-  ["num2", "Num 2"],
-  ["num3", "Num 3"],
-  ["num4", "Num 4"],
-  ["num5", "Num 5"],
-  ["num6", "Num 6"],
-  ["num7", "Num 7"],
-  ["num8", "Num 8"],
-  ["num9", "Num 9"],
-  ["numadd", "Num +"],
-  ["numdec", "Num ."],
-  ["numdiv", "Num /"],
-  ["nummult", "Num *"],
-  ["numsub", "Num -"],
-  ["PrintScreen", "PrtSc"],
-  ["VolumeDown", "Volume Down"],
-  ["VolumeMute", "Volume Mute"],
-  ["VolumeUp", "Volume Up"]
-]);
-
-type ShortcutSavedHandler = (settings: AppSettings) => void;
 
 export class ShortcutButton {
   private isRecording = false;
@@ -43,7 +17,7 @@ export class ShortcutButton {
     private readonly button: HTMLButtonElement,
     private readonly status: HTMLElement,
     private readonly target: ShortcutTarget,
-    private readonly onSaved: ShortcutSavedHandler
+    private readonly context: AppWindowContext
   ) {}
 
   private async begin(): Promise<void> {
@@ -66,7 +40,7 @@ export class ShortcutButton {
 
     this.isRecording = false;
     this.button.classList.remove("recording");
-    this.button.replaceChildren(shortcutKeycaps(this.shortcut));
+    this.button.replaceChildren(this.context.shortcutLabels().keycaps(this.shortcut));
   }
 
   private setStatus(message: string): void {
@@ -99,12 +73,12 @@ export class ShortcutButton {
       }
 
       case "preview": {
-        this.button.replaceChildren(shortcutKeycaps(event.shortcut));
+        this.button.replaceChildren(this.context.shortcutLabels().keycaps(event.shortcut));
         break;
       }
 
       case "saved": {
-        this.onSaved(event.settings);
+        this.context.applySettings(event.settings);
         this.finish();
         this.setStatus("");
         break;
@@ -132,23 +106,7 @@ export class ShortcutButton {
   render(shortcut: string): void {
     this.shortcut = shortcut;
     if (!this.isRecording) {
-      this.button.replaceChildren(shortcutKeycaps(shortcut));
+      this.button.replaceChildren(this.context.shortcutLabels().keycaps(shortcut));
     }
   }
-}
-
-export function shortcutKeycaps(shortcut: string): HTMLSpanElement {
-  const keycaps = document.createElement("span");
-  keycaps.className = "softshot-keycaps";
-  keycaps.append(...shortcut.split(keySeparator).map((key) => {
-    const keycap = document.createElement("kbd");
-    keycap.className = "softshot-keycap";
-    keycap.textContent = displayNames.get(key) ?? key;
-    return keycap;
-  }));
-  return keycaps;
-}
-
-export function shortcutText(shortcut: string): string {
-  return shortcut.split(keySeparator).map((key) => displayNames.get(key) ?? key).join(" + ");
 }

@@ -231,6 +231,8 @@ export interface AppInfo {
   version: string;
 }
 
+export type ShortcutKeyLabels = Record<string, string>;
+
 export type ShortcutRecordingEvent =
   | { target: ShortcutTarget; type: "cancelled" }
   | { message: string; target: ShortcutTarget; type: "error" }
@@ -296,6 +298,7 @@ export interface SoftshotApi {
   appReadyToShow(): Promise<void>;
   beginShortcutRecording(target: ShortcutTarget): Promise<void>;
   getAppInfo(): Promise<AppInfo>;
+  getKeyLabels(): Promise<ShortcutKeyLabels>;
   getSettings(): Promise<AppSettings>;
   installUpdate(): Promise<void>;
   onAppNavigate(handler: AppNavigateHandler): () => void;
