@@ -266,7 +266,7 @@ export class ClipsPage implements AppWindowPage {
     const selectedIndex = savedWindowIndex(windows, savedWindow);
     const options = windows.map((window, index) => windowOption(window, index, index === selectedIndex));
     if (selectedIndex === -1) {
-      options.unshift(selectOption(`${savedWindow.title} (not open)`, savedWindowValue, true));
+      options.unshift(appOption(`${savedWindow.title} (not open)`, null, savedWindowValue, true));
     }
 
     return options;
@@ -459,21 +459,31 @@ function placeholderOption(label: string): HTMLOptionElement {
 }
 
 function windowOption(window: ClipWindowOption, index: number, isSelected: boolean): HTMLOptionElement {
-  const option = selectOption("", `${windowOptionPrefix}${String(index)}`, isSelected);
-  option.label = window.title;
-  if (window.iconDataUrl) {
-    const icon = document.createElement("img");
-    icon.className = "option-icon";
-    icon.src = window.iconDataUrl;
-    icon.alt = "";
-    option.append(icon);
-  }
+  return appOption(window.title, window.iconDataUrl, `${windowOptionPrefix}${String(index)}`, isSelected);
+}
 
+function appOption(title: string, iconDataUrl: string | null, value: string, isSelected: boolean): HTMLOptionElement {
+  const option = selectOption("", value, isSelected);
   const label = document.createElement("span");
   label.className = "option-label";
-  label.textContent = window.title;
-  option.append(label);
+  label.textContent = title;
+  option.append(appIcon(iconDataUrl), label);
   return option;
+}
+
+function appIcon(iconDataUrl: string | null): HTMLElement {
+  if (iconDataUrl === null) {
+    const placeholder = document.createElement("span");
+    placeholder.className = "option-icon option-icon-placeholder";
+    placeholder.ariaHidden = "true";
+    return placeholder;
+  }
+
+  const icon = document.createElement("img");
+  icon.className = "option-icon";
+  icon.src = iconDataUrl;
+  icon.alt = "";
+  return icon;
 }
 
 function savedWindowIndex(windows: readonly ClipWindowOption[], savedWindow: WindowClipSource): number {
