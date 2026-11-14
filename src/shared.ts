@@ -64,7 +64,7 @@ export type RecordingEncoder = "hardware" | "compatibility";
 export type ClipQuality = (typeof clipQualities)[number];
 export type ClipDurationSeconds = (typeof clipDurationOptionsSeconds)[number];
 export type ShortcutTarget = "capture" | "clips";
-const appPages = ["capture", "clips", "gallery", "settings"] as const;
+const appPages = ["capture", "clips", "settings"] as const;
 export type AppPage = (typeof appPages)[number];
 export type ClipsState = "error" | "off" | "recording" | "starting" | "waiting";
 

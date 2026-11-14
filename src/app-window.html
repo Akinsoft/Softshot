@@ -37,15 +37,6 @@
           </svg>
           <span>Clips</span>
         </button>
-        <button class="nav-item nav-subitem" type="button" data-page="gallery">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="4" y="4" width="7" height="7" rx="1" />
-            <rect x="13" y="4" width="7" height="7" rx="1" />
-            <rect x="4" y="13" width="7" height="7" rx="1" />
-            <rect x="13" y="13" width="7" height="7" rx="1" />
-          </svg>
-          <span>Gallery</span>
-        </button>
       </div>
 
       <div class="nav-footer">
@@ -73,11 +64,7 @@
     </nav>
 
     <main id="app-content" class="app-content softshot-scroll">
-      <section id="capture-page" class="app-page" data-page="capture" aria-labelledby="capture-heading" hidden>
-        <header class="page-header">
-          <h1 id="capture-heading">Quick Capture</h1>
-        </header>
-
+      <section id="capture-page" class="app-page" data-page="capture" aria-label="Quick Capture" hidden>
         <section class="settings-section" aria-labelledby="capture-shortcut-heading">
           <h2 id="capture-shortcut-heading" class="settings-section-title">Shortcut</h2>
           <div class="settings-card">
@@ -90,81 +77,92 @@
         </section>
       </section>
 
-      <section id="clips-page" class="app-page" data-page="clips" aria-labelledby="clips-heading" hidden>
-        <header class="page-header">
-          <h1 id="clips-heading">Clips</h1>
-          <label class="header-toggle" for="clips-enabled-checkbox">
-            <span id="clips-enabled-label" class="header-toggle-label">Off</span>
+      <section id="clips-page" class="app-page" data-page="clips" aria-label="Clips" hidden>
+        <section id="clips-control" class="clips-control" data-state="off" aria-label="Recording">
+          <div class="clips-control-status">
             <span class="softshot-toggle">
-              <input id="clips-enabled-checkbox" type="checkbox" aria-label="Turn on Clips" />
+              <input id="clips-enabled-checkbox" type="checkbox" aria-label="Clips" />
               <span class="softshot-toggle-track" aria-hidden="true">
                 <span class="softshot-toggle-thumb"></span>
               </span>
             </span>
-          </label>
-        </header>
-
-        <div id="clips-status-card" class="status-card" data-state="off">
-          <span class="status-dot" aria-hidden="true"></span>
-          <div class="status-text">
-            <span class="status-title" aria-live="polite">
-              <img id="clips-status-icon" class="status-icon" alt="" hidden />
-              <span id="clips-status-title" class="status-title-text"></span>
-            </span>
-            <span id="clips-status-detail" class="status-detail"></span>
-          </div>
-          <span id="clips-status-hint" class="status-detail status-hint"></span>
-          <button id="clips-retry-button" class="softshot-button" type="button" hidden>Try again</button>
-        </div>
-
-        <section class="settings-section" aria-labelledby="clips-source-heading">
-          <h2 id="clips-source-heading" class="settings-section-title">Source</h2>
-          <div class="settings-card">
-            <div class="settings-row">
-              <span class="settings-label">Record</span>
-              <div class="segmented" role="radiogroup" aria-label="Clip source">
-                <button id="clips-source-display" class="segmented-option" type="button" role="radio" data-source-kind="display">Monitor</button>
-                <button id="clips-source-window" class="segmented-option" type="button" role="radio" data-source-kind="window">Application</button>
-              </div>
-            </div>
-            <label id="clips-display-row" class="settings-row" for="clips-display-select">
-              <span class="settings-label">Monitor</span>
-              <select id="clips-display-select" class="softshot-select settings-select wide-select">
-                <button type="button"><selectedcontent></selectedcontent></button>
-              </select>
-            </label>
-            <label id="clips-window-row" class="settings-row" for="clips-window-select" hidden>
-              <span class="settings-label">Application</span>
-              <select id="clips-window-select" class="softshot-select settings-select wide-select">
-                <button type="button"><selectedcontent></selectedcontent></button>
-              </select>
-            </label>
-          </div>
-        </section>
-
-        <section class="settings-section" aria-labelledby="clips-quality-heading">
-          <h2 id="clips-quality-heading" class="settings-section-title">Quality</h2>
-          <div class="settings-card">
-            <div class="settings-row">
-              <span class="settings-label-group">
-                <label class="settings-label" for="clips-duration-select">Clip length</label>
-                <button id="clips-duration-help" class="help-button" type="button" aria-label="Memory used by each clip length">?</button>
+            <div class="status-text">
+              <span class="status-title" aria-live="polite">
+                <span class="status-dot" aria-hidden="true"></span>
+                <img id="clips-status-icon" class="status-icon" alt="" hidden />
+                <span id="clips-status-title" class="status-title-text"></span>
               </span>
-              <select id="clips-duration-select" class="softshot-select settings-select"></select>
+              <span id="clips-status-detail" class="status-detail"></span>
             </div>
-            <label class="settings-row" for="clips-quality-select">
-              <span class="settings-label">Resolution</span>
-              <select id="clips-quality-select" class="softshot-select settings-select"></select>
-            </label>
-            <label class="settings-row" for="clips-fps-select">
-              <span class="settings-label">Frame rate</span>
-              <select id="clips-fps-select" class="softshot-select settings-select"></select>
+            <span id="clips-status-hint" class="status-detail status-hint"></span>
+            <button id="clips-retry-button" class="softshot-button" type="button" hidden>Try again</button>
+            <button id="clips-settings-button" class="icon-button" type="button" data-tooltip="Clip settings" aria-label="Clip settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h10" />
+                <path d="M18 7h2" />
+                <circle cx="16" cy="7" r="2" />
+                <path d="M4 17h2" />
+                <path d="M10 17h10" />
+                <circle cx="8" cy="17" r="2" />
+              </svg>
+            </button>
+          </div>
+          <div class="clips-control-source">
+            <div class="segmented" role="radiogroup" aria-label="Clip source">
+              <button id="clips-source-display" class="segmented-option" type="button" role="radio" data-source-kind="display">Monitor</button>
+              <button id="clips-source-window" class="segmented-option" type="button" role="radio" data-source-kind="window">Application</button>
+            </div>
+            <select id="clips-display-select" class="softshot-select source-select" aria-label="Monitor">
+              <button type="button"><selectedcontent></selectedcontent></button>
+            </select>
+            <select id="clips-window-select" class="softshot-select source-select" aria-label="Application" hidden>
+              <button type="button"><selectedcontent></selectedcontent></button>
+            </select>
+          </div>
+        </section>
+
+        <section class="clip-library" aria-label="Saved clips">
+          <div id="clip-library-header" class="clip-library-header" hidden>
+            <p id="clip-library-summary" class="clip-library-summary"></p>
+            <button id="clip-library-open-folder" class="softshot-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+              </svg>
+              Open folder
+            </button>
+          </div>
+
+          <div id="clip-library-groups" class="clip-library-groups"></div>
+
+          <div id="clip-library-empty" class="clip-library-empty" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="m10 9.5 4.5 2.5-4.5 2.5Z" />
+            </svg>
+            <h2>No clips yet</h2>
+            <p id="clip-library-empty-detail"></p>
+          </div>
+        </section>
+      </section>
+
+      <section id="settings-page" class="app-page" data-page="settings" aria-label="Settings" hidden>
+        <section class="settings-section" aria-labelledby="settings-general-heading">
+          <h2 id="settings-general-heading" class="settings-section-title">General</h2>
+          <div class="settings-card">
+            <label class="settings-row" for="startup-checkbox">
+              <span class="settings-label">Launch at startup</span>
+              <span class="softshot-toggle">
+                <input id="startup-checkbox" type="checkbox" />
+                <span class="softshot-toggle-track" aria-hidden="true">
+                  <span class="softshot-toggle-thumb"></span>
+                </span>
+              </span>
             </label>
           </div>
         </section>
 
-        <section class="settings-section" aria-labelledby="clips-shortcut-heading">
-          <h2 id="clips-shortcut-heading" class="settings-section-title">Shortcut</h2>
+        <section class="settings-section" aria-labelledby="settings-clips-heading">
+          <h2 id="settings-clips-heading" class="settings-section-title">Clips</h2>
           <div class="settings-card">
             <div class="settings-row">
               <span class="settings-label">Save clip</span>
@@ -183,12 +181,6 @@
                 </span>
               </span>
             </div>
-          </div>
-        </section>
-
-        <section class="settings-section" aria-labelledby="clips-storage-heading">
-          <h2 id="clips-storage-heading" class="settings-section-title">Storage</h2>
-          <div class="settings-card">
             <div class="settings-row">
               <span class="settings-label">Clips folder</span>
               <span id="clips-directory-path" class="row-value path-text"></span>
@@ -199,51 +191,24 @@
             </div>
           </div>
         </section>
-      </section>
 
-      <section id="gallery-page" class="app-page" data-page="gallery" aria-labelledby="gallery-heading" hidden>
-        <header class="page-header">
-          <div class="page-heading">
-            <h1 id="gallery-heading">Gallery</h1>
-            <p id="gallery-summary" class="page-summary"></p>
-          </div>
-          <button id="gallery-open-folder" class="softshot-button" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
-            </svg>
-            Open folder
-          </button>
-        </header>
-
-        <div id="gallery-groups" class="gallery-groups"></div>
-
-        <div id="gallery-empty" class="gallery-empty" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="5" width="18" height="14" rx="2" />
-            <path d="m10 9.5 4.5 2.5-4.5 2.5Z" />
-          </svg>
-          <h2>No clips yet</h2>
-          <p id="gallery-empty-detail"></p>
-          <button id="gallery-go-to-clips" class="softshot-button primary" type="button">Set up Clips</button>
-        </div>
-      </section>
-
-      <section id="settings-page" class="app-page" data-page="settings" aria-labelledby="settings-heading" hidden>
-        <header class="page-header">
-          <h1 id="settings-heading">Settings</h1>
-        </header>
-
-        <section class="settings-section" aria-labelledby="settings-general-heading">
-          <h2 id="settings-general-heading" class="settings-section-title">General</h2>
+        <section class="settings-section" aria-labelledby="settings-clip-quality-heading">
+          <h2 id="settings-clip-quality-heading" class="settings-section-title">Clip quality</h2>
           <div class="settings-card">
-            <label class="settings-row" for="startup-checkbox">
-              <span class="settings-label">Launch at startup</span>
-              <span class="softshot-toggle">
-                <input id="startup-checkbox" type="checkbox" />
-                <span class="softshot-toggle-track" aria-hidden="true">
-                  <span class="softshot-toggle-thumb"></span>
-                </span>
+            <div class="settings-row">
+              <span class="settings-label-group">
+                <label class="settings-label" for="clips-duration-select">Clip length</label>
+                <button id="clips-duration-help" class="help-button" type="button" aria-label="Memory used by each clip length">?</button>
               </span>
+              <select id="clips-duration-select" class="softshot-select settings-select"></select>
+            </div>
+            <label class="settings-row" for="clips-quality-select">
+              <span class="settings-label">Resolution</span>
+              <select id="clips-quality-select" class="softshot-select settings-select"></select>
+            </label>
+            <label class="settings-row" for="clips-fps-select">
+              <span class="settings-label">Frame rate</span>
+              <select id="clips-fps-select" class="softshot-select settings-select"></select>
             </label>
           </div>
         </section>

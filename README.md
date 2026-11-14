@@ -13,9 +13,9 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 - Trim before sharing: recordings open in a focused editor so you can keep only the useful part.
 - Export for anywhere: one-click presets for Discord, YouTube, and X, plus GIF, M4A, and WAV exports from the editor (`Ctrl+E`).
 - Edit existing clips: right-click an MP4, MOV, MKV, or WebM file and choose Open with > Softshot, or pick Open video in the tray menu.
-- Clips: keep the last 15 seconds to 5 minutes of a monitor or a single app ready in memory, then press `Alt+F10` to save it. Every saved clip lands in the Gallery, where one click opens it in the editor.
+- Clips: keep the last 15 seconds to 5 minutes of a monitor or a single app ready in memory, then press `Alt+F10` to save it. Every saved clip shows up on the Clips page, where one click opens it in the editor.
 - Local-first sharing: no account, cloud workspace, or project library between the capture and your clipboard.
-- Tray-first desktop app: Softshot stays out of the way until you need it. Click the tray icon to open the Softshot window for Clips, the Gallery, and settings.
+- Tray-first desktop app: Softshot stays out of the way until you need it. Click the tray icon to open the Softshot window for your clips and settings.
 
 ## Showcase
 
@@ -34,9 +34,9 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 ### Clips
 
 1. Open Softshot from the tray and go to Clips.
-2. Pick a monitor or an application, choose the clip length, resolution, and frame rate, then turn Clips on.
+2. Pick a monitor or an application, then turn Clips on. Clip length, resolution, and frame rate live in Settings.
 3. Press `Alt+F10` (or your own shortcut) any time to save what just happened.
-4. Open Gallery to browse, copy, or edit your clips.
+4. Saved clips appear under the controls on the Clips page, ready to copy or edit.
 
 Clips captures and encodes on the GPU through a bundled copy of FFmpeg (Windows Graphics Capture and your NVIDIA, AMD, or Intel hardware H.264 encoder). At 1080p60 with desktop audio it uses roughly a tenth of one CPU core, and the recent seconds are kept in memory. An app that never redraws, such as an idle desktop window, is only recorded once something in it changes. When Clips is off, nothing extra runs.
 

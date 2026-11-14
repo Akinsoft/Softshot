@@ -661,8 +661,8 @@ class SoftshotApp {
       libraryChanged: (): void => {
         this.sendToAppWindow(clipsLibraryChangedEventChannel);
       },
-      openGallery: (): void => {
-        void this.openAppWindowWithErrorHandling("gallery");
+      openClips: (): void => {
+        void this.openAppWindowWithErrorHandling("clips");
       },
       openVideoFile: async (filePath): Promise<void> => {
         await this.openVideoFileEditor(filePath);

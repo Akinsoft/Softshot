@@ -23,24 +23,24 @@ interface ClipAction {
   run(clip: ClipEntry): Promise<void>;
 }
 
-export class GalleryPage implements AppWindowPage {
+export class ClipLibrary implements AppWindowPage {
   private clips: ClipEntry[] = [];
 
-  private readonly emptyDetail = getRequiredElement("gallery-empty-detail", HTMLParagraphElement);
+  private readonly emptyDetail = getRequiredElement("clip-library-empty-detail", HTMLParagraphElement);
 
-  private readonly emptyState = getRequiredElement("gallery-empty", HTMLDivElement);
+  private readonly emptyState = getRequiredElement("clip-library-empty", HTMLDivElement);
 
-  private readonly goToClipsButton = getRequiredElement("gallery-go-to-clips", HTMLButtonElement);
+  private readonly groups = getRequiredElement("clip-library-groups", HTMLDivElement);
 
-  private readonly groups = getRequiredElement("gallery-groups", HTMLDivElement);
+  private readonly header = getRequiredElement("clip-library-header", HTMLDivElement);
 
   private hasLoaded = false;
 
-  private readonly openFolderButton = getRequiredElement("gallery-open-folder", HTMLButtonElement);
+  private readonly openFolderButton = getRequiredElement("clip-library-open-folder", HTMLButtonElement);
 
   private readonly refreshes = new TaskQueue();
 
-  private readonly summary = getRequiredElement("gallery-summary", HTMLParagraphElement);
+  private readonly summary = getRequiredElement("clip-library-summary", HTMLParagraphElement);
 
   constructor(private readonly context: AppWindowContext) {}
 
@@ -80,18 +80,18 @@ export class GalleryPage implements AppWindowPage {
       totalBytes += clip.sizeBytes;
     }
 
-    this.summary.textContent = this.clips.length === 0
-      ? "Every clip you save with Softshot shows up here."
-      : `${clipCountLabel(this.clips.length)}, ${formatBytes(totalBytes)}`;
-    this.emptyState.hidden = !this.hasLoaded || this.clips.length > 0;
+    const hasClips = this.clips.length > 0;
+    this.summary.textContent = `${clipCountLabel(this.clips.length)}, ${formatBytes(totalBytes)}`;
+    this.header.hidden = !hasClips;
+    this.emptyState.hidden = !this.hasLoaded || hasClips;
     this.groups.replaceChildren(...groupClipsByDay(this.clips).map(({ clips, label }) => {
       const group = document.createElement("section");
-      group.className = "gallery-group";
+      group.className = "clip-group";
       const title = document.createElement("h2");
-      title.className = "gallery-group-title";
+      title.className = "clip-group-title";
       title.textContent = label;
       const grid = document.createElement("div");
-      grid.className = "gallery-grid";
+      grid.className = "clip-grid";
       grid.append(...clips.map((clip) => this.clipCard(clip)));
       group.append(title, grid);
       return group;
@@ -174,9 +174,6 @@ export class GalleryPage implements AppWindowPage {
     this.openFolderButton.addEventListener("click", (): void => {
       void runWithErrorToast(this.context, getSoftshotApi().openClipsDirectory());
     });
-    this.goToClipsButton.addEventListener("click", (): void => {
-      this.context.navigate("clips");
-    });
   }
 
   async refresh(): Promise<void> {
@@ -188,7 +185,6 @@ export class GalleryPage implements AppWindowPage {
   render(settings: AppSettings): void {
     const { clips } = settings;
     const shortcutKeycaps = this.context.shortcutLabels().keycaps(clips.shortcut);
-    this.goToClipsButton.hidden = clips.enabled;
     this.emptyDetail.replaceChildren(...clips.enabled
       ? ["Press", shortcutKeycaps, `to save the last ${clipDurationLabel(clips.durationSeconds)}.`]
       : ["Turn on Clips, then press", shortcutKeycaps, "to save what just happened."]);

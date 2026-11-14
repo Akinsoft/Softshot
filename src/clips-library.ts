@@ -137,7 +137,7 @@ export class ClipsLibrary {
     const clips = await this.exclusive(async () => await this.readClips());
     const clip = clips.find((candidate) => candidate.id === clipId);
     if (!clip) {
-      throw new Error("This clip is no longer in the gallery.");
+      throw new Error("This clip no longer exists.");
     }
 
     return clip;
@@ -166,7 +166,7 @@ export class ClipsLibrary {
       const clips = await this.readClips();
       const clip = clips.find((candidate) => candidate.id === clipId);
       if (!clip) {
-        throw new Error("This clip is no longer in the gallery.");
+        throw new Error("This clip no longer exists.");
       }
 
       await this.writeClips(clips.filter((candidate) => candidate !== clip));

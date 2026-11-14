@@ -53,7 +53,7 @@ const repeatedSpaces = /\s+/gu;
 interface ClipsServiceHost {
   isAppWindowSender(sender: Electron.WebContents): boolean;
   libraryChanged(): void;
-  openGallery(): void;
+  openClips(): void;
   openVideoFile(filePath: string): Promise<void>;
   preloadScriptPath(): string;
   recorderClosed(webContentsId: number): void;
@@ -395,7 +395,7 @@ export class ClipsService {
     this.host.showToast({
       detail: null,
       onClick: (): void => {
-        this.host.openGallery();
+        this.host.openClips();
       },
       title: `Last ${clipDurationLabel(savedDurationSeconds)} clipped!`,
       tone: "info"

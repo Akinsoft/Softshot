@@ -1,7 +1,8 @@
 import { CapturePage } from "./app-window-capture.js";
+import { ClipLibrary } from "./app-window-clip-library.js";
+import { ClipSettingsSection } from "./app-window-clip-settings.js";
 import { ClipsPage } from "./app-window-clips.js";
 import { type AppWindowContext, runWithErrorToast } from "./app-window-controls.js";
-import { GalleryPage } from "./app-window-gallery.js";
 import { SettingsPage } from "./app-window-settings.js";
 import { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { AppSidebar } from "./app-window-sidebar.js";
@@ -21,6 +22,10 @@ const pageQueryName = "page";
 class AppWindowController implements AppWindowContext {
   private readonly capturePage = new CapturePage(this);
 
+  private readonly clipLibrary = new ClipLibrary(this);
+
+  private readonly clipSettings = new ClipSettingsSection(this);
+
   private readonly clipsPage = new ClipsPage(this);
 
   private readonly content = getRequiredElement("app-content", HTMLElement);
@@ -30,8 +35,6 @@ class AppWindowController implements AppWindowContext {
   private currentShortcutLabels: ShortcutLabels | null = null;
 
   private devices: MediaDeviceInfo[] = [];
-
-  private readonly galleryPage = new GalleryPage(this);
 
   private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
 
@@ -47,7 +50,15 @@ class AppWindowController implements AppWindowContext {
 
   private renderPages(): void {
     const settings = this.settings();
-    for (const page of [this.sidebar, this.capturePage, this.clipsPage, this.galleryPage, this.settingsPage]) {
+    const pages = [
+      this.sidebar,
+      this.capturePage,
+      this.clipsPage,
+      this.clipLibrary,
+      this.settingsPage,
+      this.clipSettings
+    ];
+    for (const page of pages) {
       page.render(settings);
     }
   }
@@ -64,8 +75,7 @@ class AppWindowController implements AppWindowContext {
     this.content.scrollTop = 0;
     if (page === "clips") {
       void runWithErrorToast(this, this.clipsPage.loadSourceOptions());
-    } else if (page === "gallery") {
-      void this.galleryPage.refresh();
+      void this.clipLibrary.refresh();
     }
   }
 
@@ -111,7 +121,7 @@ class AppWindowController implements AppWindowContext {
       this.clipsPage.setStatus(status);
     });
     api.onClipsLibraryChanged((): void => {
-      void this.galleryPage.refresh();
+      void this.clipLibrary.refresh();
     });
     api.onAppNavigate((page): void => {
       this.showPage(page);
@@ -176,7 +186,8 @@ class AppWindowController implements AppWindowContext {
     this.sidebar.bind();
     this.capturePage.bind();
     this.clipsPage.bind();
-    this.galleryPage.bind();
+    this.clipLibrary.bind();
+    this.clipSettings.bind();
     this.settingsPage.bind();
     this.bindEvents();
     this.renderPages();
@@ -185,7 +196,6 @@ class AppWindowController implements AppWindowContext {
     const requestedPage = new URLSearchParams(location.search).get(pageQueryName);
     this.showPage(isAppPage(requestedPage) ? requestedPage : defaultPage);
     await api.appReadyToShow();
-    void this.galleryPage.refresh();
   }
 }
 

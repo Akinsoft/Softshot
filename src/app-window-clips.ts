@@ -5,9 +5,7 @@ import {
   runWithErrorToast,
   selectOption
 } from "./app-window-controls.js";
-import { ShortcutButton } from "./app-window-shortcut.js";
 import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
-import { recordingAudioBitrate } from "./audio-quality.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type {
   AppSettings,
@@ -17,51 +15,21 @@ import type {
   ClipsStatus,
   ClipWindowOption
 } from "./shared.js";
-import {
-  clipDurationLabel,
-  clipDurationOptionsSeconds,
-  clipQualities,
-  clipQualityDimensions,
-  videoFpsOptions
-} from "./shared.js";
+import { clipDurationLabel } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
-import { videoBitrate } from "./video-bitrate.js";
 
 const savedWindowValue = "saved";
 const windowOptionPrefix = "window:";
-const bitsPerByte = 8;
-const bytesPerMegabyte = 1_000_000;
-const megabytesPerGigabyte = 1000;
-const gigabyteDecimals = 1;
-const clipFpsOptions = [videoFpsOptions.standard, videoFpsOptions.high] as const;
 
 type ClipSourceKind = ClipSource["kind"];
 type WindowClipSource = Extract<ClipSource, { kind: "window" }>;
 
 export class ClipsPage implements AppWindowPage {
-  private readonly directoryChangeButton = getRequiredElement("clips-directory-change", HTMLButtonElement);
-
-  private readonly directoryOpenButton = getRequiredElement("clips-directory-open", HTMLButtonElement);
-
-  private readonly directoryPath = getRequiredElement("clips-directory-path", HTMLSpanElement);
-
-  private directorySetting: string | null = null;
-
-  private readonly displayRow = getRequiredElement("clips-display-row", HTMLLabelElement);
+  private readonly control = getRequiredElement("clips-control", HTMLElement);
 
   private readonly displaySelect = getRequiredElement("clips-display-select", HTMLSelectElement);
 
-  private readonly durationHelp = getRequiredElement("clips-duration-help", HTMLButtonElement);
-
-  private readonly durationSelect = getRequiredElement("clips-duration-select", HTMLSelectElement);
-
   private readonly enabledCheckbox = getRequiredElement("clips-enabled-checkbox", HTMLInputElement);
-
-  private readonly enabledLabel = getRequiredElement("clips-enabled-label", HTMLSpanElement);
-
-  private readonly fpsSelect = getRequiredElement("clips-fps-select", HTMLSelectElement);
-
-  private hasLoadedDirectory = false;
 
   private isLoadingSources = false;
 
@@ -69,15 +37,11 @@ export class ClipsPage implements AppWindowPage {
 
   private pendingSourceKind: ClipSourceKind | null = null;
 
-  private readonly qualitySelect = getRequiredElement("clips-quality-select", HTMLSelectElement);
-
   private readonly page = getRequiredElement("clips-page", HTMLElement);
 
   private readonly retryButton = getRequiredElement("clips-retry-button", HTMLButtonElement);
 
-  private readonly savedToastCheckbox = getRequiredElement("clips-saved-toast-checkbox", HTMLInputElement);
-
-  private readonly shortcutButton: ShortcutButton;
+  private readonly settingsButton = getRequiredElement("clips-settings-button", HTMLButtonElement);
 
   private readonly sourceDisplayButton = getRequiredElement("clips-source-display", HTMLButtonElement);
 
@@ -87,8 +51,6 @@ export class ClipsPage implements AppWindowPage {
 
   private status: ClipsStatus = { isShortcutAvailable: true, message: null, sourceName: null, state: "off" };
 
-  private readonly statusCard = getRequiredElement("clips-status-card", HTMLDivElement);
-
   private readonly statusDetail = getRequiredElement("clips-status-detail", HTMLSpanElement);
 
   private readonly statusHint = getRequiredElement("clips-status-hint", HTMLSpanElement);
@@ -97,18 +59,9 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly statusTitle = getRequiredElement("clips-status-title", HTMLSpanElement);
 
-  private readonly windowRow = getRequiredElement("clips-window-row", HTMLLabelElement);
-
   private readonly windowSelect = getRequiredElement("clips-window-select", HTMLSelectElement);
 
-  constructor(private readonly context: AppWindowContext) {
-    this.shortcutButton = new ShortcutButton(
-      getRequiredElement("clips-shortcut-button", HTMLButtonElement),
-      getRequiredElement("clips-shortcut-status", HTMLSpanElement),
-      "clips",
-      context
-    );
-  }
+  constructor(private readonly context: AppWindowContext) {}
 
   private async updateClips(update: Partial<ClipSettings>): Promise<void> {
     await this.context.updateSettings({ clips: update });
@@ -141,50 +94,16 @@ export class ClipsPage implements AppWindowPage {
     });
   }
 
-  private bindQualityEvents(): void {
-    this.durationSelect.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({
-        durationSeconds: optionFromValue(clipDurationOptionsSeconds, this.durationSelect.value)
-      }));
-    });
-    this.qualitySelect.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({ quality: optionFromValue(clipQualities, this.qualitySelect.value) }));
-    });
-    this.fpsSelect.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({ fps: optionFromValue(clipFpsOptions, this.fpsSelect.value) }));
-    });
-  }
-
   private bindActionEvents(): void {
-    const api = getSoftshotApi();
     this.enabledCheckbox.addEventListener("change", (): void => {
       this.runTask(this.updateClips({ enabled: this.enabledCheckbox.checked }));
     });
-    this.savedToastCheckbox.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({ savedToastEnabled: this.savedToastCheckbox.checked }));
-    });
-    this.directoryOpenButton.addEventListener("click", (): void => {
-      this.runTask(api.openClipsDirectory());
-    });
-    this.directoryChangeButton.addEventListener("click", (): void => {
-      this.runTask(this.chooseDirectory());
-    });
     this.retryButton.addEventListener("click", (): void => {
-      this.runTask(api.restartClips());
+      this.runTask(getSoftshotApi().restartClips());
     });
-  }
-
-  private async chooseDirectory(): Promise<void> {
-    const settings = await getSoftshotApi().chooseClipsDirectory();
-    if (settings) {
-      this.context.applySettings(settings);
-    }
-  }
-
-  private async refreshDirectory(): Promise<void> {
-    const directory = await getSoftshotApi().getClipsDirectory();
-    this.directoryPath.textContent = directory;
-    this.directoryPath.dataset.tooltip = directory;
+    this.settingsButton.addEventListener("click", (): void => {
+      this.context.navigate("settings");
+    });
   }
 
   private selectSourceKind(kind: ClipSourceKind): void {
@@ -227,8 +146,8 @@ export class ClipsPage implements AppWindowPage {
     const kind = this.pendingSourceKind ?? clips.source.kind;
     this.sourceDisplayButton.setAttribute("aria-checked", String(kind === "display"));
     this.sourceWindowButton.setAttribute("aria-checked", String(kind === "window"));
-    this.displayRow.hidden = kind !== "display";
-    this.windowRow.hidden = kind !== "window";
+    this.displaySelect.hidden = kind !== "display";
+    this.windowSelect.hidden = kind !== "window";
     replaceSelectOptions(this.displaySelect, this.displayOptions(clips.source));
     replaceSelectOptions(this.windowSelect, this.windowOptions(clips.source));
     this.windowSelect.disabled = this.sourceOptions === null;
@@ -272,29 +191,6 @@ export class ClipsPage implements AppWindowPage {
     return options;
   }
 
-  private renderQuality(clips: ClipSettings): void {
-    this.durationSelect.replaceChildren(...clipDurationOptionsSeconds.map((durationSeconds) =>
-      selectOption(clipDurationLabel(durationSeconds), String(durationSeconds), durationSeconds === clips.durationSeconds)
-    ));
-    this.qualitySelect.replaceChildren(...clipQualities.map((quality) =>
-      selectOption(quality, quality, quality === clips.quality)
-    ));
-    this.fpsSelect.replaceChildren(...clipFpsOptions.map((fps) =>
-      selectOption(`${String(fps)} FPS`, String(fps), fps === clips.fps)
-    ));
-    this.durationHelp.dataset.tooltip = memoryTooltip(clips);
-  }
-
-  private renderDirectory(clips: ClipSettings): void {
-    if (this.hasLoadedDirectory && clips.directory === this.directorySetting) {
-      return;
-    }
-
-    this.hasLoadedDirectory = true;
-    this.directorySetting = clips.directory;
-    this.runTask(this.refreshDirectory());
-  }
-
   private recordingIcon(): string | null {
     const { source } = this.context.settings().clips;
     if (this.status.state !== "recording" || source.kind !== "window" || !this.sourceOptions) {
@@ -312,7 +208,7 @@ export class ClipsPage implements AppWindowPage {
     const isRecording = status.state === "recording";
     const detail = statusDetail(status, clips, this.context.shortcutLabels());
     const icon = this.recordingIcon();
-    this.statusCard.dataset.state = status.state;
+    this.control.dataset.state = status.state;
     this.retryButton.hidden = status.state !== "error";
     this.statusIcon.hidden = icon === null;
     if (icon !== null) {
@@ -325,9 +221,7 @@ export class ClipsPage implements AppWindowPage {
   }
 
   bind(): void {
-    this.shortcutButton.bind();
     this.bindSourceEvents();
-    this.bindQualityEvents();
     this.bindActionEvents();
   }
 
@@ -350,12 +244,7 @@ export class ClipsPage implements AppWindowPage {
   render(settings: AppSettings): void {
     const { clips } = settings;
     this.enabledCheckbox.checked = clips.enabled;
-    this.enabledLabel.textContent = clips.enabled ? "On" : "Off";
     this.renderSource(clips);
-    this.renderQuality(clips);
-    this.shortcutButton.render(clips.shortcut);
-    this.savedToastCheckbox.checked = clips.savedToastEnabled;
-    this.renderDirectory(clips);
     this.renderStatus();
   }
 
@@ -415,7 +304,7 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings, shortcutLabels: 
     case "recording": {
       return status.isShortcutAvailable
         ? ["Press", shortcutLabels.keycaps(clips.shortcut), `to save the last ${durationLabel}.`]
-        : [`${shortcutLabels.text(clips.shortcut)} is used by another app. Pick a different shortcut below.`];
+        : [`${shortcutLabels.text(clips.shortcut)} is used by another app. Pick a different shortcut in Settings.`];
     }
 
     case "waiting": {
@@ -427,29 +316,13 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings, shortcutLabels: 
     case "error": {
       const message = document.createElement("span");
       message.textContent = status.message ?? "Something went wrong.";
-      return [message, "Try again, or change the source or quality."];
+      return [message, "Try again, or change the source or clip quality."];
     }
 
     default: {
       throw new Error(`Unexpected clips state: ${String(status.state)}`);
     }
   }
-}
-
-function memoryTooltip(clips: ClipSettings): string {
-  const dimensions = clipQualityDimensions[clips.quality];
-  const bitsPerSecond = videoBitrate(dimensions.width, dimensions.height, clips.fps) + recordingAudioBitrate;
-  const lines = clipDurationOptionsSeconds.map((durationSeconds) => {
-    const megabytes = bitsPerSecond * durationSeconds / bitsPerByte / bytesPerMegabyte;
-    return `${clipDurationLabel(durationSeconds)}: about ${memoryLabel(megabytes)}`;
-  });
-  return [`Memory used at ${clips.quality}, ${String(clips.fps)} FPS`, ...lines].join("\n");
-}
-
-function memoryLabel(megabytes: number): string {
-  return megabytes < megabytesPerGigabyte
-    ? `${String(Math.round(megabytes))} MB`
-    : `${(megabytes / megabytesPerGigabyte).toFixed(gigabyteDecimals)} GB`;
 }
 
 function placeholderOption(label: string): HTMLOptionElement {
@@ -497,13 +370,4 @@ function savedWindowIndex(windows: readonly ClipWindowOption[], savedWindow: Win
   return exactIndex === -1
     ? windows.findIndex((window) => window.processName === savedWindow.processName)
     : exactIndex;
-}
-
-function optionFromValue<TOption extends number | string>(options: readonly TOption[], value: string): TOption {
-  const index = options.findIndex((option) => String(option) === value);
-  if (index === -1) {
-    throw new Error(`Unknown option: ${value}`);
-  }
-
-  return options[index];
 }
