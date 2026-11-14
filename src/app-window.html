@@ -48,9 +48,15 @@
         </button>
       </div>
 
-      <div class="nav-divider" aria-hidden="true"></div>
-
-      <div class="nav-group">
+      <div class="nav-footer">
+        <button id="app-update-button" class="nav-item update-button" type="button" data-tooltip="Restart Softshot to install the update" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 4v11" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 20h14" />
+          </svg>
+          <span>Update</span>
+        </button>
         <button class="nav-item" type="button" data-page="settings">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M4 7h10" />
@@ -61,17 +67,6 @@
             <circle cx="8" cy="17" r="2" />
           </svg>
           <span>Settings</span>
-        </button>
-      </div>
-
-      <div class="nav-footer">
-        <button id="app-update-button" class="nav-item update-button" type="button" data-tooltip="Restart Softshot to install the update" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 4v11" />
-            <path d="m7 10 5 5 5-5" />
-            <path d="M5 20h14" />
-          </svg>
-          <span>Update</span>
         </button>
         <span id="app-version" class="app-version"></span>
       </div>
