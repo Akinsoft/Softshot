@@ -1,10 +1,12 @@
 import { BrowserWindow, desktopCapturer, type Display, screen } from "electron";
 
-import { windowProcessNames } from "./powershell";
+import { GameLibrary } from "./game-library";
+import { type WindowProcess, windowProcesses } from "./powershell";
 import type { ClipDisplayOption, ClipSource, ClipSourceOptions, ClipWindowOption } from "./shared";
 
 const sourceIdSeparator = ":";
 const desktopClipName = "Desktop";
+const gameSourceName = "a game";
 const sharedHostProcessNames: ReadonlySet<string> = new Set(["ApplicationFrameHost"]);
 const emptyThumbnailSize = { height: 0, width: 0 };
 
@@ -18,22 +20,41 @@ export interface ResolvedClipSource {
 type WindowClipSource = Extract<ClipSource, { kind: "window" }>;
 
 export class ClipSourceResolver {
-  private readonly processNamesBySourceId = new Map<string, string | null>();
+  private gameLibrary: GameLibrary | null = null;
 
-  private async loadProcessNames(windows: readonly Electron.DesktopCapturerSource[]): Promise<void> {
-    if (windows.every((window) => this.processNamesBySourceId.has(window.id))) {
+  private readonly processesBySourceId = new Map<string, WindowProcess | null>();
+
+  private async loadProcesses(windows: readonly Electron.DesktopCapturerSource[]): Promise<void> {
+    if (windows.every((window) => this.processesBySourceId.has(window.id))) {
       return;
     }
 
-    const processNames = await windowProcessNames();
-    this.processNamesBySourceId.clear();
+    const processes = await windowProcesses();
+    this.gameLibrary = null;
+    this.processesBySourceId.clear();
     for (const window of windows) {
-      const processName = processNames.get(windowHandle(window.id)) ?? null;
-      this.processNamesBySourceId.set(
+      const windowProcess = processes.get(windowHandle(window.id)) ?? null;
+      this.processesBySourceId.set(
         window.id,
-        processName === null || sharedHostProcessNames.has(processName) ? null : processName
+        windowProcess === null || sharedHostProcessNames.has(windowProcess.name) ? null : windowProcess
       );
     }
+  }
+
+  private processName(sourceId: string): string | null {
+    return this.processesBySourceId.get(sourceId)?.name ?? null;
+  }
+
+  private async resolveGame(): Promise<ResolvedClipSource | null> {
+    const windows = await capturableWindows(false);
+    await this.loadProcesses(windows);
+    const gameLibrary = this.gameLibrary ?? await GameLibrary.load();
+    this.gameLibrary = gameLibrary;
+    const game = windows.find((window) => {
+      const executablePath = this.processesBySourceId.get(window.id)?.executablePath ?? null;
+      return executablePath !== null && gameLibrary.isGame(executablePath);
+    });
+    return game ? windowClipSource(game) : null;
   }
 
   private async resolveWindow(saved: WindowClipSource): Promise<ResolvedClipSource | null> {
@@ -43,27 +64,31 @@ export class ClipSourceResolver {
       return match ? windowClipSource(match) : null;
     }
 
-    await this.loadProcessNames(windows);
-    const matchingWindows = windows.filter((window) => this.processNamesBySourceId.get(window.id) === saved.processName);
+    await this.loadProcesses(windows);
+    const matchingWindows = windows.filter((window) => this.processName(window.id) === saved.processName);
     const match = matchingWindows.find((window) => window.name === saved.title) ?? matchingWindows.at(0);
     return match ? windowClipSource(match) : null;
   }
 
   async listOptions(): Promise<ClipSourceOptions> {
     const windows = await capturableWindows(true);
-    await this.loadProcessNames(windows);
+    await this.loadProcesses(windows);
     return {
       displays: displayOptions(),
       windows: windows.map((window): ClipWindowOption => ({
         iconDataUrl: window.appIcon.isEmpty() ? null : window.appIcon.toDataURL(),
-        processName: this.processNamesBySourceId.get(window.id) ?? null,
+        processName: this.processName(window.id),
         title: window.name
       }))
     };
   }
 
   async resolve(source: ClipSource): Promise<ResolvedClipSource | null> {
-    return source.kind === "display" ? await resolveDisplay(source.displayId) : await this.resolveWindow(source);
+    if (source.kind === "display") {
+      return await resolveDisplay(source.displayId);
+    }
+
+    return source.kind === "game" ? await this.resolveGame() : await this.resolveWindow(source);
   }
 }
 
@@ -85,6 +110,10 @@ export async function primaryScreenSource(): Promise<Electron.DesktopCapturerSou
 export function clipSourceName(source: ClipSource): string {
   if (source.kind === "window") {
     return source.title;
+  }
+
+  if (source.kind === "game") {
+    return gameSourceName;
   }
 
   const displays = screen.getAllDisplays();

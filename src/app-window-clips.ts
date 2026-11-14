@@ -16,7 +16,7 @@ import type {
   ClipWindowOption,
   ClipWindowSelection
 } from "./shared.js";
-import { lastClipDurationLabel } from "./shared.js";
+import { isClipSourceKind, lastClipDurationLabel } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const savedWindowValue = "saved";
@@ -33,6 +33,8 @@ export class ClipsPage implements AppWindowPage {
   private readonly displaySelect = getRequiredElement("clips-display-select", HTMLSelectElement);
 
   private readonly enabledCheckbox = getRequiredElement("clips-enabled-checkbox", HTMLInputElement);
+
+  private readonly gameDetail = getRequiredElement("clips-game-detail", HTMLSpanElement);
 
   private isLoadingSources = false;
 
@@ -52,15 +54,13 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly shortcutHintBefore = getRequiredElement("clips-status-hint-before", HTMLSpanElement);
 
-  private readonly sourceDisplayButton = getRequiredElement("clips-source-display", HTMLButtonElement);
-
   private sourceOptions: ClipSourceOptions | null = null;
 
   private readonly sourcePanel = getRequiredElement("clips-control-source", HTMLDivElement);
 
-  private readonly sourceToggle = getRequiredElement("clips-source-toggle", HTMLButtonElement);
+  private readonly sourceKindSelect = getRequiredElement("clips-source-kind-select", HTMLSelectElement);
 
-  private readonly sourceWindowButton = getRequiredElement("clips-source-window", HTMLButtonElement);
+  private readonly sourceToggle = getRequiredElement("clips-source-toggle", HTMLButtonElement);
 
   private status: ClipsStatus = { isShortcutAvailable: true, message: null, sourceName: null, state: "off" };
 
@@ -95,11 +95,8 @@ export class ClipsPage implements AppWindowPage {
     this.sourceToggle.addEventListener("click", (): void => {
       this.setSourcePanelExpanded(this.sourcePanel.hidden);
     });
-    this.sourceDisplayButton.addEventListener("click", (): void => {
-      this.selectSourceKind("display");
-    });
-    this.sourceWindowButton.addEventListener("click", (): void => {
-      this.selectSourceKind("window");
+    this.sourceKindSelect.addEventListener("change", (): void => {
+      this.selectSourceKind(clipSourceKind(this.sourceKindSelect.value));
     });
     this.displaySelect.addEventListener("change", (): void => {
       this.runTask(this.updateClips({ displayId: Number(this.displaySelect.value), sourceKind: "display" }));
@@ -142,7 +139,7 @@ export class ClipsPage implements AppWindowPage {
       return;
     }
 
-    if (kind === "display" || settings.clips.window !== null) {
+    if (kind !== "window" || settings.clips.window !== null) {
       this.runTask(this.updateClips({ sourceKind: kind }));
       return;
     }
@@ -173,10 +170,10 @@ export class ClipsPage implements AppWindowPage {
 
   private renderSource(clips: ClipSettings): void {
     const kind = this.pendingSourceKind ?? clips.sourceKind;
-    this.sourceDisplayButton.setAttribute("aria-checked", String(kind === "display"));
-    this.sourceWindowButton.setAttribute("aria-checked", String(kind === "window"));
+    this.sourceKindSelect.value = kind;
     this.displaySelect.hidden = kind !== "display";
     this.windowSelect.hidden = kind !== "window";
+    this.gameDetail.hidden = kind !== "game";
     replaceSelectOptions(this.displaySelect, this.displayOptions(clips.displayId));
     replaceSelectOptions(this.windowSelect, this.windowOptions(clips.window));
     this.windowSelect.disabled = this.sourceOptions === null;
@@ -219,12 +216,16 @@ export class ClipsPage implements AppWindowPage {
 
   private recordingIcon(): string | null {
     const { sourceKind, window } = this.context.settings().clips;
-    if (this.status.state !== "recording" || sourceKind !== "window" || window === null || !this.sourceOptions) {
+    if (this.status.state !== "recording" || !this.sourceOptions) {
       return null;
     }
 
     const { windows } = this.sourceOptions;
-    const index = savedWindowIndex(windows, window);
+    if (sourceKind === "game") {
+      return windows.find((candidate) => candidate.title === this.status.sourceName)?.iconDataUrl ?? null;
+    }
+
+    const index = sourceKind === "window" && window !== null ? savedWindowIndex(windows, window) : -1;
     return index === -1 ? null : windows[index].iconDataUrl;
   }
 
@@ -283,7 +284,7 @@ export class ClipsPage implements AppWindowPage {
     this.status = status;
     this.renderStatus();
     if (!wasRecording && status.state === "recording" && this.sourceOptions !== null
-      && this.context.settings().clips.sourceKind === "window" && this.recordingIcon() === null) {
+      && this.context.settings().clips.sourceKind !== "display" && this.recordingIcon() === null) {
       this.runTask(this.loadSourceOptions());
     }
   }
@@ -336,9 +337,7 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | st
     }
 
     case "waiting": {
-      return [clips.sourceKind === "window"
-        ? "Recording starts as soon as the app opens."
-        : "Recording starts when the monitor is connected."];
+      return [waitingDetail(clips.sourceKind)];
     }
 
     case "error": {
@@ -351,6 +350,34 @@ function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | st
       throw new Error(`Unexpected clips state: ${String(status.state)}`);
     }
   }
+}
+
+function waitingDetail(sourceKind: ClipSourceKind): string {
+  switch (sourceKind) {
+    case "display": {
+      return "Recording starts when the monitor is connected.";
+    }
+
+    case "game": {
+      return "Recording starts as soon as you open a game.";
+    }
+
+    case "window": {
+      return "Recording starts as soon as the app opens.";
+    }
+
+    default: {
+      throw new Error(`Unexpected clip source: ${String(sourceKind)}`);
+    }
+  }
+}
+
+function clipSourceKind(value: string): ClipSourceKind {
+  if (isClipSourceKind(value)) {
+    return value;
+  }
+
+  throw new Error(`Unexpected clip source: ${value}`);
 }
 
 function placeholderOption(label: string): HTMLOptionElement {

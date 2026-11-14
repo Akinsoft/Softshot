@@ -19,9 +19,44 @@ $files = New-Object System.Collections.Specialized.StringCollection
 [System.Windows.Forms.Clipboard]::SetFileDropList($files)
 `;
 
+const utf8OutputCommand = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8";
+
+const recognizedGameScript = String.raw`
+${utf8OutputCommand}
+Get-ChildItem -Path "Registry::HKEY_CURRENT_USER\System\GameConfigStore\Children" -ErrorAction SilentlyContinue | ForEach-Object {
+  $_.GetValue("MatchedExeFullPath")
+} | Where-Object { $_ }
+`;
+
 const windowProcessScript = `
+${utf8OutputCommand}
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class SoftshotProcessPath {
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder path, ref int size);
+
+  public static string Of(int processId) {
+    IntPtr process = OpenProcess(0x1000, false, processId);
+    if (process == IntPtr.Zero) {
+      return "";
+    }
+    try {
+      StringBuilder path = new StringBuilder(32768);
+      int size = path.Capacity;
+      return QueryFullProcessImageName(process, 0, path, ref size) ? path.ToString() : "";
+    } finally {
+      CloseHandle(process);
+    }
+  }
+}
+"@
 Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
-  "{0}${windowProcessSeparator}{1}" -f $_.MainWindowHandle.ToInt64(), $_.ProcessName
+  "{0}${windowProcessSeparator}{1}${windowProcessSeparator}{2}" -f $_.MainWindowHandle.ToInt64(), $_.ProcessName, [SoftshotProcessPath]::Of($_.Id)
 }
 `;
 
@@ -70,6 +105,11 @@ export interface MonitorGeometry {
   top: number;
 }
 
+export interface WindowProcess {
+  executablePath: string | null;
+  name: string;
+}
+
 interface WindowGeometry {
   height: number;
   isMinimized: boolean;
@@ -114,17 +154,22 @@ export async function writeFileDropListToClipboard(filePath: string): Promise<vo
   );
 }
 
-export async function windowProcessNames(): Promise<Map<string, string>> {
-  const output = await runPowershellScript(windowProcessScript, {}, "Could not read the list of open applications.");
-  const processNames = new Map<string, string>();
+export async function windowsRecognizedGamePaths(): Promise<string[]> {
+  const output = await runPowershellScript(recognizedGameScript, {}, "Could not read the games Windows recognizes.");
+  return output.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+export async function windowProcesses(): Promise<Map<string, WindowProcess>> {
+  const output = await runPowershellScript(windowProcessScript, {}, "Could not read the list of open apps.");
+  const processes = new Map<string, WindowProcess>();
   for (const line of output.split(/\r?\n/u)) {
-    const [windowHandle, processName] = line.trim().split(windowProcessSeparator);
-    if (windowHandle && processName) {
-      processNames.set(windowHandle, processName);
+    const [windowHandle, name, executablePath] = line.trim().split(windowProcessSeparator);
+    if (windowHandle && name) {
+      processes.set(windowHandle, { executablePath: executablePath || null, name });
     }
   }
 
-  return processNames;
+  return processes;
 }
 
 async function runPowershellScript(

@@ -68,7 +68,9 @@ const appPages = ["capture", "clips", "settings"] as const;
 export type AppPage = (typeof appPages)[number];
 export type ClipsState = "error" | "off" | "recording" | "starting" | "waiting";
 
-export type ClipSourceKind = "display" | "window";
+const clipSourceKinds = ["display", "game", "window"] as const;
+const clipSourceKindSet: ReadonlySet<unknown> = new Set(clipSourceKinds);
+export type ClipSourceKind = (typeof clipSourceKinds)[number];
 
 export interface ClipWindowSelection {
   processName: string | null;
@@ -77,6 +79,7 @@ export interface ClipWindowSelection {
 
 export type ClipSource =
   | { displayId: number | null; kind: "display" }
+  | { kind: "game" }
   | (ClipWindowSelection & { kind: "window" });
 
 export interface ClipSettings {
@@ -379,8 +382,12 @@ export function activeClipSource(clips: ClipSettings): ClipSource {
     return { displayId: clips.displayId, kind: "display" };
   }
 
+  if (clips.sourceKind === "game") {
+    return { kind: "game" };
+  }
+
   if (clips.window === null) {
-    throw new Error("Clips are set to record an application, but no application is chosen.");
+    throw new Error("Clips are set to record an app, but no app is chosen.");
   }
 
   return { ...clips.window, kind: "window" };
@@ -390,6 +397,10 @@ const appPageSet: ReadonlySet<unknown> = new Set(appPages);
 
 export function isAppPage(value: unknown): value is AppPage {
   return appPageSet.has(value);
+}
+
+export function isClipSourceKind(value: unknown): value is ClipSourceKind {
+  return clipSourceKindSet.has(value);
 }
 
 export function isAudioSourceKind(value: unknown): value is AudioSourceKind {

@@ -116,16 +116,41 @@
             </button>
           </div>
           <div id="clips-control-source" class="clips-control-source" hidden>
-            <div class="segmented" role="radiogroup" aria-label="Clip source">
-              <button id="clips-source-display" class="segmented-option" type="button" role="radio" data-source-kind="display">Monitor</button>
-              <button id="clips-source-window" class="segmented-option" type="button" role="radio" data-source-kind="window">Application</button>
-            </div>
+            <select id="clips-source-kind-select" class="softshot-select source-select source-kind-select" aria-label="Capture method">
+              <button type="button"><selectedcontent></selectedcontent></button>
+              <option value="display">
+                <svg class="option-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="12" rx="2" />
+                  <path d="M8 20h8" />
+                  <path d="M12 16v4" />
+                </svg>
+                <span class="option-label">Monitor</span>
+              </option>
+              <option value="window">
+                <svg class="option-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path d="M3 9h18" />
+                </svg>
+                <span class="option-label">App</span>
+              </option>
+              <option value="game">
+                <svg class="option-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 7h10a5 5 0 0 1 4.9 6l-.6 3a3 3 0 0 1-5.1 1.5L14.5 16h-5l-1.7 1.5a3 3 0 0 1-5.1-1.5l-.6-3A5 5 0 0 1 7 7Z" />
+                  <path d="M8 10v4" />
+                  <path d="M6 12h4" />
+                  <path d="M15.5 11h.01" />
+                  <path d="M17.5 13h.01" />
+                </svg>
+                <span class="option-label">Games</span>
+              </option>
+            </select>
             <select id="clips-display-select" class="softshot-select source-select" aria-label="Monitor">
               <button type="button"><selectedcontent></selectedcontent></button>
             </select>
-            <select id="clips-window-select" class="softshot-select source-select" aria-label="Application" hidden>
+            <select id="clips-window-select" class="softshot-select source-select" aria-label="App" hidden>
               <button type="button"><selectedcontent></selectedcontent></button>
             </select>
+            <span id="clips-game-detail" class="source-detail" hidden>Records the game you're playing as soon as it opens.</span>
           </div>
         </section>
 

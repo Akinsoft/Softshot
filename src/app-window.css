@@ -228,6 +228,27 @@ svg circle {
   display: none;
 }
 
+.source-kind-select {
+  flex: 0 0 auto;
+  min-width: 128px;
+}
+
+.source-kind-select svg.option-icon {
+  color: var(--ui-text-muted);
+}
+
+.source-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ui-text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.source-detail[hidden] {
+  display: none;
+}
+
 .source-select::picker(select) {
   max-width: 440px;
 }
@@ -512,44 +533,6 @@ svg circle {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-}
-
-.segmented {
-  display: inline-flex;
-  flex: 0 0 auto;
-  padding: 2px;
-  border: 1px solid var(--ui-field-border);
-  border-radius: var(--ui-radius);
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.segmented-option {
-  height: 28px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: var(--ui-radius-small);
-  background: transparent;
-  color: var(--ui-text-muted);
-  cursor: pointer;
-  font: 600 12px/1 var(--ui-font);
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.segmented-option:hover {
-  color: var(--ui-text);
-}
-
-.segmented-option:focus-visible {
-  outline: 2px solid var(--ui-focus-ring);
-  outline-offset: 1px;
-}
-
-.segmented-option[aria-checked="true"] {
-  background: var(--ui-surface-raised);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  color: var(--ui-text);
 }
 
 .icon-button {

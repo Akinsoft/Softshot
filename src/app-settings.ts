@@ -12,7 +12,7 @@ import type {
   ClipWindowSelection,
   VideoFps
 } from "./shared";
-import { clipDurationOptionsSeconds, clipQualities, videoFpsOptions } from "./shared";
+import { clipDurationOptionsSeconds, clipQualities, isClipSourceKind, videoFpsOptions } from "./shared";
 import {
   isAcceleratorShortcut,
   isModifierKey,
@@ -237,7 +237,7 @@ function clipSettingsFromObject(value: Record<string, unknown>, base: ClipSettin
     window: "window" in value ? validateClipWindow(value.window) : base.window
   };
   if (settings.sourceKind === "window" && settings.window === null) {
-    throw new Error("Choose an application for Clips to record.");
+    throw new Error("Choose an app for Clips to record.");
   }
 
   return settings;
@@ -276,11 +276,11 @@ function validateClipShortcut(value: unknown): string {
 }
 
 function validateClipSourceKind(value: unknown): ClipSourceKind {
-  if (value === "display" || value === "window") {
+  if (isClipSourceKind(value)) {
     return value;
   }
 
-  throw new TypeError("Clip source must be a monitor or an application.");
+  throw new TypeError("Clip source must be a monitor, an app or games.");
 }
 
 function validateClipDisplayId(value: unknown): number | null {
@@ -297,15 +297,15 @@ function validateClipWindow(value: unknown): ClipWindowSelection | null {
   }
 
   if (!isJsonObject(value)) {
-    throw new TypeError("Clip application must be an object or null.");
+    throw new TypeError("Clip app must be an object or null.");
   }
 
   if (typeof value.title !== "string" || value.title.length === 0 || value.title.length > maxWindowTitleLength) {
-    throw new TypeError("Clip application title must be a non-empty string.");
+    throw new TypeError("Clip app title must be a non-empty string.");
   }
 
   if (value.processName !== null && (typeof value.processName !== "string" || value.processName.length === 0)) {
-    throw new TypeError("Clip application process name must be a non-empty string or null.");
+    throw new TypeError("Clip app process name must be a non-empty string or null.");
   }
 
   return { processName: value.processName, title: value.title };
