@@ -657,7 +657,6 @@ class SoftshotApp {
 
   private createClipsService(): ClipsService {
     return new ClipsService({
-      clipSettings: () => this.currentSettings().clips,
       isAppWindowSender: (sender) => this.isAppWindowWebContents(sender),
       libraryChanged: (): void => {
         this.sendToAppWindow(clipsLibraryChangedEventChannel);
@@ -674,6 +673,7 @@ class SoftshotApp {
           this.reportBackgroundError("Could not clean up unfinished clip audio.", error);
         });
       },
+      settings: () => this.currentSettings(),
       showToast: (toast): void => {
         this.toasts.show(toast);
       },
@@ -1857,7 +1857,7 @@ class SoftshotApp {
         this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
       }
 
-      this.clips.applySettings(previousSettings.clips, nextSettings.clips, requested.clipShortcut);
+      this.clips.applySettings(previousSettings, nextSettings, requested.clipShortcut);
       if (nextSettings.launchAtStartup !== previousSettings.launchAtStartup) {
         await this.applyLaunchAtStartup(nextSettings.launchAtStartup);
       }
@@ -1895,8 +1895,8 @@ class SoftshotApp {
 
     try {
       this.clips.applySettings(
-        failedSettings.clips,
-        previousSettings.clips,
+        failedSettings,
+        previousSettings,
         failedSettings.clips.shortcut !== previousSettings.clips.shortcut
           || failedSettings.clips.enabled !== previousSettings.clips.enabled
       );

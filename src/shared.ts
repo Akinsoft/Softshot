@@ -77,12 +77,10 @@ export interface ClipSettings {
   durationSeconds: ClipDurationSeconds;
   enabled: boolean;
   fps: VideoFps;
-  microphoneDeviceId: string | null;
   quality: ClipQuality;
   savedToastEnabled: boolean;
   shortcut: string;
   source: ClipSource;
-  systemAudioEnabled: boolean;
 }
 
 export interface ClipsStatus {

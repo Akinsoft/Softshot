@@ -1,14 +1,12 @@
 import {
   type AppWindowContext,
   type AppWindowPage,
-  microphoneOptions,
   replaceSelectOptions,
   runWithErrorToast,
   selectOption
 } from "./app-window-controls.js";
 import { ShortcutButton } from "./app-window-shortcut.js";
 import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
-import { normalizeMicrophoneDeviceId } from "./audio-devices.js";
 import { recordingAudioBitrate } from "./audio-quality.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type {
@@ -69,8 +67,6 @@ export class ClipsPage implements AppWindowPage {
 
   private isSourceListStale = false;
 
-  private readonly microphoneSelect = getRequiredElement("clips-microphone-select", HTMLSelectElement);
-
   private pendingSourceKind: ClipSourceKind | null = null;
 
   private readonly qualitySelect = getRequiredElement("clips-quality-select", HTMLSelectElement);
@@ -100,8 +96,6 @@ export class ClipsPage implements AppWindowPage {
   private readonly statusIcon = getRequiredElement("clips-status-icon", HTMLImageElement);
 
   private readonly statusTitle = getRequiredElement("clips-status-title", HTMLSpanElement);
-
-  private readonly systemAudioCheckbox = getRequiredElement("clips-system-audio-checkbox", HTMLInputElement);
 
   private readonly windowRow = getRequiredElement("clips-window-row", HTMLLabelElement);
 
@@ -168,14 +162,6 @@ export class ClipsPage implements AppWindowPage {
     });
     this.savedToastCheckbox.addEventListener("change", (): void => {
       this.runTask(this.updateClips({ savedToastEnabled: this.savedToastCheckbox.checked }));
-    });
-    this.systemAudioCheckbox.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({ systemAudioEnabled: this.systemAudioCheckbox.checked }));
-    });
-    this.microphoneSelect.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({
-        microphoneDeviceId: normalizeMicrophoneDeviceId(this.microphoneSelect.value)
-      }));
     });
     this.directoryOpenButton.addEventListener("click", (): void => {
       this.runTask(api.openClipsDirectory());
@@ -369,10 +355,6 @@ export class ClipsPage implements AppWindowPage {
     this.renderQuality(clips);
     this.shortcutButton.render(clips.shortcut);
     this.savedToastCheckbox.checked = clips.savedToastEnabled;
-    this.systemAudioCheckbox.checked = clips.systemAudioEnabled;
-    this.microphoneSelect.replaceChildren(
-      ...microphoneOptions(this.context.microphoneDevices(), clips.microphoneDeviceId)
-    );
     this.renderDirectory(clips);
     this.renderStatus();
   }

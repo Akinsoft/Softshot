@@ -31,6 +31,7 @@ export interface ClipCaptureSessionOptions {
   encoder: ClipVideoEncoder;
   ffmpegPath: string;
   height: number;
+  microphoneDeviceId: string | null;
   preloadScriptPath: string;
   settings: ClipSettings;
   source: ResolvedClipSource;
@@ -197,7 +198,7 @@ export class ClipCaptureSession {
   recorderConfig(): ClipRecorderConfig {
     return {
       durationSeconds: this.options.settings.durationSeconds,
-      microphoneDeviceId: this.options.settings.microphoneDeviceId,
+      microphoneDeviceId: this.options.microphoneDeviceId,
       systemAudioEnabled: this.options.audioCaptureSource !== null
     };
   }
@@ -251,7 +252,7 @@ export class ClipCaptureSession {
   }
 
   hasAudio(): boolean {
-    return this.options.audioCaptureSource !== null || this.options.settings.microphoneDeviceId !== null;
+    return this.options.audioCaptureSource !== null || this.options.microphoneDeviceId !== null;
   }
 
   stop(): void {

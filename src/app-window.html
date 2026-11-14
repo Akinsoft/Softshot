@@ -88,25 +88,6 @@
             </div>
           </div>
         </section>
-
-        <section class="settings-section" aria-labelledby="capture-audio-heading">
-          <h2 id="capture-audio-heading" class="settings-section-title">Recording audio</h2>
-          <div class="settings-card">
-            <label class="settings-row" for="capture-microphone-select">
-              <span class="settings-label">Microphone</span>
-              <select id="capture-microphone-select" class="softshot-select settings-select"></select>
-            </label>
-            <label class="settings-row" for="capture-system-audio-checkbox">
-              <span class="settings-label">Desktop audio</span>
-              <span class="softshot-toggle">
-                <input id="capture-system-audio-checkbox" type="checkbox" />
-                <span class="softshot-toggle-track" aria-hidden="true">
-                  <span class="softshot-toggle-thumb"></span>
-                </span>
-              </span>
-            </label>
-          </div>
-        </section>
       </section>
 
       <section id="clips-page" class="app-page" data-page="clips" aria-labelledby="clips-heading" hidden>
@@ -205,28 +186,6 @@
           </div>
         </section>
 
-        <section class="settings-section" aria-labelledby="clips-audio-heading">
-          <h2 id="clips-audio-heading" class="settings-section-title">Audio</h2>
-          <div class="settings-card">
-            <label class="settings-row" for="clips-system-audio-checkbox">
-              <span class="settings-label">Desktop audio</span>
-              <span class="softshot-toggle">
-                <input id="clips-system-audio-checkbox" type="checkbox" />
-                <span class="softshot-toggle-track" aria-hidden="true">
-                  <span class="softshot-toggle-thumb"></span>
-                </span>
-              </span>
-            </label>
-            <div class="settings-row">
-              <span class="settings-label-group">
-                <label class="settings-label" for="clips-microphone-select">Microphone</label>
-                <button class="help-button" type="button" data-tooltip="The microphone stays in use the whole time Clips is on" aria-label="About the microphone">?</button>
-              </span>
-              <select id="clips-microphone-select" class="softshot-select settings-select"></select>
-            </div>
-          </div>
-        </section>
-
         <section class="settings-section" aria-labelledby="clips-storage-heading">
           <h2 id="clips-storage-heading" class="settings-section-title">Storage</h2>
           <div class="settings-card">
@@ -286,6 +245,31 @@
                 </span>
               </span>
             </label>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="settings-audio-heading">
+          <h2 id="settings-audio-heading" class="settings-section-title">Audio</h2>
+          <div class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label-group">
+                <label class="settings-label" for="microphone-select">Microphone</label>
+                <button class="help-button" type="button" data-tooltip="Used by Quick Capture recordings and Clips. While Clips is on, the microphone stays in use the whole time." aria-label="About the microphone">?</button>
+              </span>
+              <select id="microphone-select" class="softshot-select settings-select"></select>
+            </div>
+            <div class="settings-row">
+              <span class="settings-label-group">
+                <label class="settings-label" for="system-audio-checkbox">Desktop audio</label>
+                <button class="help-button" type="button" data-tooltip="Records the sound your PC plays in Quick Capture recordings and Clips." aria-label="About desktop audio">?</button>
+              </span>
+              <span class="softshot-toggle">
+                <input id="system-audio-checkbox" type="checkbox" />
+                <span class="softshot-toggle-track" aria-hidden="true">
+                  <span class="softshot-toggle-thumb"></span>
+                </span>
+              </span>
+            </div>
           </div>
         </section>
       </section>

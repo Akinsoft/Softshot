@@ -19,6 +19,7 @@ import { type ClipAudioTrackFile, ClipsLibrary } from "./clips-library";
 import { type GlobalShortcuts, shortcutAccelerator } from "./global-shortcuts";
 import { captureGeometry, type MonitorGeometry, writeFileDropListToClipboard } from "./powershell";
 import type {
+  AppSettings,
   ClipEntry,
   ClipRecorderConfig,
   ClipSettings,
@@ -50,13 +51,13 @@ const invalidFileNameCharacters = /[<>:"/\\|?*\p{Cc}]+/gu;
 const repeatedSpaces = /\s+/gu;
 
 interface ClipsServiceHost {
-  clipSettings(): ClipSettings;
   isAppWindowSender(sender: Electron.WebContents): boolean;
   libraryChanged(): void;
   openGallery(): void;
   openVideoFile(filePath: string): Promise<void>;
   preloadScriptPath(): string;
   recorderClosed(webContentsId: number): void;
+  settings(): AppSettings;
   showToast(toast: ToastOptions): void;
   statusChanged(): void;
   takeClipRecording(recordingId: string, ownerWebContentsId: number): Promise<string>;
@@ -184,8 +185,9 @@ export class ClipsService {
 
   private async startCaptureWhenAvailable(): Promise<void> {
     const { generation } = this;
-    const settings = this.host.clipSettings();
-    if (!settings.enabled) {
+    const settings = this.host.settings();
+    const { clips } = settings;
+    if (!clips.enabled) {
       this.setStatus("off");
       return;
     }
@@ -195,14 +197,14 @@ export class ClipsService {
     }
 
     try {
-      const resolvedSource = await this.sources.resolve(settings.source);
+      const resolvedSource = await this.sources.resolve(clips.source);
       const options = resolvedSource ? await this.sessionOptions(resolvedSource, settings) : null;
       if (generation !== this.generation || this.hasSession()) {
         return;
       }
 
       if (!resolvedSource || !options) {
-        this.setStatus("waiting", clipSourceName(settings.source));
+        this.setStatus("waiting", clipSourceName(clips.source));
         this.schedulePoll();
         return;
       }
@@ -210,7 +212,7 @@ export class ClipsService {
       this.openSession(options);
     } catch (error) {
       if (generation === this.generation) {
-        this.failCapture(clipSourceName(settings.source), errorMessage(error));
+        this.failCapture(clipSourceName(clips.source), errorMessage(error));
       }
     }
   }
@@ -253,14 +255,15 @@ export class ClipsService {
 
   private async sessionOptions(
     resolvedSource: ResolvedClipSource,
-    settings: ClipSettings
+    settings: AppSettings
   ): Promise<ClipCaptureSessionOptions | null> {
+    const { clips } = settings;
     const ffmpegPath = await this.ffmpegPath();
     this.encoder ??= await findClipVideoEncoder(ffmpegPath);
     const { display } = resolvedSource;
     const handle = display ? null : windowHandle(resolvedSource.source.id);
     const geometry = await captureGeometry(handle);
-    const qualityBox = clipQualityDimensions[settings.quality];
+    const qualityBox = clipQualityDimensions[clips.quality];
     let target: ClipCaptureTarget;
     let size: VideoSize;
     if (display) {
@@ -281,12 +284,13 @@ export class ClipsService {
 
     return {
       audioCaptureSource: settings.systemAudioEnabled ? await primaryScreenSource() : null,
-      bitrate: videoBitrate(size.width, size.height, settings.fps),
+      bitrate: videoBitrate(size.width, size.height, clips.fps),
       encoder: this.encoder,
       ffmpegPath,
       height: size.height,
+      microphoneDeviceId: settings.microphoneDeviceId,
       preloadScriptPath: this.host.preloadScriptPath(),
-      settings,
+      settings: clips,
       source: resolvedSource,
       target,
       width: size.width
@@ -351,7 +355,7 @@ export class ClipsService {
     const directory = this.clipsDirectory();
     await mkdir(directory, { recursive: true });
     const filePath = await availableClipFilePath(directory, clipName, createdAt);
-    const { durationSeconds } = this.host.clipSettings();
+    const { durationSeconds } = this.host.settings().clips;
     const clipId = randomUUID();
     const audioTrackFiles = this.library.audioTrackFiles(clipId);
     let savedDurationSeconds: number;
@@ -384,7 +388,7 @@ export class ClipsService {
     }
 
     this.host.libraryChanged();
-    if (!this.host.clipSettings().savedToastEnabled) {
+    if (!this.host.settings().clips.savedToastEnabled) {
       return;
     }
 
@@ -518,11 +522,11 @@ export class ClipsService {
     });
   }
 
-  applySettings(previous: ClipSettings, next: ClipSettings, isShortcutRequired: boolean): void {
-    const isRegistered = this.syncShortcut(next);
+  applySettings(previous: AppSettings, next: AppSettings, isShortcutRequired: boolean): void {
+    const isRegistered = this.syncShortcut(next.clips);
     this.refreshShortcutStatus();
     if (!isRegistered && isShortcutRequired) {
-      throw new Error(`Could not register ${next.shortcut}. Another app may be using it.`);
+      throw new Error(`Could not register ${next.clips.shortcut}. Another app may be using it.`);
     }
 
     if (haveCaptureSettingsChanged(previous, next)) {
@@ -535,7 +539,7 @@ export class ClipsService {
   }
 
   clipsDirectory(): string {
-    return this.host.clipSettings().directory ?? path.join(app.getPath("videos"), appName, clipsFolderName);
+    return this.host.settings().clips.directory ?? path.join(app.getPath("videos"), appName, clipsFolderName);
   }
 
   currentStatus(): ClipsStatus {
@@ -581,14 +585,14 @@ export class ClipsService {
 
   setShortcutSuspended(isSuspended: boolean): void {
     this.isShortcutSuspended = isSuspended;
-    this.syncShortcut(this.host.clipSettings());
+    this.syncShortcut(this.host.settings().clips);
     this.refreshShortcutStatus();
   }
 
   start(): void {
     this.registerRecorderIpcHandlers();
     this.registerAppIpcHandlers();
-    this.syncShortcut(this.host.clipSettings());
+    this.syncShortcut(this.host.settings().clips);
     this.restartCapture();
   }
 
@@ -599,14 +603,14 @@ export class ClipsService {
   }
 }
 
-function haveCaptureSettingsChanged(previous: ClipSettings, next: ClipSettings): boolean {
-  return previous.enabled !== next.enabled
-    || previous.durationSeconds !== next.durationSeconds
-    || previous.fps !== next.fps
+function haveCaptureSettingsChanged(previous: AppSettings, next: AppSettings): boolean {
+  return previous.clips.enabled !== next.clips.enabled
+    || previous.clips.durationSeconds !== next.clips.durationSeconds
+    || previous.clips.fps !== next.clips.fps
+    || previous.clips.quality !== next.clips.quality
+    || JSON.stringify(previous.clips.source) !== JSON.stringify(next.clips.source)
     || previous.microphoneDeviceId !== next.microphoneDeviceId
-    || previous.quality !== next.quality
-    || previous.systemAudioEnabled !== next.systemAudioEnabled
-    || JSON.stringify(previous.source) !== JSON.stringify(next.source);
+    || previous.systemAudioEnabled !== next.systemAudioEnabled;
 }
 
 function fitWithin(size: VideoSize, box: VideoSize): VideoSize {
