@@ -135,6 +135,9 @@ const outputFileFilterNames: Record<OutputFileExtension, string> = {
 };
 const missingEditorRecordingDataMessage = "Missing editor recording data.";
 const mediaPermissionName = "media";
+const defaultSystemAudioLoopbackDevice = "loopback";
+const fallbackSystemAudioLoopbackDevice = "loopbackWithoutChrome";
+type SystemAudioLoopbackDevice = typeof defaultSystemAudioLoopbackDevice | typeof fallbackSystemAudioLoopbackDevice;
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
@@ -202,6 +205,8 @@ class SoftshotApp {
   private isShortcutRecordingSaving = false;
 
   private appWindow: BrowserWindow | null = null;
+
+  private systemAudioLoopbackDevice: SystemAudioLoopbackDevice = defaultSystemAudioLoopbackDevice;
 
   private isUpdateReady = false;
 
@@ -819,6 +824,20 @@ class SoftshotApp {
     return captures.flat();
   }
 
+  private useSystemAudioFallback(event: Electron.IpcMainInvokeEvent): boolean {
+    if (!this.isManagedMediaWebContents(event.sender)) {
+      throw new Error("Only capture windows can change how desktop audio is captured.");
+    }
+
+    if (this.systemAudioLoopbackDevice === fallbackSystemAudioLoopbackDevice) {
+      return false;
+    }
+
+    this.systemAudioLoopbackDevice = fallbackSystemAudioLoopbackDevice;
+    this.debugLog("desktop audio switched to process loopback");
+    return true;
+  }
+
   private selectCaptureDisplay(event: Electron.IpcMainInvokeEvent, displayId: unknown): void {
     this.getSenderOverlay(event);
     if (typeof displayId !== "number"
@@ -868,7 +887,7 @@ class SoftshotApp {
       const source = await this.displayMediaSource(this.displayMediaRequestWebContentsId(request));
       const streams: Electron.Streams = { video: source };
       if (request.audioRequested) {
-        streams.audio = "loopback";
+        streams.audio = this.systemAudioLoopbackDevice as Electron.Streams["audio"];
       }
 
       callback(streams);
@@ -2389,6 +2408,8 @@ class SoftshotApp {
     ipcMain.handle("overlay:select-capture-display", (event, displayId: unknown): void => {
       this.selectCaptureDisplay(event, displayId);
     });
+
+    ipcMain.handle("capture:use-system-audio-fallback", (event): boolean => this.useSystemAudioFallback(event));
 
     ipcMain.handle("overlay:set-live-capture", (event, isLive: boolean): void => {
       this.setLiveCaptureState(event, isLive);

@@ -101,6 +101,7 @@ const api: SoftshotApi = {
   copyPreparedEditorVideo: async (filePath: string) => ipcRenderer.invoke("editor:copy-prepared-video", filePath) as Promise<void>,
   closeEditor: async () => ipcRenderer.invoke("editor:close") as Promise<void>,
   readyToShow: async () => ipcRenderer.invoke("overlay:ready-to-show") as Promise<void>,
+  useSystemAudioFallback: async () => ipcRenderer.invoke("capture:use-system-audio-fallback") as Promise<boolean>,
   selectCaptureDisplay: async (displayId: number) =>
     ipcRenderer.invoke("overlay:select-capture-display", displayId) as Promise<void>,
   setLiveCapture: async (isLive: boolean) => ipcRenderer.invoke("overlay:set-live-capture", isLive) as Promise<void>,

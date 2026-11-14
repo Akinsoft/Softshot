@@ -290,6 +290,7 @@ export interface SoftshotApi {
   closeEditor(): Promise<void>;
   readyToShow(): Promise<void>;
   selectCaptureDisplay(displayId: number): Promise<void>;
+  useSystemAudioFallback(): Promise<boolean>;
   setLiveCapture(isLive: boolean): Promise<void>;
   setLiveCaptureMousePassthrough(isPassthrough: boolean): Promise<void>;
   onStopRecordingRequest(handler: StopRecordingRequestHandler): () => void;

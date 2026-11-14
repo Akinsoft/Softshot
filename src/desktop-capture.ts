@@ -35,10 +35,12 @@ export async function getCursorlessDesktopStream(
     }
   };
 
-  return await navigator.locks.request("softshot-display-capture", async (): Promise<MediaStream> => {
-    await getSoftshotApi().selectCaptureDisplay(displayId);
-    return await navigator.mediaDevices.getDisplayMedia(options);
-  });
+  return await navigator.locks.request("softshot-display-capture", async (): Promise<MediaStream> =>
+    await withSystemAudioFallback(shouldCaptureSystemAudio, async (): Promise<MediaStream> => {
+      await getSoftshotApi().selectCaptureDisplay(displayId);
+      return await navigator.mediaDevices.getDisplayMedia(options);
+    })
+  );
 }
 
 export async function getLoopbackAudioStream(): Promise<MediaStream> {
@@ -50,13 +52,34 @@ export async function getLoopbackAudioStream(): Promise<MediaStream> {
       width: { max: loopbackVideoSizePx }
     }
   };
-  const stream = await navigator.mediaDevices.getDisplayMedia(options);
+  const stream = await withSystemAudioFallback(true, async (): Promise<MediaStream> =>
+    await navigator.mediaDevices.getDisplayMedia(options)
+  );
   for (const track of stream.getVideoTracks()) {
     track.stop();
     stream.removeTrack(track);
   }
 
   return stream;
+}
+
+async function withSystemAudioFallback(
+  isSystemAudioRequested: boolean,
+  capture: () => Promise<MediaStream>
+): Promise<MediaStream> {
+  try {
+    return await capture();
+  } catch (error) {
+    if (!isSystemAudioRequested || !isAudioSourceStartError(error) || !await getSoftshotApi().useSystemAudioFallback()) {
+      throw error;
+    }
+
+    return await capture();
+  }
+}
+
+function isAudioSourceStartError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "NotReadableError" && /audio/iu.test(error.message);
 }
 
 export function stopTracks(stream: MediaStream | null): void {
