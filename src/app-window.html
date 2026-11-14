@@ -87,14 +87,22 @@
               </span>
             </span>
             <div class="status-text">
-              <span class="status-title" aria-live="polite">
+              <button id="clips-source-toggle" class="status-title" type="button" aria-expanded="false" aria-controls="clips-control-source">
                 <span class="status-dot" aria-hidden="true"></span>
                 <img id="clips-status-icon" class="status-icon" alt="" hidden />
-                <span id="clips-status-title" class="status-title-text"></span>
-              </span>
+                <span id="clips-status-title" class="status-title-text" aria-live="polite"></span>
+                <svg class="status-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m7 10 5 5 5-5" />
+                </svg>
+              </button>
               <span id="clips-status-detail" class="status-detail"></span>
             </div>
-            <span id="clips-status-hint" class="status-detail status-hint"></span>
+            <span id="clips-status-hint" class="status-detail status-hint" hidden>
+              <span id="clips-status-hint-before"></span>
+              <button id="clips-page-shortcut-button" class="softshot-button keybind-button inline-keybind-button" type="button" aria-label="Change save clip shortcut"></button>
+              <span id="clips-status-hint-after"></span>
+              <span id="clips-page-shortcut-status" class="row-status" aria-live="polite"></span>
+            </span>
             <button id="clips-retry-button" class="softshot-button" type="button" hidden>Try again</button>
             <button id="clips-settings-button" class="icon-button" type="button" data-tooltip="Clip settings" aria-label="Clip settings">
               <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -107,7 +115,7 @@
               </svg>
             </button>
           </div>
-          <div class="clips-control-source">
+          <div id="clips-control-source" class="clips-control-source" hidden>
             <div class="segmented" role="radiogroup" aria-label="Clip source">
               <button id="clips-source-display" class="segmented-option" type="button" role="radio" data-source-kind="display">Monitor</button>
               <button id="clips-source-window" class="segmented-option" type="button" role="radio" data-source-kind="window">Application</button>

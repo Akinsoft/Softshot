@@ -5,6 +5,7 @@ import { getSoftshotApi } from "./softshot-api.js";
 
 const statusClearDelayMs = 1400;
 const recordingButtonText = "Press keys";
+const waitingDotCount = 3;
 
 export class ShortcutButton {
   private isRecording = false;
@@ -73,7 +74,7 @@ export class ShortcutButton {
       }
 
       case "preview": {
-        this.button.replaceChildren(this.context.shortcutLabels().keycaps(event.shortcut));
+        this.button.replaceChildren(this.context.shortcutLabels().keycaps(event.shortcut), waitingDots());
         break;
       }
 
@@ -97,7 +98,7 @@ export class ShortcutButton {
       });
     });
     getSoftshotApi().onShortcutRecordingEvent((event): void => {
-      if (event.target === this.target) {
+      if (event.target === this.target && this.isRecording) {
         this.handleEvent(event);
       }
     });
@@ -109,4 +110,16 @@ export class ShortcutButton {
       this.button.replaceChildren(this.context.shortcutLabels().keycaps(shortcut));
     }
   }
+}
+
+function waitingDots(): HTMLSpanElement {
+  const dots = document.createElement("span");
+  dots.className = "keybind-waiting";
+  dots.ariaHidden = "true";
+  dots.append(...Array.from({ length: waitingDotCount }, (): HTMLSpanElement => {
+    const dot = document.createElement("span");
+    dot.textContent = ".";
+    return dot;
+  }));
+  return dots;
 }

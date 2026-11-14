@@ -1,7 +1,7 @@
 import { type AppWindowContext, type AppWindowPage, runWithErrorToast } from "./app-window-controls.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AppSettings, ClipEntry } from "./shared.js";
-import { clipDurationLabel } from "./shared.js";
+import { lastClipDurationLabel } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 import { TaskQueue } from "./task-queue.js";
 
@@ -186,7 +186,7 @@ export class ClipLibrary implements AppWindowPage {
     const { clips } = settings;
     const shortcutKeycaps = this.context.shortcutLabels().keycaps(clips.shortcut);
     this.emptyDetail.replaceChildren(...clips.enabled
-      ? ["Press", shortcutKeycaps, `to save the last ${clipDurationLabel(clips.durationSeconds)}.`]
+      ? ["Press", shortcutKeycaps, `to save the last ${lastClipDurationLabel(clips.durationSeconds)}.`]
       : ["Turn on Clips, then press", shortcutKeycaps, "to save what just happened."]);
     this.renderClips();
   }

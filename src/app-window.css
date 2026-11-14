@@ -202,17 +202,21 @@ svg circle {
 .clips-control-status {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 64px;
-  padding: 12px 10px 12px 16px;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 8px 6px 14px;
 }
 
 .clips-control-source {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px 10px 16px;
+  padding: 8px 8px 8px 14px;
   border-top: 1px solid var(--ui-border);
+}
+
+.clips-control-source[hidden] {
+  display: none;
 }
 
 .source-select {
@@ -278,7 +282,8 @@ svg circle {
 .status-text {
   display: grid;
   flex: 1 1 auto;
-  gap: 4px;
+  justify-items: start;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -286,9 +291,35 @@ svg circle {
   display: flex;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
   min-width: 0;
-  font-size: 14px;
-  font-weight: 600;
+  margin-left: -6px;
+  padding: 3px 4px 3px 6px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: 600 14px/1.3 var(--ui-font);
+  transition: background-color 120ms ease;
+}
+
+.status-title:hover,
+.status-title:focus-visible {
+  background: var(--ui-hover);
+  outline: none;
+}
+
+.status-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--ui-text-muted);
+  transition: rotate 160ms ease;
+}
+
+.status-title[aria-expanded="true"] .status-chevron {
+  rotate: 180deg;
 }
 
 .status-title-text {
@@ -326,6 +357,20 @@ svg circle {
   flex: 0 0 auto;
   justify-content: flex-end;
   max-width: 50%;
+}
+
+.status-hint[hidden] {
+  display: none;
+}
+
+.status-hint span:empty {
+  display: none;
+}
+
+.status-hint .row-status {
+  flex-basis: 100%;
+  margin-left: 0;
+  text-align: right;
 }
 
 .status-detail .softshot-keycap {
@@ -564,6 +609,40 @@ svg circle {
   background: rgba(56, 189, 248, 0.12);
   color: var(--ui-accent-hover);
   animation: keybind-pulse 1.2s ease-in-out infinite;
+}
+
+.inline-keybind-button {
+  min-width: 0;
+  height: 28px;
+  padding: 0 3px;
+  font-size: 12px;
+}
+
+.inline-keybind-button:not(.recording):hover {
+  border-color: var(--ui-field-border);
+}
+
+.inline-keybind-button.recording {
+  padding: 0 8px;
+}
+
+.keybind-waiting {
+  display: inline-flex;
+  width: 1.2em;
+  margin-left: -2px;
+  letter-spacing: 0.05em;
+}
+
+.keybind-waiting span {
+  animation: 1.2s step-end infinite;
+}
+
+.keybind-waiting span:nth-child(2) {
+  animation-name: keybind-waiting-second-dot;
+}
+
+.keybind-waiting span:nth-child(3) {
+  animation-name: keybind-waiting-third-dot;
 }
 
 .softshot-tooltip {
@@ -821,6 +900,26 @@ svg circle {
 @keyframes keybind-pulse {
   50% {
     border-color: rgba(56, 189, 248, 0.25);
+  }
+}
+
+@keyframes keybind-waiting-second-dot {
+  0% {
+    opacity: 0;
+  }
+
+  33.333% {
+    opacity: 1;
+  }
+}
+
+@keyframes keybind-waiting-third-dot {
+  0% {
+    opacity: 0;
+  }
+
+  66.667% {
+    opacity: 1;
   }
 }
 

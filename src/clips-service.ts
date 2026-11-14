@@ -27,7 +27,7 @@ import type {
   ClipsState,
   ClipsStatus
 } from "./shared";
-import { clipDurationLabel, clipQualityDimensions, epochSeconds, fileTimestamp } from "./shared";
+import { activeClipSource, clipQualityDimensions, epochSeconds, fileTimestamp, lastClipDurationLabel } from "./shared";
 import { TaskQueue } from "./task-queue";
 import type { ToastOptions } from "./toast-window";
 import { videoBitrate } from "./video-bitrate";
@@ -196,15 +196,16 @@ export class ClipsService {
       return;
     }
 
+    const source = activeClipSource(clips);
     try {
-      const resolvedSource = await this.sources.resolve(clips.source);
+      const resolvedSource = await this.sources.resolve(source);
       const options = resolvedSource ? await this.sessionOptions(resolvedSource, settings) : null;
       if (generation !== this.generation || this.hasSession()) {
         return;
       }
 
       if (!resolvedSource || !options) {
-        this.setStatus("waiting", clipSourceName(clips.source));
+        this.setStatus("waiting", clipSourceName(source));
         this.schedulePoll();
         return;
       }
@@ -212,7 +213,7 @@ export class ClipsService {
       this.openSession(options);
     } catch (error) {
       if (generation === this.generation) {
-        this.failCapture(clipSourceName(clips.source), errorMessage(error));
+        this.failCapture(clipSourceName(source), errorMessage(error));
       }
     }
   }
@@ -403,7 +404,7 @@ export class ClipsService {
       onClick: (): void => {
         this.host.openClips();
       },
-      title: `Last ${clipDurationLabel(savedDurationSeconds)} clipped!`,
+      title: `Last ${lastClipDurationLabel(savedDurationSeconds)} clipped!`,
       tone: "info"
     });
   }
@@ -614,7 +615,7 @@ function haveCaptureSettingsChanged(previous: AppSettings, next: AppSettings): b
     || previous.clips.durationSeconds !== next.clips.durationSeconds
     || previous.clips.fps !== next.clips.fps
     || previous.clips.quality !== next.clips.quality
-    || JSON.stringify(previous.clips.source) !== JSON.stringify(next.clips.source)
+    || JSON.stringify(activeClipSource(previous.clips)) !== JSON.stringify(activeClipSource(next.clips))
     || previous.microphoneDeviceId !== next.microphoneDeviceId
     || previous.systemAudioEnabled !== next.systemAudioEnabled;
 }
@@ -668,11 +669,11 @@ function clipIdFromUnknown(value: unknown): string {
 function clipsUnavailableMessage(status: ClipsStatus): string {
   switch (status.state) {
     case "starting": {
-      return "Clips is still starting. Try again in a moment.";
+      return "Clips are still starting. Try again in a moment.";
     }
 
     case "waiting": {
-      return `Clips is waiting for ${status.sourceName ?? "the selected source"}.`;
+      return `Clips are waiting for ${status.sourceName ?? "the selected source"}.`;
     }
 
     case "error": {

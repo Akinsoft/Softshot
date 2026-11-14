@@ -68,19 +68,28 @@ const appPages = ["capture", "clips", "settings"] as const;
 export type AppPage = (typeof appPages)[number];
 export type ClipsState = "error" | "off" | "recording" | "starting" | "waiting";
 
+export type ClipSourceKind = "display" | "window";
+
+export interface ClipWindowSelection {
+  processName: string | null;
+  title: string;
+}
+
 export type ClipSource =
   | { displayId: number | null; kind: "display" }
-  | { kind: "window"; processName: string | null; title: string };
+  | (ClipWindowSelection & { kind: "window" });
 
 export interface ClipSettings {
   directory: string | null;
+  displayId: number | null;
   durationSeconds: ClipDurationSeconds;
   enabled: boolean;
   fps: VideoFps;
   quality: ClipQuality;
   savedToastEnabled: boolean;
   shortcut: string;
-  source: ClipSource;
+  sourceKind: ClipSourceKind;
+  window: ClipWindowSelection | null;
 }
 
 export interface ClipsStatus {
@@ -349,13 +358,32 @@ function padDatePart(part: number): string {
   return part.toString().padStart(timestampPartWidth, "0");
 }
 
+function clipDurationParts(durationSeconds: number): { count: number; unit: "minute" | "second" } {
+  return durationSeconds < secondsPerMinute || durationSeconds % secondsPerMinute !== 0
+    ? { count: durationSeconds, unit: "second" }
+    : { count: durationSeconds / secondsPerMinute, unit: "minute" };
+}
+
 export function clipDurationLabel(durationSeconds: number): string {
-  if (durationSeconds < secondsPerMinute || durationSeconds % secondsPerMinute !== 0) {
-    return durationSeconds === 1 ? "1 second" : `${String(durationSeconds)} seconds`;
+  const { count, unit } = clipDurationParts(durationSeconds);
+  return `${String(count)} ${unit}${count === 1 ? "" : "s"}`;
+}
+
+export function lastClipDurationLabel(durationSeconds: number): string {
+  const { count, unit } = clipDurationParts(durationSeconds);
+  return count === 1 ? unit : clipDurationLabel(durationSeconds);
+}
+
+export function activeClipSource(clips: ClipSettings): ClipSource {
+  if (clips.sourceKind === "display") {
+    return { displayId: clips.displayId, kind: "display" };
   }
 
-  const minutes = durationSeconds / secondsPerMinute;
-  return minutes === 1 ? "1 minute" : `${String(minutes)} minutes`;
+  if (clips.window === null) {
+    throw new Error("Clips are set to record an application, but no application is chosen.");
+  }
+
+  return { ...clips.window, kind: "window" };
 }
 
 const appPageSet: ReadonlySet<unknown> = new Set(appPages);

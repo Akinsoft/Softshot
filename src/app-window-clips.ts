@@ -5,24 +5,27 @@ import {
   runWithErrorToast,
   selectOption
 } from "./app-window-controls.js";
-import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
+import { ShortcutButton } from "./app-window-shortcut.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type {
   AppSettings,
   ClipSettings,
-  ClipSource,
+  ClipSourceKind,
   ClipSourceOptions,
   ClipsStatus,
-  ClipWindowOption
+  ClipWindowOption,
+  ClipWindowSelection
 } from "./shared.js";
-import { clipDurationLabel } from "./shared.js";
+import { lastClipDurationLabel } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const savedWindowValue = "saved";
 const windowOptionPrefix = "window:";
 
-type ClipSourceKind = ClipSource["kind"];
-type WindowClipSource = Extract<ClipSource, { kind: "window" }>;
+interface ShortcutHint {
+  after: string;
+  before: string;
+}
 
 export class ClipsPage implements AppWindowPage {
   private readonly control = getRequiredElement("clips-control", HTMLElement);
@@ -43,9 +46,19 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly settingsButton = getRequiredElement("clips-settings-button", HTMLButtonElement);
 
+  private readonly shortcutButton: ShortcutButton;
+
+  private readonly shortcutHintAfter = getRequiredElement("clips-status-hint-after", HTMLSpanElement);
+
+  private readonly shortcutHintBefore = getRequiredElement("clips-status-hint-before", HTMLSpanElement);
+
   private readonly sourceDisplayButton = getRequiredElement("clips-source-display", HTMLButtonElement);
 
   private sourceOptions: ClipSourceOptions | null = null;
+
+  private readonly sourcePanel = getRequiredElement("clips-control-source", HTMLDivElement);
+
+  private readonly sourceToggle = getRequiredElement("clips-source-toggle", HTMLButtonElement);
 
   private readonly sourceWindowButton = getRequiredElement("clips-source-window", HTMLButtonElement);
 
@@ -61,7 +74,14 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly windowSelect = getRequiredElement("clips-window-select", HTMLSelectElement);
 
-  constructor(private readonly context: AppWindowContext) {}
+  constructor(private readonly context: AppWindowContext) {
+    this.shortcutButton = new ShortcutButton(
+      getRequiredElement("clips-page-shortcut-button", HTMLButtonElement),
+      getRequiredElement("clips-page-shortcut-status", HTMLSpanElement),
+      "clips",
+      context
+    );
+  }
 
   private async updateClips(update: Partial<ClipSettings>): Promise<void> {
     await this.context.updateSettings({ clips: update });
@@ -72,6 +92,9 @@ export class ClipsPage implements AppWindowPage {
   }
 
   private bindSourceEvents(): void {
+    this.sourceToggle.addEventListener("click", (): void => {
+      this.setSourcePanelExpanded(this.sourcePanel.hidden);
+    });
     this.sourceDisplayButton.addEventListener("click", (): void => {
       this.selectSourceKind("display");
     });
@@ -79,7 +102,7 @@ export class ClipsPage implements AppWindowPage {
       this.selectSourceKind("window");
     });
     this.displaySelect.addEventListener("change", (): void => {
-      this.runTask(this.updateClips({ source: { displayId: Number(this.displaySelect.value), kind: "display" } }));
+      this.runTask(this.updateClips({ displayId: Number(this.displaySelect.value), sourceKind: "display" }));
     });
     this.windowSelect.addEventListener("change", (): void => {
       this.selectWindow(this.windowSelect.value);
@@ -106,16 +129,21 @@ export class ClipsPage implements AppWindowPage {
     });
   }
 
+  private setSourcePanelExpanded(isExpanded: boolean): void {
+    this.sourcePanel.hidden = !isExpanded;
+    this.sourceToggle.ariaExpanded = String(isExpanded);
+  }
+
   private selectSourceKind(kind: ClipSourceKind): void {
     const settings = this.context.settings();
     this.pendingSourceKind = null;
-    if (kind === settings.clips.source.kind) {
+    if (kind === settings.clips.sourceKind) {
       this.render(settings);
       return;
     }
 
-    if (kind === "display") {
-      this.runTask(this.updateClips({ source: { displayId: null, kind: "display" } }));
+    if (kind === "display" || settings.clips.window !== null) {
+      this.runTask(this.updateClips({ sourceKind: kind }));
       return;
     }
 
@@ -138,26 +166,25 @@ export class ClipsPage implements AppWindowPage {
 
     this.pendingSourceKind = null;
     this.runTask(this.updateClips({
-      source: { kind: "window", processName: window.processName, title: window.title }
+      sourceKind: "window",
+      window: { processName: window.processName, title: window.title }
     }));
   }
 
   private renderSource(clips: ClipSettings): void {
-    const kind = this.pendingSourceKind ?? clips.source.kind;
+    const kind = this.pendingSourceKind ?? clips.sourceKind;
     this.sourceDisplayButton.setAttribute("aria-checked", String(kind === "display"));
     this.sourceWindowButton.setAttribute("aria-checked", String(kind === "window"));
     this.displaySelect.hidden = kind !== "display";
     this.windowSelect.hidden = kind !== "window";
-    replaceSelectOptions(this.displaySelect, this.displayOptions(clips.source));
-    replaceSelectOptions(this.windowSelect, this.windowOptions(clips.source));
+    replaceSelectOptions(this.displaySelect, this.displayOptions(clips.displayId));
+    replaceSelectOptions(this.windowSelect, this.windowOptions(clips.window));
     this.windowSelect.disabled = this.sourceOptions === null;
   }
 
-  private displayOptions(source: ClipSource): HTMLOptionElement[] {
+  private displayOptions(displayId: number | null): HTMLOptionElement[] {
     const displays = this.sourceOptions?.displays ?? [];
-    const selectedDisplayId = source.kind === "display"
-      ? source.displayId ?? displays.find((display) => display.isPrimary)?.id ?? null
-      : null;
+    const selectedDisplayId = displayId ?? displays.find((display) => display.isPrimary)?.id ?? null;
     const options: HTMLOptionElement[] = [];
     if (selectedDisplayId !== null && displays.every((display) => display.id !== selectedDisplayId)) {
       options.push(selectOption("Disconnected monitor", String(selectedDisplayId), true));
@@ -171,13 +198,12 @@ export class ClipsPage implements AppWindowPage {
     return options;
   }
 
-  private windowOptions(source: ClipSource): HTMLOptionElement[] {
+  private windowOptions(savedWindow: ClipWindowSelection | null): HTMLOptionElement[] {
     if (!this.sourceOptions) {
       return [placeholderOption("Loading apps…")];
     }
 
     const { windows } = this.sourceOptions;
-    const savedWindow = source.kind === "window" ? source : null;
     if (!savedWindow) {
       return [placeholderOption("Choose an app"), ...windows.map((window, index) => windowOption(window, index, false))];
     }
@@ -192,13 +218,13 @@ export class ClipsPage implements AppWindowPage {
   }
 
   private recordingIcon(): string | null {
-    const { source } = this.context.settings().clips;
-    if (this.status.state !== "recording" || source.kind !== "window" || !this.sourceOptions) {
+    const { sourceKind, window } = this.context.settings().clips;
+    if (this.status.state !== "recording" || sourceKind !== "window" || window === null || !this.sourceOptions) {
       return null;
     }
 
     const { windows } = this.sourceOptions;
-    const index = savedWindowIndex(windows, source);
+    const index = savedWindowIndex(windows, window);
     return index === -1 ? null : windows[index].iconDataUrl;
   }
 
@@ -206,7 +232,6 @@ export class ClipsPage implements AppWindowPage {
     const { clips } = this.context.settings();
     const { status } = this;
     const isRecording = status.state === "recording";
-    const detail = statusDetail(status, clips, this.context.shortcutLabels());
     const icon = this.recordingIcon();
     this.control.dataset.state = status.state;
     this.retryButton.hidden = status.state !== "error";
@@ -216,11 +241,15 @@ export class ClipsPage implements AppWindowPage {
     }
 
     this.statusTitle.textContent = statusTitle(status);
-    this.statusDetail.replaceChildren(...(isRecording ? [] : detail));
-    this.statusHint.replaceChildren(...(isRecording ? detail : []));
+    this.statusDetail.replaceChildren(...(isRecording ? [] : statusDetail(status, clips)));
+    this.statusHint.hidden = !isRecording;
+    const hint = shortcutHint(status, clips);
+    this.shortcutHintBefore.textContent = hint.before;
+    this.shortcutHintAfter.textContent = hint.after;
   }
 
   bind(): void {
+    this.shortcutButton.bind();
     this.bindSourceEvents();
     this.bindActionEvents();
   }
@@ -244,6 +273,7 @@ export class ClipsPage implements AppWindowPage {
   render(settings: AppSettings): void {
     const { clips } = settings;
     this.enabledCheckbox.checked = clips.enabled;
+    this.shortcutButton.render(clips.shortcut);
     this.renderSource(clips);
     this.renderStatus();
   }
@@ -253,7 +283,7 @@ export class ClipsPage implements AppWindowPage {
     this.status = status;
     this.renderStatus();
     if (!wasRecording && status.state === "recording" && this.sourceOptions !== null
-      && this.context.settings().clips.source.kind === "window" && this.recordingIcon() === null) {
+      && this.context.settings().clips.sourceKind === "window" && this.recordingIcon() === null) {
       this.runTask(this.loadSourceOptions());
     }
   }
@@ -263,7 +293,7 @@ function statusTitle(status: ClipsStatus): string {
   const sourceName = status.sourceName ?? "the selected source";
   switch (status.state) {
     case "off": {
-      return "Clips is off";
+      return "Clips are off";
     }
 
     case "starting": {
@@ -288,27 +318,25 @@ function statusTitle(status: ClipsStatus): string {
   }
 }
 
-function statusDetail(status: ClipsStatus, clips: ClipSettings, shortcutLabels: ShortcutLabels): Array<Node | string> {
-  const durationLabel = clipDurationLabel(clips.durationSeconds);
+function shortcutHint(status: ClipsStatus, clips: ClipSettings): ShortcutHint {
+  return status.isShortcutAvailable
+    ? { after: `to save the last ${lastClipDurationLabel(clips.durationSeconds)}.`, before: "Press" }
+    : { after: "is used by another app. Click it to pick another.", before: "" };
+}
+
+function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | string> {
   switch (status.state) {
     case "off": {
-      return [`Turn it on to keep the last ${durationLabel} ready to save.`];
+      return [`Turn them on to keep the last ${lastClipDurationLabel(clips.durationSeconds)} ready to save.`];
     }
 
-    case "starting": {
-      return [clips.source.kind === "window"
-        ? "Recording begins once the app draws something. If it is minimized, open it."
-        : "Recording begins once something on the monitor changes."];
-    }
-
+    case "starting":
     case "recording": {
-      return status.isShortcutAvailable
-        ? ["Press", shortcutLabels.keycaps(clips.shortcut), `to save the last ${durationLabel}.`]
-        : [`${shortcutLabels.text(clips.shortcut)} is used by another app. Pick a different shortcut in Settings.`];
+      return [];
     }
 
     case "waiting": {
-      return [clips.source.kind === "window"
+      return [clips.sourceKind === "window"
         ? "Recording starts as soon as the app opens."
         : "Recording starts when the monitor is connected."];
     }
@@ -359,7 +387,7 @@ function appIcon(iconDataUrl: string | null): HTMLElement {
   return icon;
 }
 
-function savedWindowIndex(windows: readonly ClipWindowOption[], savedWindow: WindowClipSource): number {
+function savedWindowIndex(windows: readonly ClipWindowOption[], savedWindow: ClipWindowSelection): number {
   if (savedWindow.processName === null) {
     return windows.findIndex((window) => window.title === savedWindow.title);
   }

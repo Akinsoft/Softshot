@@ -3,7 +3,15 @@ import path from "node:path";
 
 import { isMissingFileError } from "./async-errors";
 import { isTriggerKeyCode } from "./keyboard-keys";
-import type { AppSettings, ClipDurationSeconds, ClipQuality, ClipSettings, ClipSource, VideoFps } from "./shared";
+import type {
+  AppSettings,
+  ClipDurationSeconds,
+  ClipQuality,
+  ClipSettings,
+  ClipSourceKind,
+  ClipWindowSelection,
+  VideoFps
+} from "./shared";
 import { clipDurationOptionsSeconds, clipQualities, videoFpsOptions } from "./shared";
 import {
   isAcceleratorShortcut,
@@ -30,13 +38,15 @@ const isSidebarCollapsedByDefault = false;
 const exportPresetIdPattern = /^[a-z\d-]{1,40}$/u;
 const clipSettingKeys = new Set([
   "directory",
+  "displayId",
   "durationSeconds",
   "enabled",
   "fps",
   "quality",
   "savedToastEnabled",
   "shortcut",
-  "source"
+  "sourceKind",
+  "window"
 ]);
 
 const clipDurationSet: ReadonlySet<unknown> = new Set(clipDurationOptionsSeconds);
@@ -58,13 +68,15 @@ function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSetting
 function createDefaultClipSettings(): ClipSettings {
   return {
     directory: null,
+    displayId: null,
     durationSeconds: defaultClipDurationSeconds,
     enabled: false,
     fps: videoFpsOptions.high,
     quality: defaultClipQuality,
     savedToastEnabled: true,
     shortcut: defaultClipShortcut,
-    source: { displayId: null, kind: "display" }
+    sourceKind: "display",
+    window: null
   };
 }
 
@@ -210,8 +222,9 @@ function clipSettingsFromJson(value: Record<string, unknown>): ClipSettings {
 }
 
 function clipSettingsFromObject(value: Record<string, unknown>, base: ClipSettings): ClipSettings {
-  return {
+  const settings: ClipSettings = {
     directory: "directory" in value ? validateAbsoluteDirectory(value.directory, "Clips folder") : base.directory,
+    displayId: "displayId" in value ? validateClipDisplayId(value.displayId) : base.displayId,
     durationSeconds: "durationSeconds" in value ? validateClipDuration(value.durationSeconds) : base.durationSeconds,
     enabled: "enabled" in value ? isTrueSetting(value.enabled, "Clips enabled") : base.enabled,
     fps: "fps" in value ? validateClipFps(value.fps) : base.fps,
@@ -220,8 +233,14 @@ function clipSettingsFromObject(value: Record<string, unknown>, base: ClipSettin
       ? isTrueSetting(value.savedToastEnabled, "Saved clip popup")
       : base.savedToastEnabled,
     shortcut: "shortcut" in value ? validateClipShortcut(value.shortcut) : base.shortcut,
-    source: "source" in value ? validateClipSource(value.source) : base.source
+    sourceKind: "sourceKind" in value ? validateClipSourceKind(value.sourceKind) : base.sourceKind,
+    window: "window" in value ? validateClipWindow(value.window) : base.window
   };
+  if (settings.sourceKind === "window" && settings.window === null) {
+    throw new Error("Choose an application for Clips to record.");
+  }
+
+  return settings;
 }
 
 function validateClipDuration(value: unknown): ClipDurationSeconds {
@@ -256,32 +275,40 @@ function validateClipShortcut(value: unknown): string {
   return validateShortcut(value, "Clip shortcut");
 }
 
-function validateClipSource(value: unknown): ClipSource {
-  if (!isJsonObject(value)) {
-    throw new TypeError("Clip source must be an object.");
-  }
-
-  if (value.kind === "display") {
-    if (value.displayId !== null && !Number.isSafeInteger(value.displayId)) {
-      throw new TypeError("Clip monitor id must be a whole number or null.");
-    }
-
-    return { displayId: value.displayId as number | null, kind: "display" };
-  }
-
-  if (value.kind === "window") {
-    if (typeof value.title !== "string" || value.title.length === 0 || value.title.length > maxWindowTitleLength) {
-      throw new TypeError("Clip application title must be a non-empty string.");
-    }
-
-    if (value.processName !== null && (typeof value.processName !== "string" || value.processName.length === 0)) {
-      throw new TypeError("Clip application process name must be a non-empty string or null.");
-    }
-
-    return { kind: "window", processName: value.processName, title: value.title };
+function validateClipSourceKind(value: unknown): ClipSourceKind {
+  if (value === "display" || value === "window") {
+    return value;
   }
 
   throw new TypeError("Clip source must be a monitor or an application.");
+}
+
+function validateClipDisplayId(value: unknown): number | null {
+  if (value === null || Number.isSafeInteger(value)) {
+    return value as number | null;
+  }
+
+  throw new TypeError("Clip monitor id must be a whole number or null.");
+}
+
+function validateClipWindow(value: unknown): ClipWindowSelection | null {
+  if (value === null) {
+    return null;
+  }
+
+  if (!isJsonObject(value)) {
+    throw new TypeError("Clip application must be an object or null.");
+  }
+
+  if (typeof value.title !== "string" || value.title.length === 0 || value.title.length > maxWindowTitleLength) {
+    throw new TypeError("Clip application title must be a non-empty string.");
+  }
+
+  if (value.processName !== null && (typeof value.processName !== "string" || value.processName.length === 0)) {
+    throw new TypeError("Clip application process name must be a non-empty string or null.");
+  }
+
+  return { processName: value.processName, title: value.title };
 }
 
 function validateAbsoluteDirectory(value: unknown, label: string): string | null {

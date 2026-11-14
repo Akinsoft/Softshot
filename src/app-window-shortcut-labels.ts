@@ -1,8 +1,6 @@
 import type { ShortcutKeyLabels } from "./shared.js";
 import { shortcutKeys } from "./shortcut-keys.js";
 
-const shortcutTextSeparator = " + ";
-
 const displayNames = new Map([
   ["AltLeft", "Left Alt"],
   ["AltRight", "Right Alt"],
@@ -89,9 +87,5 @@ export class ShortcutLabels {
       return keycap;
     }));
     return keycaps;
-  }
-
-  text(shortcut: string): string {
-    return shortcutKeys(shortcut).map((key) => this.keyName(key)).join(shortcutTextSeparator);
   }
 }
