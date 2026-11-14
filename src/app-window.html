@@ -169,18 +169,15 @@
               <span id="clips-shortcut-status" class="row-status" aria-live="polite"></span>
               <button id="clips-shortcut-button" class="softshot-button keybind-button" type="button" aria-label="Change save clip shortcut"></button>
             </div>
-            <div class="settings-row">
-              <span class="settings-label-group">
-                <label class="settings-label" for="clips-saved-toast-checkbox">Saved clip popup</label>
-                <button class="help-button" type="button" data-tooltip="Shows a small message in the top-right corner after each clip is saved. Turn it off to keep games free of popups." aria-label="About the saved clip popup">?</button>
-              </span>
+            <label class="settings-row" for="clips-saved-toast-checkbox">
+              <span class="settings-label">Saved clip popup</span>
               <span class="softshot-toggle">
                 <input id="clips-saved-toast-checkbox" type="checkbox" />
                 <span class="softshot-toggle-track" aria-hidden="true">
                   <span class="softshot-toggle-thumb"></span>
                 </span>
               </span>
-            </div>
+            </label>
             <div class="settings-row">
               <span class="settings-label">Clips folder</span>
               <span id="clips-directory-path" class="row-value path-text"></span>
@@ -216,25 +213,19 @@
         <section class="settings-section" aria-labelledby="settings-audio-heading">
           <h2 id="settings-audio-heading" class="settings-section-title">Audio</h2>
           <div class="settings-card">
-            <div class="settings-row">
-              <span class="settings-label-group">
-                <label class="settings-label" for="microphone-select">Microphone</label>
-                <button class="help-button" type="button" data-tooltip="Used by Quick Capture recordings and Clips. While Clips is on, the microphone stays in use the whole time." aria-label="About the microphone">?</button>
-              </span>
+            <label class="settings-row" for="microphone-select">
+              <span class="settings-label">Microphone</span>
               <select id="microphone-select" class="softshot-select settings-select"></select>
-            </div>
-            <div class="settings-row">
-              <span class="settings-label-group">
-                <label class="settings-label" for="system-audio-checkbox">Desktop audio</label>
-                <button class="help-button" type="button" data-tooltip="Records the sound your PC plays in Quick Capture recordings and Clips." aria-label="About desktop audio">?</button>
-              </span>
+            </label>
+            <label class="settings-row" for="system-audio-checkbox">
+              <span class="settings-label">Desktop audio</span>
               <span class="softshot-toggle">
                 <input id="system-audio-checkbox" type="checkbox" />
                 <span class="softshot-toggle-track" aria-hidden="true">
                   <span class="softshot-toggle-thumb"></span>
                 </span>
               </span>
-            </div>
+            </label>
           </div>
         </section>
       </section>
