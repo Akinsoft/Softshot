@@ -2337,7 +2337,9 @@ class SoftshotApp {
 
   private registerPermissionRequestHandler(): void {
     session.defaultSession.setPermissionCheckHandler((webContents, permission): boolean =>
-      permission === mediaPermissionName && this.isManagedMediaWebContents(webContents)
+      permission === mediaPermissionName
+        && (this.isManagedMediaWebContents(webContents)
+          || (webContents !== null && this.isAppWindowWebContents(webContents)))
     );
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback): void => {
       callback(permission === mediaPermissionName && this.isManagedMediaWebContents(webContents));

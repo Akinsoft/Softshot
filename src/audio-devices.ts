@@ -9,7 +9,7 @@ export function audioInputDevices(devices: MediaDeviceInfo[]): MediaDeviceInfo[]
   const seenDeviceKeys = new Set<string>();
   const uniqueDevices: MediaDeviceInfo[] = [];
   for (const device of devices) {
-    if (device.kind !== "audioinput" || isVirtualMicrophoneAlias(device)) {
+    if (device.kind !== "audioinput" || device.deviceId === "" || isVirtualMicrophoneAlias(device)) {
       continue;
     }
 
