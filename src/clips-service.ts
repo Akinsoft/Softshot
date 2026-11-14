@@ -518,10 +518,10 @@ export class ClipsService {
     });
   }
 
-  applySettings(previous: ClipSettings, next: ClipSettings): void {
+  applySettings(previous: ClipSettings, next: ClipSettings, isShortcutRequired: boolean): void {
     const isRegistered = this.syncShortcut(next);
     this.refreshShortcutStatus();
-    if (!isRegistered) {
+    if (!isRegistered && isShortcutRequired) {
       throw new Error(`Could not register ${next.shortcut}. Another app may be using it.`);
     }
 

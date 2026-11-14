@@ -1830,11 +1830,15 @@ class SoftshotApp {
   private async applySettingsUpdateNow(update: unknown): Promise<AppSettings> {
     const previousSettings = this.settingsSnapshot();
     const nextSettings = this.settingsWithUpdate(update);
+    const requested = requestedShortcutSettings(update);
 
     try {
       this.settings = nextSettings;
-      this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
-      this.clips.applySettings(previousSettings.clips, nextSettings.clips);
+      if (requested.captureShortcut) {
+        this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
+      }
+
+      this.clips.applySettings(previousSettings.clips, nextSettings.clips, requested.clipShortcut);
       if (nextSettings.launchAtStartup !== previousSettings.launchAtStartup) {
         await this.applyLaunchAtStartup(nextSettings.launchAtStartup);
       }
@@ -1860,16 +1864,23 @@ class SoftshotApp {
 
   private async restoreAppliedSettings(failedSettings: AppSettings, previousSettings: AppSettings): Promise<unknown[]> {
     const restoreErrors: unknown[] = [];
-    try {
-      if (!this.tryUpdateRegisteredCaptureShortcut(failedSettings.captureShortcut, previousSettings.captureShortcut)) {
-        restoreErrors.push(new Error(`Could not restore ${previousSettings.captureShortcut}.`));
+    if (failedSettings.captureShortcut !== previousSettings.captureShortcut) {
+      try {
+        if (!this.tryUpdateRegisteredCaptureShortcut(failedSettings.captureShortcut, previousSettings.captureShortcut)) {
+          restoreErrors.push(new Error(`Could not restore ${previousSettings.captureShortcut}.`));
+        }
+      } catch (restoreError) {
+        restoreErrors.push(restoreError);
       }
-    } catch (restoreError) {
-      restoreErrors.push(restoreError);
     }
 
     try {
-      this.clips.applySettings(failedSettings.clips, previousSettings.clips);
+      this.clips.applySettings(
+        failedSettings.clips,
+        previousSettings.clips,
+        failedSettings.clips.shortcut !== previousSettings.clips.shortcut
+          || failedSettings.clips.enabled !== previousSettings.clips.enabled
+      );
     } catch (restoreError) {
       restoreErrors.push(restoreError);
     }
@@ -3212,6 +3223,17 @@ async function delay(milliseconds: number): Promise<void> {
 function trailingBytes(bytes: Uint8Array, maxByteLength: number): Uint8Array {
   const start = Math.max(0, bytes.byteLength - maxByteLength);
   return bytes.slice(start);
+}
+
+function requestedShortcutSettings(update: unknown): { captureShortcut: boolean; clipShortcut: boolean } {
+  const settings = typeof update === "object" && update !== null ? update : {};
+  const clips = "clips" in settings && typeof settings.clips === "object" && settings.clips !== null
+    ? settings.clips
+    : {};
+  return {
+    captureShortcut: "captureShortcut" in settings,
+    clipShortcut: "shortcut" in clips || "enabled" in clips
+  };
 }
 
 function shortcutTargetFromUnknown(value: unknown): ShortcutTarget {
