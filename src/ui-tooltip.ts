@@ -188,7 +188,12 @@ function isUnavailableTooltipTarget(target: HTMLElement): boolean {
 
 function tooltipPlacement(targetRect: DOMRect, tooltipRect: DOMRect): TooltipPlacement {
   const minimumTopSpace = tooltipRect.height + tooltipOffsetPx + tooltipViewportPaddingPx;
-  return targetRect.top >= minimumTopSpace ? tooltipAboveClassName : tooltipBelowClassName;
+  return targetRect.top - titleBarOverlayBottom() >= minimumTopSpace ? tooltipAboveClassName : tooltipBelowClassName;
+}
+
+function titleBarOverlayBottom(): number {
+  const overlay = navigator.windowControlsOverlay;
+  return overlay?.visible ? overlay.getTitlebarAreaRect().bottom : 0;
 }
 
 function tooltipTopForPlacement(placement: TooltipPlacement, targetRect: DOMRect, tooltipRect: DOMRect): number {
