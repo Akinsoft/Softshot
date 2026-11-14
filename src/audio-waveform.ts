@@ -1,10 +1,9 @@
 import { ALL_FORMATS, AudioSampleSink, CustomSource, Input } from "mediabunny";
 
-import type { AudioSourceKind } from "./shared.js";
-import { getSoftshotApi } from "./softshot-api.js";
+import type { EditorByteSource } from "./editor-session-client.js";
 
 export async function audioWaveformPeaks(
-  kind: AudioSourceKind,
+  source: EditorByteSource,
   durationSeconds: number,
   peakCount: number
 ): Promise<number[]> {
@@ -16,13 +15,9 @@ export async function audioWaveformPeaks(
     throw new RangeError("The waveform peak count must be a positive integer.");
   }
 
-  const api = getSoftshotApi();
   const input = new Input({
     formats: ALL_FORMATS,
-    source: new CustomSource({
-      getSize: async (): Promise<number> => await api.getEditorAudioFileSize(kind),
-      read: async (start, end): Promise<Uint8Array> => await api.readEditorAudioFile(kind, start, end)
-    })
+    source: new CustomSource(source)
   });
   try {
     if (!await input.canRead()) {

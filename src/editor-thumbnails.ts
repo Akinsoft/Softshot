@@ -84,7 +84,8 @@ export async function captureVideoTimelineThumbnails(
   sourceUrl: string,
   durationSeconds: number,
   thumbnailCount: number,
-  thumbnailWidthPx: number
+  thumbnailWidthPx: number,
+  signal: AbortSignal
 ): Promise<TimelineThumbnail[]> {
   if (sourceUrl.length === 0) {
     throw new Error("The thumbnail video source is missing.");
@@ -114,6 +115,7 @@ export async function captureVideoTimelineThumbnails(
     );
     const context = getCanvasContext(canvas, "The timeline preview canvas is unavailable.");
     for (const sourceTime of timelineThumbnailTimes(durationSeconds, thumbnailCount)) {
+      signal.throwIfAborted();
       await seekVideo(video, sourceTime);
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const blob = await canvasToBlob(canvas, thumbnailImageMimeType, thumbnailImageQuality);

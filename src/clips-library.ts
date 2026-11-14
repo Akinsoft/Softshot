@@ -6,6 +6,7 @@ import { isMissingFileError } from "./async-errors";
 import type { ClipEntry, RecordingAudioSourceKind } from "./shared";
 import { TaskQueue } from "./task-queue";
 
+const missingClipMessage = "This clip no longer exists.";
 const libraryFileName = "library.json";
 const libraryVersion = 1;
 const libraryIndentSpaces = 2;
@@ -22,6 +23,7 @@ interface StoredClip {
   filePath: string;
   height: number;
   id: string;
+  lastViewedAt?: string;
   sourceName: string;
   width: number;
 }
@@ -101,9 +103,17 @@ export class ClipsLibrary {
     try {
       const fileStats = await stat(clip.filePath);
       return {
-        ...clip,
+        createdAt: clip.createdAt,
+        durationSeconds: clip.durationSeconds,
+        filePath: clip.filePath,
+        height: clip.height,
+        id: clip.id,
+        lastViewedAt: clip.lastViewedAt ?? null,
         sizeBytes: fileStats.size,
-        thumbnailUrl: pathToFileURL(this.thumbnailFilePath(clip.id)).toString()
+        sourceName: clip.sourceName,
+        thumbnailUrl: pathToFileURL(this.thumbnailFilePath(clip.id)).toString(),
+        videoUrl: pathToFileURL(clip.filePath).toString(),
+        width: clip.width
       };
     } catch (error) {
       if (isMissingFileError(error)) {
@@ -137,7 +147,7 @@ export class ClipsLibrary {
     const clips = await this.exclusive(async () => await this.readClips());
     const clip = clips.find((candidate) => candidate.id === clipId);
     if (!clip) {
-      throw new Error("This clip no longer exists.");
+      throw new Error(missingClipMessage);
     }
 
     return clip;
@@ -161,12 +171,23 @@ export class ClipsLibrary {
     });
   }
 
+  async markViewed(clipId: string, viewedAt: Date): Promise<void> {
+    await this.exclusive(async (): Promise<void> => {
+      const clips = await this.readClips();
+      if (clips.every((clip) => clip.id !== clipId)) {
+        throw new Error(missingClipMessage);
+      }
+
+      await this.writeClips(clips.map((clip) => clip.id === clipId ? { ...clip, lastViewedAt: viewedAt.toISOString() } : clip));
+    });
+  }
+
   async remove(clipId: string): Promise<StoredClip> {
     return await this.exclusive(async (): Promise<StoredClip> => {
       const clips = await this.readClips();
       const clip = clips.find((candidate) => candidate.id === clipId);
       if (!clip) {
-        throw new Error("This clip no longer exists.");
+        throw new Error(missingClipMessage);
       }
 
       await this.writeClips(clips.filter((candidate) => candidate !== clip));
@@ -240,7 +261,8 @@ function hasStoredClipText(value: Record<string, unknown>): boolean {
   return typeof value.createdAt === "string"
     && typeof value.filePath === "string"
     && typeof value.id === "string"
-    && typeof value.sourceName === "string";
+    && typeof value.sourceName === "string"
+    && (!("lastViewedAt" in value) || typeof value.lastViewedAt === "string");
 }
 
 function hasStoredClipNumbers(value: Record<string, unknown>): boolean {

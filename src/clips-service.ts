@@ -54,7 +54,7 @@ interface ClipsServiceHost {
   isAppWindowSender(sender: Electron.WebContents): boolean;
   libraryChanged(): void;
   openClips(): void;
-  openVideoFile(filePath: string): Promise<void>;
+  openVideoFile(filePath: string): Promise<boolean>;
   preloadScriptPath(): string;
   recorderClosed(webContentsId: number): void;
   settings(): AppSettings;
@@ -418,6 +418,17 @@ export class ClipsService {
     return clip.filePath;
   }
 
+  private async markClipViewed(clipId: unknown): Promise<void> {
+    await this.library.markViewed(clipIdFromUnknown(clipId), new Date());
+    this.host.libraryChanged();
+  }
+
+  private async openClip(clipId: unknown): Promise<void> {
+    if (await this.host.openVideoFile(await this.clipFilePath(clipId))) {
+      await this.markClipViewed(clipId);
+    }
+  }
+
   private async deleteClip(clipId: string): Promise<void> {
     const filePath = await this.clipFilePath(clipId);
     if (await fileExists(filePath)) {
@@ -510,17 +521,19 @@ export class ClipsService {
 
     ipcMain.handle("clips:open", async (event, clipId: unknown): Promise<void> => {
       this.assertAppSender(event);
-      await this.host.openVideoFile(await this.clipFilePath(clipId));
+      await this.openClip(clipId);
     });
 
     ipcMain.handle("clips:copy", async (event, clipId: unknown): Promise<void> => {
       this.assertAppSender(event);
       await writeFileDropListToClipboard(await this.clipFilePath(clipId));
+      await this.markClipViewed(clipId);
     });
 
     ipcMain.handle("clips:show-in-folder", async (event, clipId: unknown): Promise<void> => {
       this.assertAppSender(event);
       shell.showItemInFolder(await this.clipFilePath(clipId));
+      await this.markClipViewed(clipId);
     });
 
     ipcMain.handle("clips:delete", async (event, clipId: unknown): Promise<void> => {

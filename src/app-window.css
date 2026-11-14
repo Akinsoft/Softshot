@@ -47,8 +47,8 @@ body.sidebar-collapsed {
 }
 
 .app-sidebar {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 6px;
   min-width: 0;
   overflow: hidden;
@@ -120,7 +120,166 @@ body.sidebar-collapsed {
 .nav-footer {
   display: grid;
   gap: 8px;
-  margin-top: auto;
+}
+
+.recent-clips {
+  display: grid;
+  grid-template-rows: auto 0fr;
+  align-self: end;
+  max-height: 100%;
+  min-height: 0;
+  margin: 0 -4px;
+  border-top: 1px solid var(--ui-border);
+  padding-top: 6px;
+  transition: grid-template-rows 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.recent-clips.expanded {
+  grid-template-rows: auto 1fr;
+}
+
+.sidebar-collapsed .recent-clips {
+  visibility: hidden;
+}
+
+.recent-clips-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: var(--ui-radius);
+  background: transparent;
+  color: var(--ui-text-faint);
+  cursor: pointer;
+  font: 600 11px/1 var(--ui-font);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.recent-clips-toggle:hover {
+  background: var(--ui-hover);
+  color: var(--ui-text-muted);
+}
+
+.recent-clips-toggle:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: -2px;
+}
+
+.recent-clips-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  transition: rotate 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.recent-clips.expanded .recent-clips-chevron {
+  rotate: 180deg;
+}
+
+.recent-clips-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.recent-clips:not(.expanded) .recent-clips-body {
+  visibility: hidden;
+  transition: visibility 0s 220ms;
+}
+
+.recent-clips-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding-top: 4px;
+}
+
+.recent-clips-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-clips-list:empty {
+  display: none;
+}
+
+.recent-clip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: var(--ui-radius);
+  background: transparent;
+  color: var(--ui-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 120ms ease;
+}
+
+.recent-clip:hover {
+  background: var(--ui-hover);
+}
+
+.recent-clip:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: -2px;
+}
+
+.recent-clip-thumbnail {
+  width: 44px;
+  height: 25px;
+  flex: 0 0 auto;
+  border-radius: var(--ui-radius-small);
+  background: #0d0e10;
+  object-fit: cover;
+}
+
+.recent-clip-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recent-clip-title,
+.recent-clip-subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-clip-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.recent-clip-subtitle {
+  color: var(--ui-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recent-clips-empty {
+  margin: 0;
+  padding: 4px 10px 8px;
+  color: var(--ui-text-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.recent-clips-empty[hidden] {
+  display: none;
 }
 
 .nav-item.update-button {
@@ -180,6 +339,25 @@ svg circle {
 }
 
 .app-page[hidden] {
+  display: none;
+}
+
+.app-page.clips-page {
+  width: 100%;
+}
+
+.app-content:has(> .editor-page:not([hidden])) {
+  overflow: hidden;
+}
+
+.app-page.editor-page {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+}
+
+.app-page.editor-page[hidden] {
   display: none;
 }
 
@@ -708,11 +886,25 @@ svg circle {
   outline-offset: -2px;
 }
 
-.clip-thumbnail {
+.clip-thumbnail,
+.clip-preview {
   width: 100%;
   height: 100%;
   object-fit: cover;
   transition: scale 220ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.clip-preview {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  scale: 1.03;
+  transition: opacity 160ms ease;
+}
+
+.clip-preview.playing {
+  opacity: 1;
 }
 
 .clip-card:hover .clip-thumbnail {
@@ -730,38 +922,6 @@ svg circle {
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-}
-
-.clip-edit-hint {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgba(0, 0, 0, 0.36);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-
-.clip-edit-hint span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: var(--ui-radius);
-  background: rgba(23, 24, 27, 0.86);
-}
-
-.clip-edit-hint svg {
-  width: 14px;
-  height: 14px;
-}
-
-.clip-open:hover .clip-edit-hint,
-.clip-open:focus-visible .clip-edit-hint {
-  opacity: 1;
 }
 
 .clip-meta {
@@ -925,7 +1085,10 @@ svg circle {
   }
 
   body,
-  .clip-thumbnail {
+  .clip-thumbnail,
+  .clip-preview,
+  .recent-clips,
+  .recent-clips-chevron {
     transition: none;
   }
 }

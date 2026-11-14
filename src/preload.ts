@@ -35,6 +35,7 @@ const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
 const appUpdateReadyEventChannel = "app:update-ready";
+const editorOpenedEventChannel = "editor:opened";
 const clipsStatusChangedEventChannel = "clips:status-changed";
 const clipsLibraryChangedEventChannel = "clips:library-changed";
 const clipAudioSnapshotRequestChannel = "clips:audio-snapshot-request";
@@ -81,25 +82,32 @@ const api: SoftshotApi = {
       capturePipeline,
       audioTracks
     ) as Promise<void>,
-  getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap>,
-  getEditorVideoFileSize: async () => ipcRenderer.invoke("editor:get-video-file-size") as Promise<number>,
-  readEditorVideoFile: async (start: number, end: number) =>
-    ipcRenderer.invoke("editor:read-video-file", start, end) as Promise<Uint8Array>,
-  getEditorAudioFileSize: async (kind: AudioSourceKind) =>
-    ipcRenderer.invoke("editor:get-audio-file-size", kind) as Promise<number>,
-  readEditorAudioFile: async (kind: AudioSourceKind, start: number, end: number) =>
-    ipcRenderer.invoke("editor:read-audio-file", kind, start, end) as Promise<Uint8Array>,
-  chooseEditorVideoSavePath: async () => ipcRenderer.invoke("editor:choose-save-path") as Promise<SaveDialogResult>,
-  chooseEditorExportPath: async (fileExtension: OutputFileExtension, fileLabel: string) =>
-    ipcRenderer.invoke("editor:choose-export-path", fileExtension, fileLabel) as Promise<SaveDialogResult>,
-  completeEditorOutputFile: async (recordingId: string, fileExtension: OutputFileExtension) =>
-    ipcRenderer.invoke("editor:complete-output-file", recordingId, fileExtension) as Promise<CompletedOutputFile>,
-  trimEditorVideoEnd: async (endSeconds: number) =>
-    ipcRenderer.invoke("editor:trim-video-end", endSeconds) as Promise<PreparedVideoFile>,
-  savePreparedEditorVideo: async (preparedFilePath: string, targetFilePath: string) =>
-    ipcRenderer.invoke("editor:save-prepared-video", preparedFilePath, targetFilePath) as Promise<SaveResult>,
-  copyPreparedEditorVideo: async (filePath: string) => ipcRenderer.invoke("editor:copy-prepared-video", filePath) as Promise<void>,
-  closeEditor: async () => ipcRenderer.invoke("editor:close") as Promise<void>,
+  getEditorBootstrap: async () => ipcRenderer.invoke("editor:get-bootstrap") as Promise<EditorBootstrap | null>,
+  getEditorVideoFileSize: async (sessionId: string) =>
+    ipcRenderer.invoke("editor:get-video-file-size", sessionId) as Promise<number>,
+  readEditorVideoFile: async (sessionId: string, start: number, end: number) =>
+    ipcRenderer.invoke("editor:read-video-file", sessionId, start, end) as Promise<Uint8Array>,
+  getEditorAudioFileSize: async (sessionId: string, kind: AudioSourceKind) =>
+    ipcRenderer.invoke("editor:get-audio-file-size", sessionId, kind) as Promise<number>,
+  readEditorAudioFile: async (sessionId: string, kind: AudioSourceKind, start: number, end: number) =>
+    ipcRenderer.invoke("editor:read-audio-file", sessionId, kind, start, end) as Promise<Uint8Array>,
+  chooseEditorVideoSavePath: async (sessionId: string) =>
+    ipcRenderer.invoke("editor:choose-save-path", sessionId) as Promise<SaveDialogResult>,
+  chooseEditorExportPath: async (sessionId: string, fileExtension: OutputFileExtension, fileLabel: string) =>
+    ipcRenderer.invoke("editor:choose-export-path", sessionId, fileExtension, fileLabel) as Promise<SaveDialogResult>,
+  completeEditorOutputFile: async (sessionId: string, recordingId: string, fileExtension: OutputFileExtension) =>
+    ipcRenderer.invoke("editor:complete-output-file", sessionId, recordingId, fileExtension) as Promise<CompletedOutputFile>,
+  trimEditorVideoEnd: async (sessionId: string, endSeconds: number) =>
+    ipcRenderer.invoke("editor:trim-video-end", sessionId, endSeconds) as Promise<PreparedVideoFile>,
+  savePreparedEditorVideo: async (sessionId: string, preparedFilePath: string, targetFilePath: string) =>
+    ipcRenderer.invoke("editor:save-prepared-video", sessionId, preparedFilePath, targetFilePath) as Promise<SaveResult>,
+  copyPreparedEditorVideo: async (sessionId: string, filePath: string) =>
+    ipcRenderer.invoke("editor:copy-prepared-video", sessionId, filePath) as Promise<void>,
+  setEditorUnsavedEdits: async (sessionId: string, hasUnsavedEdits: boolean) =>
+    ipcRenderer.invoke("editor:set-unsaved-edits", sessionId, hasUnsavedEdits) as Promise<void>,
+  confirmCloseEditor: async (sessionId: string) => ipcRenderer.invoke("editor:confirm-close", sessionId) as Promise<boolean>,
+  closeEditor: async (sessionId: string) => ipcRenderer.invoke("editor:close", sessionId) as Promise<void>,
+  onEditorOpened: (handler: () => void) => subscribe(editorOpenedEventChannel, handler),
   readyToShow: async () => ipcRenderer.invoke("overlay:ready-to-show") as Promise<void>,
   useSystemAudioFallback: async () => ipcRenderer.invoke("capture:use-system-audio-fallback") as Promise<boolean>,
   selectCaptureDisplay: async (displayId: number) =>

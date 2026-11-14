@@ -35,6 +35,7 @@ const defaultExportPresetId = null;
 const defaultMicrophoneDeviceId = null;
 const isSystemAudioEnabledByDefault = true;
 const isSidebarCollapsedByDefault = false;
+const areRecentClipsExpandedByDefault = true;
 const exportPresetIdPattern = /^[a-z\d-]{1,40}$/u;
 const clipSettingKeys = new Set([
   "directory",
@@ -60,6 +61,7 @@ function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSetting
     exportPresetId: defaultExportPresetId,
     launchAtStartup: isLaunchAtStartupEnabled,
     microphoneDeviceId: defaultMicrophoneDeviceId,
+    recentClipsExpanded: areRecentClipsExpandedByDefault,
     sidebarCollapsed: isSidebarCollapsedByDefault,
     systemAudioEnabled: isSystemAudioEnabledByDefault
   };
@@ -191,6 +193,7 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
     exportPresetId: exportPresetIdFromJson(value),
     launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
     microphoneDeviceId: microphoneDeviceIdFromJson(value),
+    recentClipsExpanded: areRecentClipsExpandedFromJson(value),
     sidebarCollapsed: isSidebarCollapsedFromJson(value),
     systemAudioEnabled: isSystemAudioEnabledFromJson(value)
   };
@@ -365,6 +368,14 @@ function microphoneDeviceIdFromJson(value: Record<string, unknown>): string | nu
   }
 
   return validateMicrophoneDeviceId(value.microphoneDeviceId);
+}
+
+function areRecentClipsExpandedFromJson(value: Record<string, unknown>): boolean {
+  if (!("recentClipsExpanded" in value)) {
+    return areRecentClipsExpandedByDefault;
+  }
+
+  return isTrueSetting(value.recentClipsExpanded, "Settings recentClipsExpanded");
 }
 
 function isSidebarCollapsedFromJson(value: Record<string, unknown>): boolean {

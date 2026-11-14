@@ -1,8 +1,11 @@
 import { CapturePage } from "./app-window-capture.js";
 import { ClipLibrary } from "./app-window-clip-library.js";
 import { ClipSettingsSection } from "./app-window-clip-settings.js";
+import { ClipStore } from "./app-window-clip-store.js";
 import { ClipsPage } from "./app-window-clips.js";
 import { type AppWindowContext, runWithErrorToast } from "./app-window-controls.js";
+import { EditorView } from "./app-window-editor.js";
+import { RecentClips } from "./app-window-recent-clips.js";
 import { SettingsPage } from "./app-window-settings.js";
 import { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { AppSidebar } from "./app-window-sidebar.js";
@@ -20,9 +23,14 @@ const defaultPage: AppPage = "clips";
 const pageQueryName = "page";
 
 class AppWindowController implements AppWindowContext {
+  private readonly clipStore = new ClipStore((): void => {
+    this.clipLibrary.renderClips();
+    this.recentClips.renderClips();
+  });
+
   private readonly capturePage = new CapturePage(this);
 
-  private readonly clipLibrary = new ClipLibrary(this);
+  private readonly clipLibrary = new ClipLibrary(this, this.clipStore);
 
   private readonly clipSettings = new ClipSettingsSection(this);
 
@@ -30,13 +38,29 @@ class AppWindowController implements AppWindowContext {
 
   private readonly content = getRequiredElement("app-content", HTMLElement);
 
+  private currentPage: AppPage = defaultPage;
+
   private currentSettings: AppSettings | null = null;
 
   private currentShortcutLabels: ShortcutLabels | null = null;
 
   private devices: MediaDeviceInfo[] = [];
 
+  private readonly editorView = new EditorView({
+    backRequested: (): void => {
+      this.navigate(this.currentPage);
+    },
+    editorClosed: (): void => {
+      this.showPage(this.currentPage);
+    },
+    editorShown: (): void => {
+      this.showEditorPage();
+    }
+  });
+
   private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
+
+  private readonly recentClips = new RecentClips(this, this.clipStore);
 
   private readonly settingsPage = new SettingsPage(this);
 
@@ -55,6 +79,7 @@ class AppWindowController implements AppWindowContext {
       this.capturePage,
       this.clipsPage,
       this.clipLibrary,
+      this.recentClips,
       this.settingsPage,
       this.clipSettings
     ];
@@ -63,20 +88,40 @@ class AppWindowController implements AppWindowContext {
     }
   }
 
-  private showPage(page: AppPage): void {
+  private showSection(visibleSection: HTMLElement, currentNavPage: AppPage | null): void {
     for (const section of document.querySelectorAll<HTMLElement>(".app-page")) {
-      section.hidden = section.dataset.page !== page;
+      section.hidden = section !== visibleSection;
     }
 
     for (const item of this.navItems) {
-      item.ariaCurrent = item.dataset.page === page ? "page" : null;
+      item.ariaCurrent = currentNavPage !== null && item.dataset.page === currentNavPage ? "page" : null;
     }
 
+    this.clipLibrary.stopPreview();
     this.content.scrollTop = 0;
+  }
+
+  private showPage(page: AppPage): void {
+    this.currentPage = page;
+    this.showSection(getRequiredElement(`${page}-page`, HTMLElement), page);
     if (page === "clips") {
       void runWithErrorToast(this, this.clipsPage.loadSourceOptions());
-      void this.clipLibrary.refresh();
+      void this.refreshClips();
     }
+  }
+
+  private showEditorPage(): void {
+    this.showSection(getRequiredElement("editor-page", HTMLElement), null);
+  }
+
+  private async openPage(page: AppPage): Promise<void> {
+    if (await this.editorView.close()) {
+      this.showPage(page);
+    }
+  }
+
+  private async refreshClips(): Promise<void> {
+    await runWithErrorToast(this, this.clipStore.refresh());
   }
 
   private showToast(message: string, isError: boolean): void {
@@ -109,7 +154,7 @@ class AppWindowController implements AppWindowContext {
       item.addEventListener("click", (): void => {
         const { page } = item.dataset;
         if (isAppPage(page)) {
-          this.showPage(page);
+          this.navigate(page);
         }
       });
     }
@@ -121,10 +166,10 @@ class AppWindowController implements AppWindowContext {
       this.clipsPage.setStatus(status);
     });
     api.onClipsLibraryChanged((): void => {
-      void this.clipLibrary.refresh();
+      void this.refreshClips();
     });
     api.onAppNavigate((page): void => {
-      this.showPage(page);
+      this.navigate(page);
     });
     navigator.mediaDevices.addEventListener(mediaDeviceChangeEventName, (): void => {
       void runWithErrorToast(this, this.refreshMicrophoneOptions());
@@ -141,7 +186,7 @@ class AppWindowController implements AppWindowContext {
   }
 
   navigate(page: AppPage): void {
-    this.showPage(page);
+    void runWithErrorToast(this, this.openPage(page));
   }
 
   settings(): AppSettings {
@@ -187,14 +232,22 @@ class AppWindowController implements AppWindowContext {
     this.capturePage.bind();
     this.clipsPage.bind();
     this.clipLibrary.bind();
+    this.recentClips.bind();
     this.clipSettings.bind();
     this.settingsPage.bind();
+    this.editorView.bind();
     this.bindEvents();
     this.renderPages();
     this.clipsPage.setStatus(await api.getClipsStatus());
     await this.sidebar.loadAppInfo();
     const requestedPage = new URLSearchParams(location.search).get(pageQueryName);
-    this.showPage(isAppPage(requestedPage) ? requestedPage : defaultPage);
+    const startPage = isAppPage(requestedPage) ? requestedPage : defaultPage;
+    this.showPage(startPage);
+    if (startPage !== "clips") {
+      void this.refreshClips();
+    }
+
+    await this.editorView.showCurrentSession();
     await api.appReadyToShow();
   }
 }

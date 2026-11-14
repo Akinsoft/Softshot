@@ -1,20 +1,13 @@
+import { clipDayLabel, clipTimeLabel, formatClipBytes, formatClipDuration } from "./app-window-clip-format.js";
+import { ClipHoverPreview } from "./app-window-clip-preview.js";
+import type { ClipStore } from "./app-window-clip-store.js";
 import { type AppWindowContext, type AppWindowPage, runWithErrorToast } from "./app-window-controls.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { AppSettings, ClipEntry } from "./shared.js";
 import { lastClipDurationLabel } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
-import { TaskQueue } from "./task-queue.js";
 
-const millisecondsPerDay = 86_400_000;
-const secondsPerMinute = 60;
-const secondsPadLength = 2;
-const bytesPerKilobyte = 1000;
-const bytesPerMegabyte = 1_000_000;
-const bytesPerGigabyte = 1_000_000_000;
 const svgNamespace = "http://www.w3.org/2000/svg";
-const dayFormatter = new Intl.DateTimeFormat([], { day: "numeric", month: "long", weekday: "long" });
-const yearDayFormatter = new Intl.DateTimeFormat([], { day: "numeric", month: "long", year: "numeric" });
-const timeFormatter = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
 
 interface ClipAction {
   className?: string;
@@ -24,8 +17,6 @@ interface ClipAction {
 }
 
 export class ClipLibrary implements AppWindowPage {
-  private clips: ClipEntry[] = [];
-
   private readonly emptyDetail = getRequiredElement("clip-library-empty-detail", HTMLParagraphElement);
 
   private readonly emptyState = getRequiredElement("clip-library-empty", HTMLDivElement);
@@ -34,15 +25,13 @@ export class ClipLibrary implements AppWindowPage {
 
   private readonly header = getRequiredElement("clip-library-header", HTMLDivElement);
 
-  private hasLoaded = false;
-
   private readonly openFolderButton = getRequiredElement("clip-library-open-folder", HTMLButtonElement);
 
-  private readonly refreshes = new TaskQueue();
+  private readonly preview = new ClipHoverPreview();
 
   private readonly summary = getRequiredElement("clip-library-summary", HTMLParagraphElement);
 
-  constructor(private readonly context: AppWindowContext) {}
+  constructor(private readonly context: AppWindowContext, private readonly store: ClipStore) {}
 
   private clipActions(): ClipAction[] {
     const api = getSoftshotApi();
@@ -74,57 +63,29 @@ export class ClipLibrary implements AppWindowPage {
     ];
   }
 
-  private renderClips(): void {
-    let totalBytes = 0;
-    for (const clip of this.clips) {
-      totalBytes += clip.sizeBytes;
-    }
-
-    const hasClips = this.clips.length > 0;
-    this.summary.textContent = `${clipCountLabel(this.clips.length)}, ${formatBytes(totalBytes)}`;
-    this.header.hidden = !hasClips;
-    this.emptyState.hidden = !this.hasLoaded || hasClips;
-    this.groups.replaceChildren(...groupClipsByDay(this.clips).map(({ clips, label }) => {
-      const group = document.createElement("section");
-      group.className = "clip-group";
-      const title = document.createElement("h2");
-      title.className = "clip-group-title";
-      title.textContent = label;
-      const grid = document.createElement("div");
-      grid.className = "clip-grid";
-      grid.append(...clips.map((clip) => this.clipCard(clip)));
-      group.append(title, grid);
-      return group;
-    }));
-  }
-
   private clipCard(clip: ClipEntry): HTMLElement {
     const card = document.createElement("article");
     card.className = "clip-card";
-    card.append(this.clipOpenButton(clip), this.clipMeta(clip));
+    const thumbnail = clipThumbnail(clip);
+    card.append(this.clipOpenButton(clip, thumbnail), this.clipMeta(clip));
+    card.addEventListener("pointerenter", (): void => {
+      this.preview.start(card, thumbnail, clip.videoUrl);
+    });
+    card.addEventListener("pointerleave", (): void => {
+      this.preview.stopFor(card);
+    });
     return card;
   }
 
-  private clipOpenButton(clip: ClipEntry): HTMLButtonElement {
+  private clipOpenButton(clip: ClipEntry, thumbnail: HTMLImageElement): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "clip-open";
     button.setAttribute("aria-label", `Edit ${clip.sourceName} clip`);
-    const thumbnail = document.createElement("img");
-    thumbnail.className = "clip-thumbnail";
-    thumbnail.src = clip.thumbnailUrl;
-    thumbnail.alt = "";
-    thumbnail.loading = "lazy";
-    thumbnail.draggable = false;
     const duration = document.createElement("span");
     duration.className = "clip-duration";
-    duration.textContent = formatDuration(clip.durationSeconds);
-    const hint = document.createElement("span");
-    hint.className = "clip-edit-hint";
-    const hintLabel = document.createElement("span");
-    hintLabel.append(svgIcon(["m4 20 4-1 11-11-3-3L5 16Z", "m14 6 3 3"]), "Edit");
-    hint.append(hintLabel);
-    button.append(thumbnail, duration, hint);
+    duration.textContent = formatClipDuration(clip.durationSeconds);
+    button.append(thumbnail, duration);
     button.addEventListener("click", (): void => {
       void runWithErrorToast(this.context, getSoftshotApi().openClip(clip.id));
     });
@@ -142,7 +103,7 @@ export class ClipLibrary implements AppWindowPage {
     title.title = clip.sourceName;
     const subtitle = document.createElement("span");
     subtitle.className = "clip-subtitle";
-    subtitle.textContent = `${timeFormatter.format(new Date(clip.createdAt))}, ${String(clip.height)}p, ${formatBytes(clip.sizeBytes)}`;
+    subtitle.textContent = `${clipTimeLabel(new Date(clip.createdAt))}, ${String(clip.height)}p, ${formatClipBytes(clip.sizeBytes)}`;
     text.append(title, subtitle);
     const actions = document.createElement("div");
     actions.className = "clip-actions";
@@ -164,21 +125,9 @@ export class ClipLibrary implements AppWindowPage {
     return button;
   }
 
-  private async loadClips(): Promise<void> {
-    this.clips = await getSoftshotApi().listClips();
-    this.hasLoaded = true;
-    this.renderClips();
-  }
-
   bind(): void {
     this.openFolderButton.addEventListener("click", (): void => {
       void runWithErrorToast(this.context, getSoftshotApi().openClipsDirectory());
-    });
-  }
-
-  async refresh(): Promise<void> {
-    await this.refreshes.run(async (): Promise<void> => {
-      await runWithErrorToast(this.context, this.loadClips());
     });
   }
 
@@ -190,12 +139,42 @@ export class ClipLibrary implements AppWindowPage {
       : ["Turn on Clips, then press", shortcutKeycaps, "to save what just happened."]);
     this.renderClips();
   }
+
+  renderClips(): void {
+    const clips = this.store.entries;
+    let totalBytes = 0;
+    for (const clip of clips) {
+      totalBytes += clip.sizeBytes;
+    }
+
+    const hasClips = clips.length > 0;
+    this.preview.stop();
+    this.summary.textContent = `${clipCountLabel(clips.length)}, ${formatClipBytes(totalBytes)}`;
+    this.header.hidden = !hasClips;
+    this.emptyState.hidden = !this.store.hasLoaded || hasClips;
+    this.groups.replaceChildren(...groupClipsByDay(clips).map(({ clips: dayClips, label }) => {
+      const group = document.createElement("section");
+      group.className = "clip-group";
+      const title = document.createElement("h2");
+      title.className = "clip-group-title";
+      title.textContent = label;
+      const grid = document.createElement("div");
+      grid.className = "clip-grid";
+      grid.append(...dayClips.map((clip) => this.clipCard(clip)));
+      group.append(title, grid);
+      return group;
+    }));
+  }
+
+  stopPreview(): void {
+    this.preview.stop();
+  }
 }
 
 function groupClipsByDay(clips: readonly ClipEntry[]): Array<{ clips: ClipEntry[]; label: string }> {
   const groups: Array<{ clips: ClipEntry[]; label: string }> = [];
   for (const clip of clips) {
-    const label = dayLabel(new Date(clip.createdAt));
+    const label = clipDayLabel(new Date(clip.createdAt));
     const group = groups.at(-1);
     if (group?.label === label) {
       group.clips.push(clip);
@@ -207,46 +186,18 @@ function groupClipsByDay(clips: readonly ClipEntry[]): Array<{ clips: ClipEntry[
   return groups;
 }
 
-function dayLabel(date: Date): string {
-  const today = startOfDay(new Date());
-  const day = startOfDay(date);
-  const daysAgo = Math.round((today - day) / millisecondsPerDay);
-  if (daysAgo === 0) {
-    return "Today";
-  }
-
-  if (daysAgo === 1) {
-    return "Yesterday";
-  }
-
-  return date.getFullYear() === new Date().getFullYear() ? dayFormatter.format(date) : yearDayFormatter.format(date);
-}
-
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+function clipThumbnail(clip: ClipEntry): HTMLImageElement {
+  const thumbnail = document.createElement("img");
+  thumbnail.className = "clip-thumbnail";
+  thumbnail.src = clip.thumbnailUrl;
+  thumbnail.alt = "";
+  thumbnail.loading = "lazy";
+  thumbnail.draggable = false;
+  return thumbnail;
 }
 
 function clipCountLabel(count: number): string {
   return count === 1 ? "1 clip" : `${String(count)} clips`;
-}
-
-function formatDuration(durationSeconds: number): string {
-  const totalSeconds = Math.max(1, Math.round(durationSeconds));
-  const minutes = Math.floor(totalSeconds / secondsPerMinute);
-  const seconds = totalSeconds % secondsPerMinute;
-  return `${String(minutes)}:${String(seconds).padStart(secondsPadLength, "0")}`;
-}
-
-function formatBytes(byteCount: number): string {
-  if (byteCount >= bytesPerGigabyte) {
-    return `${(byteCount / bytesPerGigabyte).toFixed(1)} GB`;
-  }
-
-  if (byteCount >= bytesPerMegabyte) {
-    return `${String(Math.round(byteCount / bytesPerMegabyte))} MB`;
-  }
-
-  return `${String(Math.max(1, Math.round(byteCount / bytesPerKilobyte)))} KB`;
 }
 
 function svgIcon(paths: readonly string[]): SVGSVGElement {

@@ -4,6 +4,7 @@ import { audioWaveformPeaks } from "./audio-waveform.js";
 import { type ExportAudioTrack, exportEdit, type ExportOptions, type TrimRange } from "./editor-export.js";
 import { ExportPanel } from "./editor-export-panel.js";
 import { type ExportPlan, type ExportSource, sourceExportPlan } from "./editor-export-settings.js";
+import { EditorSessionClient } from "./editor-session-client.js";
 import {
   captureVideoTimelineThumbnails,
   releaseTimelineThumbnailUrls,
@@ -38,10 +39,11 @@ import type {
   PreparedVideoFile
 } from "./shared.js";
 import { isAudioSourceKind, videoFileExtension, videoFpsOptions } from "./shared.js";
-import { getSoftshotApi, reportAsyncError, reportError } from "./softshot-api.js";
-import { setTooltipLabel, TooltipController } from "./ui-tooltip.js";
+import { reportError } from "./softshot-api.js";
+import { setTooltipLabel } from "./ui-tooltip.js";
 
 const defaultMimeType = "video/webm";
+const busyClassName = "busy";
 const audioLevelCssProperty = "--audio-level";
 const audioWaveformPeakCount = 16_384;
 const minimumTrimDurationSeconds = 0.05;
@@ -176,6 +178,12 @@ interface TimelineResize {
   snapTargetsPx: number[];
 }
 
+type RecordingEditorSource = Extract<EditorSource, { kind: "recording" }>;
+
+export interface VideoEditorHost {
+  requestClose(): void;
+}
+
 interface TimelineMove {
   grabOffsetPx: number;
   hasMoved: boolean;
@@ -189,22 +197,15 @@ interface TimelineMove {
   segmentId: number;
 }
 
-class VideoEditorApp {
-  private readonly closeButton = getRequiredElement("editor-close-button", HTMLButtonElement);
+export class VideoEditor {
+  private readonly backButton = getRequiredElement("editor-back-button", HTMLButtonElement);
   private readonly copyButton = getRequiredElement("editor-copy-button", HTMLButtonElement);
   private readonly cutButton = getRequiredElement("cut-button", HTMLButtonElement);
   private readonly exportButton = getRequiredElement("editor-export-button", HTMLButtonElement);
-  private readonly exportPanel = new ExportPanel({
-    exportFile: async (plan, options): Promise<CompletedOutputFile> =>
-      await this.exportOutputFile(plan, this.sourceRangesForExport(), options),
-    exportSource: (): ExportSource => this.exportSource(),
-    setBusy: (isBusy): void => {
-      this.setBusy(isBusy);
-    },
-    showStatus: (message): void => {
-      this.showStatus(message);
-    }
-  });
+  private readonly exportPanel: ExportPanel;
+  private readonly listeners = new AbortController();
+  private readonly session: EditorSessionClient;
+  private readonly titleText = getRequiredElement("editor-title", HTMLSpanElement);
   private readonly currentTimeText = getRequiredElement("current-time", HTMLSpanElement);
   private readonly audioTrackHeadersElement = getRequiredElement("audio-track-headers", HTMLDivElement);
   private readonly audioTracksElement = getRequiredElement("audio-tracks", HTMLElement);
@@ -230,7 +231,6 @@ class VideoEditorApp {
   private readonly timelineTrack = getRequiredElement("timeline-track", HTMLDivElement);
   private readonly timelineSegmentsElement = getRequiredElement("timeline-segments", HTMLDivElement);
   private readonly totalTimeText = getRequiredElement("total-time", HTMLSpanElement);
-  private readonly tooltips = new TooltipController(document.body);
   private readonly undoButton = getRequiredElement("undo-button", HTMLButtonElement);
   private readonly previewArea = getRequiredElement("preview-area", HTMLElement);
   private readonly videoLane = getRequiredElement("video-lane", HTMLDivElement);
@@ -256,7 +256,9 @@ class VideoEditorApp {
   private filmstripTileWidthPx = 0;
   private fps: number = videoFpsOptions.high;
   private isBusy = false;
-  private isClosing = false;
+  private isDisposed = false;
+  private hasReportedUnsavedEdits = false;
+  private savedEditKey: string | null = null;
   private mimeType = defaultMimeType;
   private playbackFrameHandle: number | null = null;
   private playheadSeconds = zeroSeconds;
@@ -281,6 +283,7 @@ class VideoEditorApp {
   private hasPendingThumbnailRequest = false;
   private thumbnailRequestHandle: ReturnType<typeof setTimeout> | null = null;
   private rulerFrameHandle: number | null = null;
+  private thumbnailCapture: Promise<void> | null = null;
   private autoScrollFrameHandle: number | null = null;
   private lastTimelinePointerClientX = 0;
   private readonly mutedAudioKinds = new Set<AudioSourceKind>();
@@ -334,13 +337,36 @@ class VideoEditorApp {
     } }]
   ]);
 
+  constructor(
+    private readonly root: HTMLElement,
+    private readonly bootstrap: EditorBootstrap,
+    private readonly host: VideoEditorHost
+  ) {
+    this.session = new EditorSessionClient(bootstrap.sessionId);
+    this.exportPanel = new ExportPanel(this.session, {
+      exportCompleted: (): void => {
+        this.markEditSaved(this.editKey());
+      },
+      exportFile: async (plan, options): Promise<CompletedOutputFile> =>
+        await this.exportOutputFile(plan, this.sourceRangesForExport(), options),
+      exportSource: (): ExportSource => this.exportSource(),
+      setBusy: (isBusy): void => {
+        this.setBusy(isBusy);
+      },
+      showStatus: (message): void => {
+        this.showStatus(message);
+      }
+    });
+  }
+
   private bindEvents(): void {
-    this.tooltips.bind();
     this.bindKeyboardEvents();
     this.bindControlEvents();
     this.timelineResizeObserver.observe(this.timelineTrack);
-    this.closeButton.addEventListener("click", (): void => {
-      this.runAsync(this.closeEditor(), "Could not close the editor.");
+    this.backButton.addEventListener("click", (): void => {
+      if (!this.isInteractionLocked) {
+        this.host.requestClose();
+      }
     });
     this.copyButton.addEventListener("click", (): void => {
       this.runAsync(this.copyVideo(), "Could not copy the recording.");
@@ -481,7 +507,7 @@ class VideoEditorApp {
       if (!event.repeat || command.allowRepeat) {
         command.run(event);
       }
-    }, { capture: true });
+    }, { capture: true, signal: this.listeners.signal });
   }
 
   private keyboardCommand(event: KeyboardEvent): KeyboardCommand | null {
@@ -670,7 +696,7 @@ class VideoEditorApp {
     this.videoLane.classList.toggle("track-hidden", !this.isVideoTrackVisible);
     this.videoTrackToggle.classList.toggle("off", !this.isVideoTrackVisible);
     setTooltipLabel(this.videoTrackToggle, label);
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.showStatus(this.isVideoTrackVisible ? "Video shown" : "Video hidden");
   }
 
@@ -821,7 +847,7 @@ class VideoEditorApp {
     }
 
     this.activeSegmentId = null;
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.syncTimeline();
     this.animateTimelineReflow(previousSegmentRects);
     this.seekTo(this.playheadSeconds);
@@ -835,19 +861,51 @@ class VideoEditorApp {
   }
 
   private runAsync(task: Promise<void>, message: string): void {
-    void reportAsyncError(task, message);
+    void task.catch(async (error: unknown): Promise<void> => {
+      await this.reportErrorUnlessDisposed(message, error);
+    });
   }
 
   private run(task: () => void, message: string): void {
     try {
       task();
     } catch (error) {
-      void reportError(message, error);
+      void this.reportErrorUnlessDisposed(message, error);
     }
   }
 
+  private async reportErrorUnlessDisposed(message: string, error: unknown): Promise<void> {
+    if (!this.isDisposed) {
+      await reportError(message, error);
+    }
+  }
+
+  private invalidatePreparedVideo(): void {
+    this.preparedVideo = null;
+    this.syncUnsavedEdits();
+  }
+
+  private markEditSaved(editKey: string): void {
+    this.savedEditKey = editKey;
+    this.syncUnsavedEdits();
+  }
+
+  private syncUnsavedEdits(): void {
+    if (this.savedEditKey === null || this.isDisposed) {
+      return;
+    }
+
+    const hasUnsavedEdits = this.editKey() !== this.savedEditKey;
+    if (hasUnsavedEdits === this.hasReportedUnsavedEdits) {
+      return;
+    }
+
+    this.hasReportedUnsavedEdits = hasUnsavedEdits;
+    this.runAsync(this.session.setUnsavedEdits(hasUnsavedEdits), "Could not track unsaved edits.");
+  }
+
   private get isInteractionLocked(): boolean {
-    return this.isBusy || this.isClosing
+    return this.isBusy || this.isDisposed
       || this.activeTimelineMove !== null
       || this.activeTimelineResize !== null
       || this.activeTimelinePointerId !== noPointerId;
@@ -857,29 +915,45 @@ class VideoEditorApp {
     return this.timelineTool === "hand" && this.timelineSegments.length > 1;
   }
 
-  private async closeEditor(): Promise<void> {
-    if (this.isInteractionLocked) {
-      return;
+  private cancelScheduledWork(): void {
+    this.stopTimelineAutoScroll();
+    if (this.playbackFrameHandle !== null) {
+      cancelAnimationFrame(this.playbackFrameHandle);
+      this.playbackFrameHandle = null;
     }
 
-    this.isClosing = true;
-    this.timelineResizeObserver.disconnect();
-    this.stopTimelineAutoScroll();
+    if (this.rulerFrameHandle !== null) {
+      cancelAnimationFrame(this.rulerFrameHandle);
+      this.rulerFrameHandle = null;
+    }
+
     if (this.thumbnailRequestHandle !== null) {
       clearTimeout(this.thumbnailRequestHandle);
       this.thumbnailRequestHandle = null;
     }
 
-    this.releaseTimelineThumbnails();
+    if (this.statusHandle !== null) {
+      clearTimeout(this.statusHandle);
+      this.statusHandle = null;
+    }
+  }
+
+  private async dispose(): Promise<void> {
+    if (this.isDisposed) {
+      return;
+    }
+
+    this.isDisposed = true;
+    this.listeners.abort();
+    this.timelineResizeObserver.disconnect();
+    this.cancelScheduledWork();
+    this.exportPanel.close();
+    releaseMediaElement(this.video);
     try {
-      try {
-        await this.disposeAudioPreview();
-      } finally {
-        this.stopPlaybackFrameSync();
-        await getSoftshotApi().closeEditor();
-      }
+      await this.disposeAudioPreview();
     } finally {
-      this.isClosing = false;
+      await Promise.allSettled([this.thumbnailCapture]);
+      this.releaseTimelineThumbnails();
     }
   }
 
@@ -1042,7 +1116,7 @@ class VideoEditorApp {
     this.nextSegmentId += 1;
     this.selectedSegmentId = split.rightSegmentId;
     this.activeSegmentId = timelineLocationAt(this.timelineSegments, this.playheadSeconds).segment.id;
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.syncTimeline();
     this.syncPlaybackTime();
     this.showStatus("Cut added");
@@ -1074,7 +1148,7 @@ class VideoEditorApp {
     const nextSelectedIndex = Math.min(selectedSegmentIndex, this.timelineSegments.length - 1);
     this.selectedSegmentId = this.timelineSegments[nextSelectedIndex]?.id ?? null;
     this.activeSegmentId = null;
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.syncTimeline();
     this.animateTimelineDeletion(previousSegmentRects, removingClips);
     this.seekTo(this.playheadSeconds);
@@ -1089,7 +1163,8 @@ class VideoEditorApp {
     this.setBusy(true);
     try {
       const preparedVideo = await this.preparedVideoForCurrentEdit();
-      await getSoftshotApi().copyPreparedEditorVideo(preparedVideo.filePath);
+      await this.session.copyPreparedVideo(preparedVideo.filePath);
+      this.markEditSaved(preparedVideo.key);
       this.showStatus("Copied");
     } finally {
       this.setBusy(false);
@@ -1111,7 +1186,7 @@ class VideoEditorApp {
       }
 
       if (!this.hasEmbeddedAudio()) {
-        const trimmedFile = await getSoftshotApi().trimEditorVideoEnd(singleSourceRange.end);
+        const trimmedFile = await this.session.trimVideoEnd(singleSourceRange.end);
         return preparedVideoFromFile(key, trimmedFile);
       }
     }
@@ -1153,7 +1228,7 @@ class VideoEditorApp {
     }
 
     this.audioVolumesByKind.set(kind, volume);
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.syncAudioMuteStates();
     this.syncAudioVolumeControl(kind);
     this.renderAudioClips();
@@ -1299,13 +1374,14 @@ class VideoEditorApp {
     options: ExportOptions = {}
   ): Promise<CompletedOutputFile> {
     const exportedFile = await exportEdit(
+      this.session,
       plan,
       sourceRanges,
       this.audioTracksForExport(),
       this.isVideoTrackVisible,
       options
     );
-    return await getSoftshotApi().completeEditorOutputFile(exportedFile.recordingId, exportedFile.fileExtension);
+    return await this.session.completeOutputFile(exportedFile.recordingId, exportedFile.fileExtension);
   }
 
   private exportSource(): ExportSource {
@@ -1345,15 +1421,18 @@ class VideoEditorApp {
     this.video.src = this.sourceUrl;
     this.createAudioPreviewElements();
     this.renderAudioTracks();
-    this.showStatus(editorSourceStatus(bootstrap.source));
+    this.titleText.textContent = editorSourceTitle(bootstrap.source);
+    if (bootstrap.source.kind === "recording") {
+      this.showStatus(recordingCaptureStatus(bootstrap.source));
+    }
   }
 
   private async loadAudioWaveforms(): Promise<void> {
     const waveforms = await Promise.all(this.audioTracks.map(async (audioTrack) => ({
       kind: audioTrack.kind,
-      peaks: await audioWaveformPeaks(audioTrack.kind, this.durationSeconds, audioWaveformPeakCount)
+      peaks: await audioWaveformPeaks(this.session.audioSource(audioTrack.kind), this.durationSeconds, audioWaveformPeakCount)
     })));
-    if (this.isClosing) {
+    if (this.isDisposed) {
       return;
     }
 
@@ -1367,6 +1446,12 @@ class VideoEditorApp {
   }
 
   private async loadTimelineThumbnails(): Promise<void> {
+    const capture = this.captureTimelineThumbnails();
+    this.thumbnailCapture = capture;
+    await capture;
+  }
+
+  private async captureTimelineThumbnails(): Promise<void> {
     if (this.isCapturingThumbnails) {
       this.hasPendingThumbnailRequest = true;
       return;
@@ -1393,12 +1478,18 @@ class VideoEditorApp {
     this.isCapturingThumbnails = true;
     let thumbnails: TimelineThumbnail[];
     try {
-      thumbnails = await captureVideoTimelineThumbnails(this.sourceUrl, this.durationSeconds, thumbnailCount, imageWidth);
+      thumbnails = await captureVideoTimelineThumbnails(
+        this.sourceUrl,
+        this.durationSeconds,
+        thumbnailCount,
+        imageWidth,
+        this.listeners.signal
+      );
     } finally {
       this.isCapturingThumbnails = false;
     }
 
-    if (this.isClosing) {
+    if (this.isDisposed) {
       releaseTimelineThumbnailUrls(thumbnails);
       return;
     }
@@ -1565,13 +1656,14 @@ class VideoEditorApp {
 
     this.setBusy(true);
     try {
-      const result = await getSoftshotApi().chooseEditorVideoSavePath();
+      const result = await this.session.chooseVideoSavePath();
       if (!result.filePath) {
         return;
       }
 
       const preparedVideo = await this.preparedVideoForCurrentEdit();
-      await getSoftshotApi().savePreparedEditorVideo(preparedVideo.filePath, result.filePath);
+      await this.session.savePreparedVideo(preparedVideo.filePath, result.filePath);
+      this.markEditSaved(preparedVideo.key);
       this.showStatus("Saved");
     } finally {
       this.setBusy(false);
@@ -1590,14 +1682,14 @@ class VideoEditorApp {
 
   private setBusy(isBusy: boolean): void {
     this.isBusy = isBusy;
-    document.body.classList.toggle("busy", isBusy);
+    this.root.classList.toggle(busyClassName, isBusy);
     this.syncControlStates();
   }
 
   private syncControlStates(): void {
     const { isBusy } = this;
     const transportButtons = [
-      this.closeButton,
+      this.backButton,
       this.copyButton,
       this.cutButton,
       this.exportButton,
@@ -1648,8 +1740,7 @@ class VideoEditorApp {
   private async disposeAudioPreview(): Promise<void> {
     this.stopAudioMeterLoop();
     for (const audio of this.audioElementsByKind.values()) {
-      audio.pause();
-      audio.removeAttribute("src");
+      releaseMediaElement(audio);
     }
 
     for (const meter of this.audioMetersByKind.values()) {
@@ -2196,7 +2287,7 @@ class VideoEditorApp {
       const previousSegmentRects = this.timelineSegmentRects();
       this.timelineSegments = segments;
       move.hasMoved = true;
-      this.preparedVideo = null;
+      this.invalidatePreparedVideo();
       this.syncTimeline();
       this.animateTimelineReflow(previousSegmentRects, move.segmentId);
       this.seekTo(this.timelineTimeForSegmentSourceTime(move.playbackSegmentId, move.playbackSourceTime));
@@ -2311,7 +2402,7 @@ class VideoEditorApp {
       this.hideSnapIndicator();
     }
     this.timelineSegments = segments;
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
     this.syncTimeline();
     this.seekTo(this.timelineTimeForSegmentSourceTime(resize.playbackSegmentId, resize.playbackSourceTime));
   }
@@ -2359,7 +2450,7 @@ class VideoEditorApp {
     this.syncAudioMuteStates();
 
     this.renderAudioTracks();
-    this.preparedVideo = null;
+    this.invalidatePreparedVideo();
   }
 
   private syncAudioMuteStates(): void {
@@ -2370,43 +2461,62 @@ class VideoEditorApp {
     }
   }
 
+  private async loadEditor(): Promise<void> {
+    this.bindEvents();
+    this.loadRecording(this.bootstrap);
+    await Promise.all([
+      waitForMediaMetadata(this.video),
+      this.audioReady
+    ]);
+    if (this.video.videoWidth < 1 || this.video.videoHeight < 1) {
+      throw new Error("The recording does not contain a usable video track.");
+    }
+
+    if (Number.isFinite(this.video.duration) && this.video.duration > zeroSeconds) {
+      this.durationSeconds = this.video.duration;
+    }
+
+    this.timelineSegments = [{
+      id: initialSegmentId,
+      sourceEnd: this.durationSeconds,
+      sourceStart: zeroSeconds
+    }];
+    this.activeSegmentId = initialSegmentId;
+    this.selectedSegmentId = initialSegmentId;
+    this.savedEditKey = this.editKey();
+    this.syncTimeline();
+    this.renderTimelineRuler();
+    this.syncPlaybackTime();
+    this.runAsync(this.loadAudioWaveforms(), "Could not load audio waveforms.");
+    this.runAsync(this.loadTimelineThumbnails(), "Could not load timeline previews.");
+  }
+
+  get sessionId(): string {
+    return this.session.sessionId;
+  }
+
+  async close(): Promise<void> {
+    try {
+      await this.dispose();
+    } finally {
+      await this.session.close();
+    }
+  }
+
+  async confirmClose(): Promise<boolean> {
+    return await this.session.confirmClose();
+  }
+
   async initialize(): Promise<void> {
     try {
-      this.bindEvents();
-      const bootstrap = await getSoftshotApi().getEditorBootstrap();
-      this.loadRecording(bootstrap);
-      await Promise.all([
-        waitForMediaMetadata(this.video),
-        this.audioReady
-      ]);
-      if (this.video.videoWidth < 1 || this.video.videoHeight < 1) {
-        throw new Error("The recording does not contain a usable video track.");
-      }
-
-      if (Number.isFinite(this.video.duration) && this.video.duration > zeroSeconds) {
-        this.durationSeconds = this.video.duration;
-      }
-
-      this.timelineSegments = [{
-        id: initialSegmentId,
-        sourceEnd: this.durationSeconds,
-        sourceStart: zeroSeconds
-      }];
-      this.activeSegmentId = initialSegmentId;
-      this.selectedSegmentId = initialSegmentId;
-      this.syncTimeline();
-      this.renderTimelineRuler();
-      this.syncPlaybackTime();
-      this.runAsync(this.loadAudioWaveforms(), "Could not load audio waveforms.");
-      this.runAsync(this.loadTimelineThumbnails(), "Could not load timeline previews.");
+      await this.loadEditor();
     } catch (error) {
-      try {
-        await reportError("Could not open the editor.", error);
-      } finally {
-        await this.closeEditor();
+      if (!this.isDisposed) {
+        throw error;
       }
     }
   }
+
 }
 
 function preparedVideoFromFile(key: string, file: PreparedVideoFile): PreparedVideo {
@@ -2428,11 +2538,11 @@ function audioTrackLabel(kind: AudioSourceKind): string {
   return audioTrackLabels[kind];
 }
 
-function editorSourceStatus(source: EditorSource): string {
-  if (source.kind === "file") {
-    return source.fileName;
-  }
+function editorSourceTitle(source: EditorSource): string {
+  return source.kind === "file" ? source.fileName : "Recording";
+}
 
+function recordingCaptureStatus(source: RecordingEditorSource): string {
   const encoderLabel = source.encoder === "hardware" ? "Hardware encoded" : "Compatibility encoding";
   const pipelineLabel = source.capturePipeline === "direct" ? "Direct capture" : "Composited capture";
   return `${encoderLabel}, ${pipelineLabel}`;
@@ -2679,9 +2789,13 @@ function timelineSegmentIdFromString(value: string | undefined): number {
   return segmentId;
 }
 
+function releaseMediaElement(element: HTMLMediaElement): void {
+  element.pause();
+  element.removeAttribute("src");
+  element.load();
+}
+
 async function waitForAudioReady(audioReadyPromises: Array<Promise<void>>): Promise<void> {
   await Promise.all(audioReadyPromises);
 }
 
-const editorApp = new VideoEditorApp();
-await editorApp.initialize();

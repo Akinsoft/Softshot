@@ -41,7 +41,6 @@
       "src/app-window.html",
       "src/app-window.css",
       "src/clips-recorder.html",
-      "src/editor.html",
       "src/editor.css",
       "src/overlay.html",
       "src/shared-ui.css",

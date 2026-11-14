@@ -127,9 +127,11 @@ export interface ClipEntry {
   filePath: string;
   height: number;
   id: string;
+  lastViewedAt: string | null;
   sizeBytes: number;
   sourceName: string;
   thumbnailUrl: string;
+  videoUrl: string;
   width: number;
 }
 
@@ -176,6 +178,7 @@ export interface EditorBootstrap {
   durationSeconds: number;
   fps: number;
   mimeType: string;
+  sessionId: string;
   source: EditorSource;
   sourceFilePath: string;
   sourceUrl: string;
@@ -222,6 +225,7 @@ export interface AppSettings {
   exportPresetId: string | null;
   launchAtStartup: boolean;
   microphoneDeviceId: string | null;
+  recentClipsExpanded: boolean;
   sidebarCollapsed: boolean;
   systemAudioEnabled: boolean;
 }
@@ -232,6 +236,7 @@ export interface AppSettingsUpdate {
   exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;
+  recentClipsExpanded?: boolean;
   sidebarCollapsed?: boolean;
   systemAudioEnabled?: boolean;
 }
@@ -252,6 +257,7 @@ export type ShortcutRecordingEvent =
 type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
 type SettingsChangedEventHandler = (settings: AppSettings) => void;
 type AppNavigateHandler = (page: AppPage) => void;
+type EditorOpenedHandler = () => void;
 type AppUpdateReadyHandler = () => void;
 type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
 type ClipsLibraryChangedHandler = () => void;
@@ -286,18 +292,25 @@ export interface SoftshotApi {
     capturePipeline: CapturePipeline,
     audioTracks: RecordingAudioTrack[]
   ): Promise<void>;
-  getEditorBootstrap(): Promise<EditorBootstrap>;
-  getEditorVideoFileSize(): Promise<number>;
-  readEditorVideoFile(start: number, end: number): Promise<Uint8Array>;
-  getEditorAudioFileSize(kind: AudioSourceKind): Promise<number>;
-  readEditorAudioFile(kind: AudioSourceKind, start: number, end: number): Promise<Uint8Array>;
-  chooseEditorVideoSavePath(): Promise<SaveDialogResult>;
-  chooseEditorExportPath(fileExtension: OutputFileExtension, fileLabel: string): Promise<SaveDialogResult>;
-  completeEditorOutputFile(recordingId: string, fileExtension: OutputFileExtension): Promise<CompletedOutputFile>;
-  trimEditorVideoEnd(endSeconds: number): Promise<PreparedVideoFile>;
-  savePreparedEditorVideo(preparedFilePath: string, targetFilePath: string): Promise<SaveResult>;
-  copyPreparedEditorVideo(filePath: string): Promise<void>;
-  closeEditor(): Promise<void>;
+  getEditorBootstrap(): Promise<EditorBootstrap | null>;
+  getEditorVideoFileSize(sessionId: string): Promise<number>;
+  readEditorVideoFile(sessionId: string, start: number, end: number): Promise<Uint8Array>;
+  getEditorAudioFileSize(sessionId: string, kind: AudioSourceKind): Promise<number>;
+  readEditorAudioFile(sessionId: string, kind: AudioSourceKind, start: number, end: number): Promise<Uint8Array>;
+  chooseEditorVideoSavePath(sessionId: string): Promise<SaveDialogResult>;
+  chooseEditorExportPath(sessionId: string, fileExtension: OutputFileExtension, fileLabel: string): Promise<SaveDialogResult>;
+  completeEditorOutputFile(
+    sessionId: string,
+    recordingId: string,
+    fileExtension: OutputFileExtension
+  ): Promise<CompletedOutputFile>;
+  trimEditorVideoEnd(sessionId: string, endSeconds: number): Promise<PreparedVideoFile>;
+  savePreparedEditorVideo(sessionId: string, preparedFilePath: string, targetFilePath: string): Promise<SaveResult>;
+  copyPreparedEditorVideo(sessionId: string, filePath: string): Promise<void>;
+  setEditorUnsavedEdits(sessionId: string, hasUnsavedEdits: boolean): Promise<void>;
+  confirmCloseEditor(sessionId: string): Promise<boolean>;
+  closeEditor(sessionId: string): Promise<void>;
+  onEditorOpened(handler: EditorOpenedHandler): () => void;
   readyToShow(): Promise<void>;
   selectCaptureDisplay(displayId: number): Promise<void>;
   useSystemAudioFallback(): Promise<boolean>;

@@ -28,6 +28,7 @@ import {
   formatFps,
   resolveExportPlan,
   settingsForFormat} from "./editor-export-settings.js";
+import type { EditorSessionClient } from "./editor-session-client.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { CompletedOutputFile } from "./shared.js";
 import { getSoftshotApi, reportAsyncError } from "./softshot-api.js";
@@ -57,6 +58,7 @@ const presetGroupIcons: Record<ExportPresetGroup, string> = {
 };
 
 interface ExportPanelHost {
+  exportCompleted(): void;
   exportFile(plan: ExportPlan, options: ExportOptions): Promise<CompletedOutputFile>;
   exportSource(): ExportSource;
   setBusy(isBusy: boolean): void;
@@ -116,7 +118,7 @@ export class ExportPanel {
   private source: ExportSource | null = null;
   private readonly unsupportedCodecs = new Set<ExportVideoCodec>();
 
-  constructor(private readonly host: ExportPanelHost) {}
+  constructor(private readonly session: EditorSessionClient, private readonly host: ExportPanelHost) {}
 
   private get isExporting(): boolean {
     return this.abortController !== null;
@@ -410,7 +412,7 @@ export class ExportPanel {
     const destination = this.destination();
     let targetFilePath: string | null = null;
     if (destination === "file") {
-      const result = await api.chooseEditorExportPath(plan.format, basePreset.fileLabel);
+      const result = await this.session.chooseExportPath(plan.format, basePreset.fileLabel);
       if (!result.filePath) {
         return;
       }
@@ -434,8 +436,9 @@ export class ExportPanel {
         signal: abortController.signal
       });
       await (targetFilePath === null
-        ? api.copyPreparedEditorVideo(file.filePath)
-        : api.savePreparedEditorVideo(file.filePath, targetFilePath));
+        ? this.session.copyPreparedVideo(file.filePath)
+        : this.session.savePreparedVideo(file.filePath, targetFilePath));
+      this.host.exportCompleted();
       this.finishExport(file, settings, destination);
     } catch (error) {
       if (abortController.signal.aborted) {
@@ -547,6 +550,12 @@ export class ExportPanel {
         includeAudio: bitrate !== null
       }));
     });
+  }
+
+  close(): void {
+    if (this.isOpen) {
+      this.dialog.close();
+    }
   }
 
   async open(): Promise<void> {

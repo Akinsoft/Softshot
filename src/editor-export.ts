@@ -26,10 +26,10 @@ import { audioMixGain, recordingAudioChannelCount, recordingAudioSampleRate } fr
 import type { EncodedVideoPlan, ExportAudioPlan, ExportPlan, ExportVideoCodec, GifPlan } from "./editor-export-settings.js";
 import { exportVideoCodecLabel } from "./editor-export-settings.js";
 import { encodeGifRanges } from "./editor-gif-export.js";
+import type { EditorByteSource, EditorSessionClient } from "./editor-session-client.js";
 import { VideoUpscaler } from "./editor-upscaler.js";
 import { RecordingFileWriter } from "./recording-file-writer.js";
 import type { AudioSourceKind, OutputFileExtension } from "./shared.js";
-import { getSoftshotApi } from "./softshot-api.js";
 
 const audioRenderChunkSeconds = 5;
 const bitsPerKilobit = 1000;
@@ -74,11 +74,6 @@ interface VideoEncoderSize {
 interface VideoEncoderCheck extends VideoEncoderSize {
   bitrate: number;
   framerate: number;
-}
-
-interface EditorByteSource {
-  getSize(): Promise<number>;
-  read(start: number, end: number): Promise<Uint8Array>;
 }
 
 interface LoadedAudioInput {
@@ -133,6 +128,7 @@ export class ExportProgress {
 }
 
 export async function exportEdit(
+  session: EditorSessionClient,
   plan: ExportPlan,
   trimRanges: readonly TrimRange[],
   audioTracks: readonly ExportAudioTrack[],
@@ -142,16 +138,16 @@ export async function exportEdit(
   validateTrimRanges(trimRanges);
   const totalSeconds = trimRanges.reduce((total, trimRange) => total + trimRange.end - trimRange.start, 0);
   if (plan.kind === "gif") {
-    return await exportGif(plan.gif, trimRanges, totalSeconds, options);
+    return await exportGif(session, plan.gif, trimRanges, totalSeconds, options);
   }
 
   if (plan.kind === "audio") {
-    return await exportAudioOnly(plan.format, plan.audio, trimRanges, audioTracks, totalSeconds, options);
+    return await exportAudioOnly(session, plan.format, plan.audio, trimRanges, audioTracks, totalSeconds, options);
   }
 
-  const videoInput = await openVideoInput();
+  const videoInput = await openVideoInput(session);
   try {
-    const audioInputs = plan.audio ? await openAudioInputs(audioTracks) : [];
+    const audioInputs = plan.audio ? await openAudioInputs(session, audioTracks) : [];
     try {
       return await exportVideo({
         audioInputs,
@@ -270,6 +266,7 @@ async function encodeVideoExport(
 }
 
 async function exportAudioOnly(
+  session: EditorSessionClient,
   format: "m4a" | "wav",
   audioPlan: ExportAudioPlan,
   trimRanges: readonly TrimRange[],
@@ -281,7 +278,7 @@ async function exportAudioOnly(
     throw new Error("There is no sound to export.");
   }
 
-  const audioInputs = await openAudioInputs(audioTracks);
+  const audioInputs = await openAudioInputs(session, audioTracks);
   try {
     await assertAudioEncodingSupport(audioPlan);
     return await writeExportFile(format, async (writer) => {
@@ -304,12 +301,13 @@ async function exportAudioOnly(
 }
 
 async function exportGif(
+  session: EditorSessionClient,
   gifPlan: GifPlan,
   trimRanges: readonly TrimRange[],
   totalSeconds: number,
   options: ExportOptions
 ): Promise<ExportedFile> {
-  const videoInput = await openVideoInput();
+  const videoInput = await openVideoInput(session);
   try {
     return await writeExportFile("gif", async (writer) => {
       const streamWriter = writer.writableStream().getWriter();
@@ -405,8 +403,8 @@ async function writeBufferedOutput(writer: RecordingFileWriter, target: BufferTa
   await streamWriter.close();
 }
 
-async function openVideoInput(): Promise<LoadedVideoInput> {
-  const input = createVideoInput();
+async function openVideoInput(session: EditorSessionClient): Promise<LoadedVideoInput> {
+  const input = createEditorInput(session.videoSource());
   try {
     return { input, track: await loadVideoTrack(input) };
   } catch (error) {
@@ -415,9 +413,12 @@ async function openVideoInput(): Promise<LoadedVideoInput> {
   }
 }
 
-async function openAudioInputs(audioTracks: readonly ExportAudioTrack[]): Promise<LoadedAudioInput[]> {
+async function openAudioInputs(
+  session: EditorSessionClient,
+  audioTracks: readonly ExportAudioTrack[]
+): Promise<LoadedAudioInput[]> {
   const inputs = audioTracks.map((audioTrack) => ({
-    input: createAudioInput(audioTrack.kind),
+    input: createEditorInput(session.audioSource(audioTrack.kind)),
     volume: audioTrack.volume
   }));
   try {
@@ -441,22 +442,6 @@ function createEditorInput(source: EditorByteSource): Input {
   return new Input({
     formats: ALL_FORMATS,
     source: new CustomSource(source)
-  });
-}
-
-function createVideoInput(): Input {
-  const api = getSoftshotApi();
-  return createEditorInput({
-    getSize: async (): Promise<number> => await api.getEditorVideoFileSize(),
-    read: async (start, end): Promise<Uint8Array> => await api.readEditorVideoFile(start, end)
-  });
-}
-
-function createAudioInput(kind: AudioSourceKind): Input {
-  const api = getSoftshotApi();
-  return createEditorInput({
-    getSize: async (): Promise<number> => await api.getEditorAudioFileSize(kind),
-    read: async (start, end): Promise<Uint8Array> => await api.readEditorAudioFile(kind, start, end)
   });
 }
 
