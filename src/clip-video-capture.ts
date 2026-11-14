@@ -64,8 +64,6 @@ export class ClipVideoCapture {
 
   private readonly exitHandlers = new Set<ClipVideoExitHandler>();
 
-  private readonly firstVideoHandlers = new Set<() => void>();
-
   private exit: ClipVideoExit | null = null;
 
   private readonly fragmentListeners = new Set<() => void>();
@@ -73,8 +71,6 @@ export class ClipVideoCapture {
   private readonly retainedSeconds: number;
 
   private run: CaptureRun;
-
-  private hasReceivedVideo = false;
 
   private constructor(private readonly options: ClipVideoCaptureOptions) {
     this.retainedSeconds = options.durationSeconds + retainedExtraSeconds;
@@ -192,17 +188,9 @@ export class ClipVideoCapture {
       return;
     }
 
-    const isFirstVideo = run.fragments.length === 0 && !this.hasReceivedVideo;
     for (const fragment of fragments) {
       this.updateTimeline(fragment.endSeconds);
       run.fragments.push(fragment);
-    }
-
-    if (isFirstVideo) {
-      this.hasReceivedVideo = true;
-      for (const handler of this.firstVideoHandlers) {
-        handler();
-      }
     }
 
     const oldestKeptEndSeconds = (run.fragments.at(-1)?.endSeconds ?? 0) - this.retainedSeconds;
@@ -243,10 +231,6 @@ export class ClipVideoCapture {
     }
   }
 
-  onFirstVideo(handler: () => void): void {
-    this.firstVideoHandlers.add(handler);
-  }
-
   onExit(handler: ClipVideoExitHandler): void {
     this.exitHandlers.add(handler);
   }
@@ -255,7 +239,7 @@ export class ClipVideoCapture {
     await this.waitForFragmentEndingAfter(requestedAtEpochSeconds);
     const { run } = this;
     if (run.fragments.length === 0) {
-      throw new Error("Nothing has been recorded yet. If Clips is following an app, it starts recording once the app draws something.");
+      throw new Error("Nothing has been captured yet. Try again in a moment.");
     }
 
     return {

@@ -241,16 +241,22 @@ export class ClipsService {
         this.host.recorderClosed(webContentsId);
       },
       started: (): void => {
-        if (this.session !== session) {
-          return;
+        if (this.session === session) {
+          this.markRecording(sourceName);
         }
-
-        this.retryCount = 0;
-        this.setStatus("recording", sourceName);
       }
     });
     this.session = session;
-    this.setStatus("starting", sourceName);
+    if (session.isReady()) {
+      this.markRecording(sourceName);
+    } else {
+      this.setStatus("starting", sourceName);
+    }
+  }
+
+  private markRecording(sourceName: string): void {
+    this.retryCount = 0;
+    this.setStatus("recording", sourceName);
   }
 
   private async sessionOptions(

@@ -60,9 +60,7 @@ interface PendingAudioSnapshot {
 export class ClipCaptureSession {
   private hasStopped = false;
 
-  private isAudioReady = false;
-
-  private isVideoReady = false;
+  private isRecorderReady = false;
 
   private readonly pendingAudioSnapshots = new Map<string, PendingAudioSnapshot>();
 
@@ -81,22 +79,11 @@ export class ClipCaptureSession {
       target: options.target,
       width: options.width
     });
-    this.video.onFirstVideo((): void => {
-      this.isVideoReady = true;
-      this.reportStartedWhenReady();
-    });
     this.video.onExit((exit): void => {
       this.handleVideoExit(exit);
     });
-    this.isAudioReady = !this.hasAudio();
     if (this.hasAudio()) {
       this.openRecorder();
-    }
-  }
-
-  private reportStartedWhenReady(): void {
-    if (this.isAudioReady && this.isVideoReady && !this.hasStopped) {
-      this.events.started();
     }
   }
 
@@ -247,8 +234,16 @@ export class ClipCaptureSession {
   }
 
   handleRecorderStarted(): void {
-    this.isAudioReady = true;
-    this.reportStartedWhenReady();
+    if (this.isRecorderReady || this.hasStopped) {
+      return;
+    }
+
+    this.isRecorderReady = true;
+    this.events.started();
+  }
+
+  isReady(): boolean {
+    return this.isRecorderReady || !this.hasAudio();
   }
 
   hasAudio(): boolean {
