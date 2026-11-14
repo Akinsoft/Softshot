@@ -2,6 +2,7 @@ import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/pr
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { isMissingFileError } from "./async-errors";
 import type { ClipEntry, RecordingAudioSourceKind } from "./shared";
 import { TaskQueue } from "./task-queue";
 
@@ -252,10 +253,6 @@ function isPositiveNumber(value: unknown): boolean {
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function isSameFilePath(first: string, second: string): boolean {

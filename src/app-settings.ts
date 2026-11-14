@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { isMissingFileError } from "./async-errors";
 import { isTriggerKeyCode } from "./keyboard-keys";
 import type { AppSettings, ClipDurationSeconds, ClipQuality, ClipSettings, ClipSource, VideoFps } from "./shared";
 import { clipDurationOptionsSeconds, clipQualities, videoFpsOptions } from "./shared";
@@ -331,10 +332,6 @@ function exportPresetIdFromJson(value: Record<string, unknown>): string | null {
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 function isLaunchAtStartupFromJson(value: Record<string, unknown>, isLaunchAtStartupEnabled: boolean): boolean {

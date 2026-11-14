@@ -22,3 +22,7 @@ export function throwCollectedErrors(errors: readonly unknown[], message: string
     throw combinedError(message, errors);
   }
 }
+
+export function isMissingFileError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
