@@ -131,7 +131,7 @@ function validateKeyChord(keys: string[], label: string): void {
 }
 
 export function validateCaptureShortcut(shortcut: string): string {
-  return validateShortcut(shortcut, "Capture shortcut");
+  return validateShortcut(shortcut, "Quick Capture shortcut");
 }
 
 export function isTrueSetting(value: unknown, label: string): boolean {

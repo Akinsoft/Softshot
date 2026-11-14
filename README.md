@@ -40,7 +40,7 @@ Hit a shortcut, drag the exact region you want, mark it up, and save or copy it 
 
 Clips captures and encodes on the GPU through a bundled copy of FFmpeg (Windows Graphics Capture and your NVIDIA, AMD, or Intel hardware H.264 encoder). At 1080p60 with desktop audio it uses roughly a tenth of one CPU core, and the recent seconds are kept in memory. An app that never redraws, such as an idle desktop window, is only recorded once something in it changes. When Clips is off, nothing extra runs.
 
-If Windows or another app has already taken your capture shortcut, Softshot explains the conflict and keeps Capture available from the tray menu. You can choose another shortcut on the Capture page of the Softshot window.
+If Windows or another app has already taken your capture shortcut, Softshot explains the conflict and keeps Quick Capture available from the tray menu. You can choose another shortcut on the Quick Capture page of the Softshot window.
 
 ## Install From Source
 

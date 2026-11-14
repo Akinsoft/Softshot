@@ -1801,7 +1801,7 @@ class SoftshotApp {
 
     if ("captureShortcut" in update) {
       if (typeof update.captureShortcut !== "string") {
-        throw new TypeError("Capture shortcut must be a string.");
+        throw new TypeError("Quick Capture shortcut must be a string.");
       }
 
       nextSettings.captureShortcut = validateCaptureShortcut(update.captureShortcut);
@@ -1836,7 +1836,7 @@ class SoftshotApp {
     }
 
     if (nextSettings.clips.shortcut === nextSettings.captureShortcut) {
-      throw new Error(`${nextSettings.captureShortcut} is already used. Capture and Clips need different shortcuts.`);
+      throw new Error(`${nextSettings.captureShortcut} is already used. Quick Capture and Clips need different shortcuts.`);
     }
 
     return nextSettings;
@@ -2764,7 +2764,7 @@ class SoftshotApp {
       type: "warning",
       title: appName,
       message: `${appName} could not register ${shortcut}.`,
-      detail: "Softshot is still running. Use Capture from the tray menu for now.\n\nTo let Softshot use PrintScreen, turn off Windows Settings > Accessibility > Keyboard > Use the Print screen key to open screen capture, close other screenshot apps, then restart Softshot.",
+      detail: "Softshot is still running. Use Quick Capture from the tray menu for now.\n\nTo let Softshot use PrintScreen, turn off Windows Settings > Accessibility > Keyboard > Use the Print screen key to open screen capture, close other screenshot apps, then restart Softshot.",
       buttons: ["Open settings", "OK"],
       defaultId: 1,
       cancelId: 1
@@ -2778,7 +2778,7 @@ class SoftshotApp {
   private trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
     const template: Electron.MenuItemConstructorOptions[] = [
       {
-        label: "Capture",
+        label: "Quick Capture",
         accelerator: this.registeredShortcuts.find((shortcut) => shortcutAccelerator(shortcut) !== null),
         click: (): void => {
           this.capture();
