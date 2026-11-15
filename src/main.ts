@@ -31,6 +31,7 @@ import {
   validateMicrophoneDeviceId
 } from "./app-settings";
 import { installUpdate, startUpdateChecks } from "./app-updater";
+import { type AppWindowState, isTitleBarOnScreen, loadAppWindowState, saveAppWindowState } from "./app-window-state";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
 import { ClipsService } from "./clips-service";
@@ -194,6 +195,8 @@ class SoftshotApp {
   private isShortcutRecordingSaving = false;
 
   private appWindow: BrowserWindow | null = null;
+
+  private appWindowState: AppWindowState | null = null;
 
   private systemAudioLoopbackDevice: SystemAudioLoopbackDevice = defaultSystemAudioLoopbackDevice;
 
@@ -512,8 +515,7 @@ class SoftshotApp {
 
   private createAppWindow(): BrowserWindow {
     return this.createTaskbarWindow({
-      width: appWindowWidthPx,
-      height: appWindowHeightPx,
+      ...this.restoredAppWindowBounds(),
       minWidth: appWindowMinWidthPx,
       minHeight: appWindowMinHeightPx,
       show: false,
@@ -533,6 +535,26 @@ class SoftshotApp {
         nodeIntegration: false
       }
     });
+  }
+
+  private restoredAppWindowBounds(): Partial<Electron.Rectangle> {
+    const savedBounds = this.appWindowState?.bounds;
+    const workAreas = screen.getAllDisplays().map((display) => display.workArea);
+    if (!savedBounds || !isTitleBarOnScreen(savedBounds, appWindowTitleBarHeightPx, workAreas)) {
+      return { width: appWindowWidthPx, height: appWindowHeightPx };
+    }
+
+    return savedBounds;
+  }
+
+  private rememberAppWindowState(appWindow: BrowserWindow): void {
+    const state: AppWindowState = { bounds: appWindow.getNormalBounds(), isMaximized: appWindow.isMaximized() };
+    this.appWindowState = state;
+    try {
+      saveAppWindowState(app.getPath("userData"), state);
+    } catch (error) {
+      this.reportBackgroundError("Could not save the Softshot window size.", error);
+    }
   }
 
   private createTaskbarWindow(options: Electron.BrowserWindowConstructorOptions): BrowserWindow {
@@ -932,6 +954,7 @@ class SoftshotApp {
         app.getPath("userData"),
         app.getLoginItemSettings(this.loginItemSettingsOptions()).openAtLogin
       );
+      this.appWindowState = await loadAppWindowState(app.getPath("userData"));
       const { launchAtStartup } = this.settings;
       void this.settingsUpdates.run(async () => {
         await this.applyLaunchAtStartup(launchAtStartup);
@@ -1533,10 +1556,15 @@ class SoftshotApp {
     });
 
     appWindow.once("ready-to-show", (): void => {
+      if (this.appWindowState?.isMaximized) {
+        appWindow.maximize();
+      }
+
       this.showAppWindow(appWindow);
     });
 
     appWindow.on("close", (closeEvent): void => {
+      this.rememberAppWindowState(appWindow);
       if (isCloseConfirmed || this.isQuitting || appWindow.webContents.isCrashed() || !this.hasEditingWorkToProtect()) {
         return;
       }
