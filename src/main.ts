@@ -22,6 +22,7 @@ import {
 
 import {
   clipSettingsWithUpdate,
+  editorShortcutsWithUpdate,
   isTrueSetting,
   loadAppSettings,
   saveAppSettings,
@@ -149,6 +150,7 @@ const editorOpenedEventChannel = "editor:opened";
 const appSettingsUpdateKeys = new Set([
   "captureShortcut",
   "clips",
+  "editorShortcuts",
   "exportDirectory",
   "exportPresetId",
   "launchAtStartup",
@@ -1834,6 +1836,10 @@ class SoftshotApp {
 
     if ("clips" in update) {
       nextSettings.clips = clipSettingsWithUpdate(currentSettings.clips, update.clips);
+    }
+
+    if ("editorShortcuts" in update) {
+      nextSettings.editorShortcuts = editorShortcutsWithUpdate(currentSettings.editorShortcuts, update.editorShortcuts);
     }
 
     if ("exportDirectory" in update) {

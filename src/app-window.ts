@@ -5,6 +5,7 @@ import { ClipStore } from "./app-window-clip-store.js";
 import { ClipsPage } from "./app-window-clips.js";
 import { type AppWindowContext, runWithErrorToast } from "./app-window-controls.js";
 import { EditorView } from "./app-window-editor.js";
+import { EditorShortcutsSection } from "./app-window-editor-shortcuts.js";
 import { RecentClips } from "./app-window-recent-clips.js";
 import { SettingsPage } from "./app-window-settings.js";
 import { ShortcutLabels } from "./app-window-shortcut-labels.js";
@@ -46,6 +47,8 @@ class AppWindowController implements AppWindowContext {
 
   private devices: MediaDeviceInfo[] = [];
 
+  private readonly editorShortcuts = new EditorShortcutsSection(this);
+
   private readonly editorView = new EditorView({
     backRequested: (): void => {
       this.navigate(this.currentPage);
@@ -55,7 +58,8 @@ class AppWindowController implements AppWindowContext {
     },
     editorShown: (): void => {
       this.showEditorPage();
-    }
+    },
+    shortcutLabels: (): ShortcutLabels => this.shortcutLabels()
   });
 
   private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
@@ -81,7 +85,8 @@ class AppWindowController implements AppWindowContext {
       this.clipLibrary,
       this.recentClips,
       this.settingsPage,
-      this.clipSettings
+      this.clipSettings,
+      this.editorShortcuts
     ];
     for (const page of pages) {
       page.render(settings);
@@ -235,6 +240,7 @@ class AppWindowController implements AppWindowContext {
     this.recentClips.bind();
     this.clipSettings.bind();
     this.settingsPage.bind();
+    this.editorShortcuts.bind();
     this.editorView.bind();
     this.bindEvents();
     this.renderPages();

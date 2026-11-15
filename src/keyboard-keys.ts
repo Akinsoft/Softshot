@@ -1,4 +1,4 @@
-import { acceleratorModifierKeys, isModifierKeyCode } from "./shortcut-keys";
+import { acceleratorModifierKeys, isModifierKeyCode } from "./shortcut-keys.js";
 
 const hexRadix = 16;
 const hexByteLength = 2;

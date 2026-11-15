@@ -277,6 +277,16 @@
             </label>
           </div>
         </section>
+
+        <section class="settings-section" aria-labelledby="settings-editor-shortcuts-heading">
+          <h2 id="settings-editor-shortcuts-heading" class="settings-section-title">Editor shortcuts</h2>
+          <div id="editor-shortcuts-card" class="settings-card">
+            <div class="settings-row">
+              <span class="settings-label">Default shortcuts</span>
+              <button id="editor-shortcuts-reset-button" class="softshot-button" type="button">Restore</button>
+            </div>
+          </div>
+        </section>
       </section>
 
       <section id="editor-page" class="app-page editor-page" aria-label="Editor" hidden></section>
@@ -314,7 +324,7 @@
               </svg>
             </button>
 
-            <button id="editor-export-button" class="icon-button" type="button" data-tooltip="Export" data-tooltip-shortcut="Ctrl+E" aria-label="Export">
+            <button id="editor-export-button" class="icon-button" type="button" data-tooltip="Export" aria-label="Export">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 15V3" />
                 <path d="m7 8 5-5 5 5" />
@@ -332,20 +342,20 @@
           <section class="timeline-panel">
             <div class="editor-controls" role="toolbar" aria-label="Playback and editing">
               <div class="control-group edit-controls">
-                <button id="undo-button" class="control-button" type="button" disabled data-tooltip="Undo" data-tooltip-shortcut="Ctrl+Z" aria-label="Undo">
+                <button id="undo-button" class="control-button" type="button" disabled data-tooltip="Undo" aria-label="Undo">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M9 14 4 9l5-5" />
                     <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
                   </svg>
                 </button>
-                <button id="redo-button" class="control-button" type="button" disabled data-tooltip="Redo" data-tooltip-shortcut="Ctrl+Y" aria-label="Redo">
+                <button id="redo-button" class="control-button" type="button" disabled data-tooltip="Redo" aria-label="Redo">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m15 14 5-5-5-5" />
                     <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
                   </svg>
                 </button>
                 <span class="control-divider" aria-hidden="true"></span>
-                <button id="hand-button" class="control-button" type="button" data-tooltip="Hand" data-tooltip-shortcut="B" aria-label="Hand" aria-pressed="true">
+                <button id="hand-button" class="control-button" type="button" data-tooltip="Hand" aria-label="Hand" aria-pressed="true">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M8 14.2V6.5a1.5 1.5 0 0 1 3 0V12" />
                     <path d="M11 11.5V5a1.5 1.5 0 0 1 3 0v6.5" />
@@ -353,7 +363,7 @@
                     <path d="M17 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.5a6 6 0 0 1-4.6-2.2l-3.5-4.2a1.5 1.5 0 0 1 2.3-1.9L8 14.2" />
                   </svg>
                 </button>
-                <button id="cut-button" class="control-button" type="button" data-tooltip="Cut" data-tooltip-shortcut="C" aria-label="Cut" aria-pressed="false">
+                <button id="cut-button" class="control-button" type="button" data-tooltip="Cut" aria-label="Cut" aria-pressed="false">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <circle cx="6" cy="6" r="3" />
                     <circle cx="6" cy="18" r="3" />
@@ -362,7 +372,7 @@
                     <path d="m14.8 14.8 5.2 5.2" />
                   </svg>
                 </button>
-                <button id="delete-clip-button" class="control-button" type="button" disabled data-tooltip="Delete clip" data-tooltip-shortcut="Del" aria-label="Delete clip">
+                <button id="delete-clip-button" class="control-button" type="button" disabled data-tooltip="Delete clip" aria-label="Delete clip">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M4 7h16" />
                     <path d="M9 7V4.5h6V7" />
@@ -372,7 +382,7 @@
                   </svg>
                 </button>
                 <span class="control-divider" aria-hidden="true"></span>
-                <button id="snap-button" class="control-button" type="button" data-tooltip="Snapping" data-tooltip-shortcut="N" aria-label="Snapping" aria-pressed="true">
+                <button id="snap-button" class="control-button" type="button" data-tooltip="Snapping" aria-label="Snapping" aria-pressed="true">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M5 4h4v8a3 3 0 0 0 6 0V4h4v8a7 7 0 0 1-14 0Z" />
                     <path d="M5 8h4" />
@@ -382,18 +392,18 @@
               </div>
 
               <div class="control-group transport-controls">
-                <button id="jump-start-button" class="control-button" type="button" data-tooltip="Go to start" data-tooltip-shortcut="Home" aria-label="Go to start">
+                <button id="jump-start-button" class="control-button" type="button" data-tooltip="Go to start" aria-label="Go to start">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M6 6v12" />
                     <path d="M18 6.5v11L9.5 12Z" />
                   </svg>
                 </button>
-                <button id="step-back-button" class="control-button" type="button" data-tooltip="Previous frame" data-tooltip-shortcut="Left" aria-label="Previous frame">
+                <button id="step-back-button" class="control-button" type="button" data-tooltip="Previous frame" aria-label="Previous frame">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m14.5 6-6 6 6 6" />
                   </svg>
                 </button>
-                <button id="play-button" class="play-button" type="button" data-tooltip="Play" data-tooltip-shortcut="Space" aria-label="Play" data-state="play">
+                <button id="play-button" class="play-button" type="button" data-tooltip="Play" aria-label="Play" data-state="play">
                   <span class="play-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24">
                       <path d="M8.5 5.8v12.4a.8.8 0 0 0 1.2.7l9.6-6.2a.8.8 0 0 0 0-1.4L9.7 5.1a.8.8 0 0 0-1.2.7Z" />
@@ -406,12 +416,12 @@
                     </svg>
                   </span>
                 </button>
-                <button id="step-forward-button" class="control-button" type="button" data-tooltip="Next frame" data-tooltip-shortcut="Right" aria-label="Next frame">
+                <button id="step-forward-button" class="control-button" type="button" data-tooltip="Next frame" aria-label="Next frame">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="m9.5 6 6 6-6 6" />
                   </svg>
                 </button>
-                <button id="jump-end-button" class="control-button" type="button" data-tooltip="Go to end" data-tooltip-shortcut="End" aria-label="Go to end">
+                <button id="jump-end-button" class="control-button" type="button" data-tooltip="Go to end" aria-label="Go to end">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M18 6v12" />
                     <path d="M6 6.5v11l8.5-5.5Z" />
@@ -445,7 +455,7 @@
             <div class="timeline-body">
               <div class="track-headers">
                 <div class="track-header ruler-header">
-                  <button id="zoom-out-button" class="control-button zoom-button" type="button" data-tooltip="Zoom out" data-tooltip-shortcut="-" aria-label="Zoom out">
+                  <button id="zoom-out-button" class="control-button zoom-button" type="button" data-tooltip="Zoom out" aria-label="Zoom out">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <circle cx="11" cy="11" r="6" />
                       <path d="m20 20-4.5-4.5" />
@@ -453,7 +463,7 @@
                     </svg>
                   </button>
                   <input id="zoom-slider" class="range-input zoom-slider" type="range" min="0" max="1000" step="1" value="0" aria-label="Timeline zoom" />
-                  <button id="zoom-in-button" class="control-button zoom-button" type="button" data-tooltip="Zoom in" data-tooltip-shortcut="=" aria-label="Zoom in">
+                  <button id="zoom-in-button" class="control-button zoom-button" type="button" data-tooltip="Zoom in" aria-label="Zoom in">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <circle cx="11" cy="11" r="6" />
                       <path d="m20 20-4.5-4.5" />
@@ -461,7 +471,7 @@
                       <path d="M11 8.5v5" />
                     </svg>
                   </button>
-                  <button id="zoom-fit-button" class="control-button zoom-button" type="button" data-tooltip="Fit timeline" data-tooltip-shortcut="\" aria-label="Fit timeline">
+                  <button id="zoom-fit-button" class="control-button zoom-button" type="button" data-tooltip="Fit timeline" aria-label="Fit timeline">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 12h16" />
                       <path d="m8 8-4 4 4 4" />

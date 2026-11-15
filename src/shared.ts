@@ -1,3 +1,5 @@
+import type { EditorShortcuts } from "./editor-shortcuts.js";
+
 const standardVideoFps = 30;
 const highVideoFps = 60;
 const lowVideoHeight = 720;
@@ -221,6 +223,7 @@ export interface CompletedOutputFile {
 export interface AppSettings {
   captureShortcut: string;
   clips: ClipSettings;
+  editorShortcuts: EditorShortcuts;
   exportDirectory: string | null;
   exportPresetId: string | null;
   launchAtStartup: boolean;
@@ -235,6 +238,7 @@ export interface AppSettings {
 export interface AppSettingsUpdate {
   captureShortcut?: string;
   clips?: Partial<ClipSettings>;
+  editorShortcuts?: Partial<EditorShortcuts>;
   exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;

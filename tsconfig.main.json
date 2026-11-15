@@ -14,6 +14,7 @@
     "src/clips-library.ts",
     "src/clips-service.ts",
     "src/editor-remux.ts",
+    "src/editor-shortcuts.ts",
     "src/global-shortcuts.ts",
     "src/global.d.ts",
     "src/keyboard-keys.ts",

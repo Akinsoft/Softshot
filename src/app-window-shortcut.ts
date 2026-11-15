@@ -3,8 +3,8 @@ import { errorMessage } from "./async-errors.js";
 import type { ShortcutRecordingEvent, ShortcutTarget } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
-const statusClearDelayMs = 1400;
-const recordingButtonText = "Press keys";
+export const statusClearDelayMs = 1400;
+export const recordingButtonText = "Press keys";
 const waitingDotCount = 3;
 
 export class ShortcutButton {
@@ -112,7 +112,7 @@ export class ShortcutButton {
   }
 }
 
-function waitingDots(): HTMLSpanElement {
+export function waitingDots(): HTMLSpanElement {
   const dots = document.createElement("span");
   dots.className = "keybind-waiting";
   dots.ariaHidden = "true";

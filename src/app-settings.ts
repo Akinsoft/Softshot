@@ -2,6 +2,15 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { isMissingFileError } from "./async-errors";
+import {
+  defaultEditorShortcuts,
+  editorCommandLabels,
+  editorCommands,
+  editorCommandUsingShortcut,
+  editorShortcutProblem,
+  type EditorShortcuts,
+  isEditorCommand
+} from "./editor-shortcuts";
 import { isTriggerKeyCode } from "./keyboard-keys";
 import type {
   AppSettings,
@@ -60,6 +69,7 @@ function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSetting
   return {
     captureShortcut: defaultCaptureShortcut,
     clips: createDefaultClipSettings(),
+    editorShortcuts: { ...defaultEditorShortcuts },
     exportDirectory: defaultExportDirectory,
     exportPresetId: defaultExportPresetId,
     launchAtStartup: isLaunchAtStartupEnabled,
@@ -202,6 +212,7 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
   return {
     captureShortcut: captureShortcutFromJson(value),
     clips: clipSettingsFromJson(value),
+    editorShortcuts: editorShortcutsFromJson(value),
     exportDirectory: exportDirectoryFromJson(value),
     exportPresetId: exportPresetIdFromJson(value),
     launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
@@ -259,6 +270,64 @@ function clipSettingsFromObject(value: Record<string, unknown>, base: ClipSettin
   }
 
   return settings;
+}
+
+export function editorShortcutsWithUpdate(current: EditorShortcuts, update: unknown): EditorShortcuts {
+  if (!isJsonObject(update)) {
+    throw new TypeError("Editor shortcuts update must be an object.");
+  }
+
+  const updateKeys = Object.keys(update);
+  if (updateKeys.length === 0 || updateKeys.some((key) => !isEditorCommand(key))) {
+    throw new Error("Editor shortcuts update must contain only editor command names.");
+  }
+
+  return editorShortcutsFromObject(update, current);
+}
+
+function editorShortcutsFromJson(value: Record<string, unknown>): EditorShortcuts {
+  if (!("editorShortcuts" in value)) {
+    return { ...defaultEditorShortcuts };
+  }
+
+  if (!isJsonObject(value.editorShortcuts)) {
+    throw new TypeError("Settings editorShortcuts must be an object.");
+  }
+
+  return editorShortcutsFromObject(value.editorShortcuts, defaultEditorShortcuts);
+}
+
+function editorShortcutsFromObject(value: Record<string, unknown>, base: Readonly<EditorShortcuts>): EditorShortcuts {
+  const shortcuts = { ...base };
+  for (const command of editorCommands) {
+    if (Object.hasOwn(value, command)) {
+      shortcuts[command] = validateEditorShortcut(value[command], editorCommandLabels[command]);
+    }
+  }
+
+  for (const command of editorCommands) {
+    const conflictingCommand = editorCommandUsingShortcut(shortcuts, shortcuts[command], command);
+    if (conflictingCommand !== null) {
+      throw new Error(
+        `${editorCommandLabels[command]} and ${editorCommandLabels[conflictingCommand]} cannot share a shortcut.`
+      );
+    }
+  }
+
+  return shortcuts;
+}
+
+function validateEditorShortcut(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} shortcut must be a string.`);
+  }
+
+  const problem = editorShortcutProblem(value);
+  if (problem !== null) {
+    throw new Error(`${label} shortcut is not valid: ${problem}.`);
+  }
+
+  return value;
 }
 
 function validateClipDuration(value: unknown): ClipDurationSeconds {

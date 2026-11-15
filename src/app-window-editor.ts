@@ -1,3 +1,4 @@
+import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { VideoEditor } from "./editor.js";
 import { getRequiredElement } from "./overlay-dom.js";
 import type { EditorBootstrap } from "./shared.js";
@@ -10,6 +11,7 @@ export interface EditorViewHost {
   backRequested(): void;
   editorClosed(): void;
   editorShown(): void;
+  shortcutLabels(): ShortcutLabels;
 }
 
 export class EditorView {
@@ -47,7 +49,8 @@ export class EditorView {
     return new VideoEditor(root, bootstrap, {
       requestClose: (): void => {
         this.host.backRequested();
-      }
+      },
+      shortcutLabels: (): ShortcutLabels => this.host.shortcutLabels()
     });
   }
 

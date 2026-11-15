@@ -1,3 +1,4 @@
+import type { ShortcutLabels } from "./app-window-shortcut-labels.js";
 import { audioAnalyzerFftSize, audioLevelFromTimeDomainSamples } from "./audio-level.js";
 import { audioMixGain, recordingAudioSampleRate } from "./audio-quality.js";
 import { audioWaveformPeaks } from "./audio-waveform.js";
@@ -5,6 +6,14 @@ import { type ExportAudioTrack, exportEdit, type ExportOptions, type TrimRange }
 import { ExportPanel } from "./editor-export-panel.js";
 import { type ExportPlan, type ExportSource, sourceExportPlan } from "./editor-export-settings.js";
 import { EditorSessionClient } from "./editor-session-client.js";
+import {
+  defaultEditorShortcuts,
+  type EditorCommand,
+  editorCommands,
+  editorEscapeKeyCode,
+  editorShortcutFromKeyState,
+  type EditorShortcuts
+} from "./editor-shortcuts.js";
 import {
   captureVideoTimelineThumbnails,
   releaseTimelineThumbnailUrls,
@@ -82,24 +91,6 @@ const rulerStepMultipliers = [1, rulerStepDouble, rulerStepHalfDecade];
 const largeStepSeconds = 1;
 const secondsPerMinute = 60;
 const secondsTextLength = 5;
-const spaceKey = " ";
-const backspaceKey = "backspace";
-const cutKey = "c";
-const endKey = "end";
-const exportKey = "e";
-const escapeKey = "escape";
-const handKey = "b";
-const homeKey = "home";
-const keyboardDeleteKey = "delete";
-const nextFrameKey = "arrowright";
-const previousFrameKey = "arrowleft";
-const redoKey = "y";
-const snapKey = "n";
-const undoKey = "z";
-const zoomFitKey = "\\";
-const zoomInKey = "=";
-const zoomInShiftedKey = "+";
-const zoomOutKey = "-";
 const audioMuteButtonSelector = "button[data-audio-kind]";
 const audioVolumeInputSelector = "input[data-audio-kind]";
 const defaultAudioVolume = 1;
@@ -144,7 +135,7 @@ interface PreparedVideo {
 
 interface KeyboardCommand {
   allowRepeat: boolean;
-  run: (event: KeyboardEvent) => void;
+  run: () => void;
 }
 
 interface FilmstripScale {
@@ -185,6 +176,7 @@ type RecordingEditorSource = Extract<EditorSource, { kind: "recording" }>;
 
 export interface VideoEditorHost {
   requestClose(): void;
+  shortcutLabels(): ShortcutLabels;
 }
 
 interface TimelineMove {
@@ -300,52 +292,81 @@ export class VideoEditor {
   private readonly mutedAudioKinds = new Set<AudioSourceKind>();
   private readonly redoStack: TimelineSegment[][] = [];
   private readonly undoStack: TimelineSegment[][] = [];
-  private readonly keyboardCommands = new Map<string, KeyboardCommand>([
-    [spaceKey, { allowRepeat: false, run: (): void => {
-      this.runAsync(this.togglePlayback(), "Could not preview the recording.");
-    } }],
-    [cutKey, { allowRepeat: false, run: (): void => {
+  private editorShortcuts: EditorShortcuts = { ...defaultEditorShortcuts };
+  private commandsByShortcut = new Map<string, EditorCommand>();
+  private readonly toolExitCommand: KeyboardCommand = { allowRepeat: false, run: (): void => {
+    this.setTimelineTool("hand");
+  } };
+  private readonly keyboardCommands: Record<EditorCommand, KeyboardCommand> = {
+    backOneSecond: { allowRepeat: true, run: (): void => {
+      this.stepPlayhead(-largeStepSeconds);
+    } },
+    cut: { allowRepeat: false, run: (): void => {
       this.setTimelineTool("cut");
-    } }],
-    [handKey, { allowRepeat: false, run: (): void => {
-      this.setTimelineTool("hand");
-    } }],
-    [escapeKey, { allowRepeat: false, run: (): void => {
-      this.setTimelineTool("hand");
-    } }],
-    [snapKey, { allowRepeat: false, run: (): void => {
-      this.toggleSnapping();
-    } }],
-    [zoomInKey, { allowRepeat: true, run: (): void => {
-      this.setTimelineZoom(this.timelineZoom * timelineZoomStep, null);
-    } }],
-    [zoomInShiftedKey, { allowRepeat: true, run: (): void => {
-      this.setTimelineZoom(this.timelineZoom * timelineZoomStep, null);
-    } }],
-    [zoomOutKey, { allowRepeat: true, run: (): void => {
-      this.setTimelineZoom(this.timelineZoom / timelineZoomStep, null);
-    } }],
-    [zoomFitKey, { allowRepeat: false, run: (): void => {
-      this.setTimelineZoom(1, null);
-    } }],
-    [keyboardDeleteKey, { allowRepeat: false, run: (): void => {
+    } },
+    deleteClip: { allowRepeat: false, run: (): void => {
       this.deleteSelectedSegmentSafely();
-    } }],
-    [backspaceKey, { allowRepeat: false, run: (): void => {
-      this.deleteSelectedSegmentSafely();
-    } }],
-    [homeKey, { allowRepeat: false, run: (): void => {
-      this.jumpTo(zeroSeconds);
-    } }],
-    [endKey, { allowRepeat: false, run: (): void => {
+    } },
+    export: { allowRepeat: false, run: (): void => {
+      this.runAsync(this.openExportPanel(), "Could not open export.");
+    } },
+    forwardOneSecond: { allowRepeat: true, run: (): void => {
+      this.stepPlayhead(largeStepSeconds);
+    } },
+    hand: { allowRepeat: false, run: (): void => {
+      this.setTimelineTool("hand");
+    } },
+    jumpEnd: { allowRepeat: false, run: (): void => {
       this.jumpTo(this.editedDurationSeconds());
-    } }],
-    [previousFrameKey, { allowRepeat: true, run: (event): void => {
-      this.stepPlayhead(-this.keyboardStepSeconds(event));
-    } }],
-    [nextFrameKey, { allowRepeat: true, run: (event): void => {
-      this.stepPlayhead(this.keyboardStepSeconds(event));
-    } }]
+    } },
+    jumpStart: { allowRepeat: false, run: (): void => {
+      this.jumpTo(zeroSeconds);
+    } },
+    nextFrame: { allowRepeat: true, run: (): void => {
+      this.stepPlayhead(this.frameDurationSeconds());
+    } },
+    play: { allowRepeat: false, run: (): void => {
+      this.runAsync(this.togglePlayback(), "Could not preview the recording.");
+    } },
+    previousFrame: { allowRepeat: true, run: (): void => {
+      this.stepPlayhead(-this.frameDurationSeconds());
+    } },
+    redo: { allowRepeat: false, run: (): void => {
+      this.redoTimelineEdit();
+    } },
+    snap: { allowRepeat: false, run: (): void => {
+      this.toggleSnapping();
+    } },
+    undo: { allowRepeat: false, run: (): void => {
+      this.undoTimelineEdit();
+    } },
+    zoomFit: { allowRepeat: false, run: (): void => {
+      this.setTimelineZoom(1, null);
+    } },
+    zoomIn: { allowRepeat: true, run: (): void => {
+      this.setTimelineZoom(this.timelineZoom * timelineZoomStep, null);
+    } },
+    zoomOut: { allowRepeat: true, run: (): void => {
+      this.setTimelineZoom(this.timelineZoom / timelineZoomStep, null);
+    } }
+  };
+
+  private readonly commandButtons = new Map<EditorCommand, HTMLButtonElement>([
+    ["cut", this.cutButton],
+    ["deleteClip", this.clipDeleteButton],
+    ["export", this.exportButton],
+    ["hand", this.handButton],
+    ["jumpEnd", this.jumpEndButton],
+    ["jumpStart", this.jumpStartButton],
+    ["nextFrame", this.stepForwardButton],
+    ["play", this.playButton],
+    ["previousFrame", this.stepBackButton],
+    ["redo", this.redoButton],
+    ["snap", this.snapButton],
+    ["undo", this.undoButton],
+    ["zoomFit", this.zoomFitButton],
+    ["zoomIn", this.zoomInButton],
+    ["zoomOut", this.zoomOutButton]
   ]);
 
   constructor(
@@ -526,48 +547,31 @@ export class VideoEditor {
       event.stopPropagation();
       this.blurFocusedElement();
       if (!event.repeat || command.allowRepeat) {
-        command.run(event);
+        command.run();
       }
     }, { capture: true, signal: this.listeners.signal });
   }
 
   private keyboardCommand(event: KeyboardEvent): KeyboardCommand | null {
-    const key = event.key.toLowerCase();
-    if (event.altKey) {
-      return null;
+    const shortcut = editorShortcutFromKeyState(event);
+    if (shortcut === editorEscapeKeyCode) {
+      return this.toolExitCommand;
     }
 
-    if (event.ctrlKey || event.metaKey) {
-      return this.modifierKeyboardCommand(key, event.shiftKey);
-    }
-
-    return this.keyboardCommands.get(key) ?? null;
+    const command = shortcut === null ? null : this.commandsByShortcut.get(shortcut) ?? null;
+    return command === null ? null : this.keyboardCommands[command];
   }
 
-  private modifierKeyboardCommand(key: string, isShiftPressed: boolean): KeyboardCommand | null {
-    if (key === exportKey && !isShiftPressed) {
-      return { allowRepeat: false, run: (): void => {
-        this.runAsync(this.openExportPanel(), "Could not open export.");
-      } };
+  private applyEditorShortcuts(shortcuts: EditorShortcuts): void {
+    this.editorShortcuts = shortcuts;
+    this.commandsByShortcut = new Map(editorCommands.map((command) => [shortcuts[command], command]));
+    for (const [command, button] of this.commandButtons) {
+      button.dataset.tooltipShortcut = this.shortcutText(command);
     }
-
-    if (key === redoKey || (key === undoKey && isShiftPressed)) {
-      return { allowRepeat: false, run: (): void => {
-        this.redoTimelineEdit();
-      } };
-    }
-
-    if (key === undoKey) {
-      return { allowRepeat: false, run: (): void => {
-        this.undoTimelineEdit();
-      } };
-    }
-
-    return null;
   }
 
-  private keyboardStepSeconds(event: KeyboardEvent): number {
-    return event.shiftKey ? largeStepSeconds : this.frameDurationSeconds();
+  private shortcutText(command: EditorCommand): string {
+    return this.host.shortcutLabels().text(this.editorShortcuts[command]);
   }
 
   private frameDurationSeconds(): number {
@@ -1908,7 +1912,7 @@ export class VideoEditor {
 
   private syncPlayButton(): void {
     this.playButton.dataset.state = this.video.paused ? "play" : "pause";
-    setTooltipLabel(this.playButton, this.video.paused ? "Play" : "Pause", "Space");
+    setTooltipLabel(this.playButton, this.video.paused ? "Play" : "Pause", this.shortcutText("play"));
   }
 
   private activePlaybackLocation(): TimelineLocation {
@@ -2554,7 +2558,8 @@ export class VideoEditor {
 
   private async loadEditor(): Promise<void> {
     this.bindEvents();
-    const { playbackMuted, playbackVolume } = await getSoftshotApi().getSettings();
+    const { editorShortcuts, playbackMuted, playbackVolume } = await getSoftshotApi().getSettings();
+    this.applyEditorShortcuts(editorShortcuts);
     this.isPlaybackMuted = playbackMuted;
     this.playbackVolume = playbackVolume;
     this.loadRecording(this.bootstrap);

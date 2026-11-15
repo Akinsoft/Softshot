@@ -16,6 +16,7 @@
     "src/editor.ts",
     "src/editor-*.ts",
     "src/gifenc.d.ts",
+    "src/keyboard-keys.ts",
     "src/overlay.ts",
     "src/overlay-*.ts",
     "src/recording-*.ts",
