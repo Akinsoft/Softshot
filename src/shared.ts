@@ -225,6 +225,8 @@ export interface AppSettings {
   exportPresetId: string | null;
   launchAtStartup: boolean;
   microphoneDeviceId: string | null;
+  playbackMuted: boolean;
+  playbackVolume: number;
   recentClipsExpanded: boolean;
   sidebarCollapsed: boolean;
   systemAudioEnabled: boolean;
@@ -236,6 +238,8 @@ export interface AppSettingsUpdate {
   exportPresetId?: string | null;
   launchAtStartup?: boolean;
   microphoneDeviceId?: string | null;
+  playbackMuted?: boolean;
+  playbackVolume?: number;
   recentClipsExpanded?: boolean;
   sidebarCollapsed?: boolean;
   systemAudioEnabled?: boolean;

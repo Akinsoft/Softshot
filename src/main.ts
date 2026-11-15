@@ -28,7 +28,8 @@ import {
   validateCaptureShortcut,
   validateExportDirectory,
   validateExportPresetId,
-  validateMicrophoneDeviceId
+  validateMicrophoneDeviceId,
+  validatePlaybackVolume
 } from "./app-settings";
 import { installUpdate, startUpdateChecks } from "./app-updater";
 import { type AppWindowState, isTitleBarOnScreen, loadAppWindowState, saveAppWindowState } from "./app-window-state";
@@ -152,6 +153,8 @@ const appSettingsUpdateKeys = new Set([
   "exportPresetId",
   "launchAtStartup",
   "microphoneDeviceId",
+  "playbackMuted",
+  "playbackVolume",
   "recentClipsExpanded",
   "sidebarCollapsed",
   "systemAudioEnabled"
@@ -1847,6 +1850,14 @@ class SoftshotApp {
 
     if ("microphoneDeviceId" in update) {
       nextSettings.microphoneDeviceId = validateMicrophoneDeviceId(update.microphoneDeviceId);
+    }
+
+    if ("playbackMuted" in update) {
+      nextSettings.playbackMuted = isTrueSetting(update.playbackMuted, "Playback muted");
+    }
+
+    if ("playbackVolume" in update) {
+      nextSettings.playbackVolume = validatePlaybackVolume(update.playbackVolume);
     }
 
     if ("recentClipsExpanded" in update) {

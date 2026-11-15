@@ -33,6 +33,9 @@ const defaultClipQuality: ClipQuality = "1080p";
 const defaultExportDirectory = null;
 const defaultExportPresetId = null;
 const defaultMicrophoneDeviceId = null;
+const defaultPlaybackVolume = 1;
+const isPlaybackMutedByDefault = false;
+const maximumPlaybackVolume = 1;
 const isSystemAudioEnabledByDefault = true;
 const isSidebarCollapsedByDefault = false;
 const areRecentClipsExpandedByDefault = true;
@@ -61,6 +64,8 @@ function createDefaultAppSettings(isLaunchAtStartupEnabled: boolean): AppSetting
     exportPresetId: defaultExportPresetId,
     launchAtStartup: isLaunchAtStartupEnabled,
     microphoneDeviceId: defaultMicrophoneDeviceId,
+    playbackMuted: isPlaybackMutedByDefault,
+    playbackVolume: defaultPlaybackVolume,
     recentClipsExpanded: areRecentClipsExpandedByDefault,
     sidebarCollapsed: isSidebarCollapsedByDefault,
     systemAudioEnabled: isSystemAudioEnabledByDefault
@@ -168,6 +173,14 @@ export function validateMicrophoneDeviceId(value: unknown): string | null {
   return value;
 }
 
+export function validatePlaybackVolume(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > maximumPlaybackVolume) {
+    throw new TypeError("Playback volume must be a number from 0 to 1.");
+  }
+
+  return value;
+}
+
 export function clipSettingsWithUpdate(current: ClipSettings, update: unknown): ClipSettings {
   if (!isJsonObject(update)) {
     throw new TypeError("Clip settings update must be an object.");
@@ -193,6 +206,8 @@ function appSettingsFromJson(value: unknown, isLaunchAtStartupEnabled: boolean):
     exportPresetId: exportPresetIdFromJson(value),
     launchAtStartup: isLaunchAtStartupFromJson(value, isLaunchAtStartupEnabled),
     microphoneDeviceId: microphoneDeviceIdFromJson(value),
+    playbackMuted: isPlaybackMutedFromJson(value),
+    playbackVolume: playbackVolumeFromJson(value),
     recentClipsExpanded: areRecentClipsExpandedFromJson(value),
     sidebarCollapsed: isSidebarCollapsedFromJson(value),
     systemAudioEnabled: isSystemAudioEnabledFromJson(value)
@@ -368,6 +383,18 @@ function microphoneDeviceIdFromJson(value: Record<string, unknown>): string | nu
   }
 
   return validateMicrophoneDeviceId(value.microphoneDeviceId);
+}
+
+function isPlaybackMutedFromJson(value: Record<string, unknown>): boolean {
+  if (!("playbackMuted" in value)) {
+    return isPlaybackMutedByDefault;
+  }
+
+  return isTrueSetting(value.playbackMuted, "Settings playbackMuted");
+}
+
+function playbackVolumeFromJson(value: Record<string, unknown>): number {
+  return "playbackVolume" in value ? validatePlaybackVolume(value.playbackVolume) : defaultPlaybackVolume;
 }
 
 function areRecentClipsExpandedFromJson(value: Record<string, unknown>): boolean {

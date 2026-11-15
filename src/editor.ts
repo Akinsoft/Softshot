@@ -39,7 +39,7 @@ import type {
   PreparedVideoFile
 } from "./shared.js";
 import { isAudioSourceKind, videoFileExtension, videoFpsOptions } from "./shared.js";
-import { reportError } from "./softshot-api.js";
+import { getSoftshotApi, reportError } from "./softshot-api.js";
 import { setTooltipLabel } from "./ui-tooltip.js";
 
 const defaultMimeType = "video/webm";
@@ -105,6 +105,9 @@ const audioVolumeInputSelector = "input[data-audio-kind]";
 const defaultAudioVolume = 1;
 const maximumAudioVolumePercent = 200;
 const volumePercentScale = 100;
+const fullPlaybackVolume = 1;
+const playbackVolumeValueDurationMs = 900;
+const rangeFillCssProperty = "--range-fill";
 const clipDurationPrecisionDigits = 1;
 const initialSegmentId = 1;
 const timePartLength = 2;
@@ -214,6 +217,10 @@ export class VideoEditor {
   private readonly jumpEndButton = getRequiredElement("jump-end-button", HTMLButtonElement);
   private readonly jumpStartButton = getRequiredElement("jump-start-button", HTMLButtonElement);
   private readonly playButton = getRequiredElement("play-button", HTMLButtonElement);
+  private readonly playbackMuteButton = getRequiredElement("playback-mute-button", HTMLButtonElement);
+  private readonly playbackVolumeControl = getRequiredElement("playback-volume", HTMLDivElement);
+  private readonly playbackVolumeSlider = getRequiredElement("playback-volume-slider", HTMLInputElement);
+  private readonly playbackVolumeValue = getRequiredElement("playback-volume-value", HTMLSpanElement);
   private readonly redoButton = getRequiredElement("redo-button", HTMLButtonElement);
   private readonly saveButton = getRequiredElement("editor-save-button", HTMLButtonElement);
   private readonly snapButton = getRequiredElement("snap-button", HTMLButtonElement);
@@ -261,6 +268,10 @@ export class VideoEditor {
   private savedEditKey: string | null = null;
   private mimeType = defaultMimeType;
   private playbackFrameHandle: number | null = null;
+  private playbackGain: GainNode | null = null;
+  private playbackVolume = fullPlaybackVolume;
+  private isPlaybackMuted = false;
+  private playbackVolumeValueHandle: ReturnType<typeof setTimeout> | null = null;
   private playheadSeconds = zeroSeconds;
   private preparedVideo: PreparedVideo | null = null;
   private selectedSegmentId: number | null = null;
@@ -391,6 +402,16 @@ export class VideoEditor {
       if (input) {
         this.setAudioTrackVolume(audioSourceKindFromString(input.dataset.audioKind), Number(input.value) / volumePercentScale);
       }
+    });
+    this.playbackMuteButton.addEventListener("click", (): void => {
+      this.togglePlaybackMute();
+    });
+    this.playbackVolumeSlider.addEventListener("input", (): void => {
+      this.adjustPlaybackVolume(Number(this.playbackVolumeSlider.value) / volumePercentScale);
+    });
+    this.playbackVolumeSlider.addEventListener("change", (): void => {
+      this.hidePlaybackVolumeValueSoon();
+      this.runAsync(this.savePlaybackVolume(), "Could not save the playback volume.");
     });
     this.audioTrackHeadersElement.addEventListener("dblclick", (event): void => {
       const input = event.target instanceof Element ? event.target.closest<HTMLInputElement>(audioVolumeInputSelector) : null;
@@ -633,7 +654,7 @@ export class VideoEditor {
     const progress = maximumZoom > 1 ? Math.log(this.timelineZoom) / Math.log(maximumZoom) : 0;
     const sliderValue = Math.round(clamp(progress, 0, 1) * timelineZoomSliderSteps);
     this.zoomSlider.value = String(sliderValue);
-    this.zoomSlider.style.setProperty("--range-fill", `${String((sliderValue / timelineZoomSliderSteps) * timelinePercent)}%`);
+    this.zoomSlider.style.setProperty(rangeFillCssProperty, `${String((sliderValue / timelineZoomSliderSteps) * timelinePercent)}%`);
     this.zoomInButton.disabled = this.isBusy || this.timelineZoom >= maximumZoom - timelineZoomEpsilon;
     this.zoomOutButton.disabled = this.isBusy || this.timelineZoom <= 1 + timelineZoomEpsilon;
     this.zoomFitButton.disabled = this.zoomOutButton.disabled;
@@ -936,6 +957,8 @@ export class VideoEditor {
       clearTimeout(this.statusHandle);
       this.statusHandle = null;
     }
+
+    this.clearPlaybackVolumeValueTimeout();
   }
 
   private async dispose(): Promise<void> {
@@ -1243,8 +1266,72 @@ export class VideoEditor {
     }
 
     input.value = String(percent);
-    input.style.setProperty("--range-fill", `${String((percent / maximumAudioVolumePercent) * volumePercentScale)}%`);
+    input.style.setProperty(rangeFillCssProperty, `${String((percent / maximumAudioVolumePercent) * volumePercentScale)}%`);
     value.textContent = `${String(percent)}%`;
+  }
+
+  private adjustPlaybackVolume(volume: number): void {
+    this.playbackVolume = volume;
+    this.isPlaybackMuted = false;
+    this.syncPlaybackVolume();
+    this.clearPlaybackVolumeValueTimeout();
+    this.playbackVolumeControl.classList.add("adjusting");
+  }
+
+  private togglePlaybackMute(): void {
+    this.isPlaybackMuted = !this.isPlaybackMuted;
+    this.syncPlaybackVolume();
+    this.runAsync(this.savePlaybackVolume(), "Could not save the playback volume.");
+  }
+
+  private hidePlaybackVolumeValueSoon(): void {
+    this.clearPlaybackVolumeValueTimeout();
+    this.playbackVolumeValueHandle = setTimeout((): void => {
+      this.playbackVolumeValueHandle = null;
+      this.playbackVolumeControl.classList.remove("adjusting");
+    }, playbackVolumeValueDurationMs);
+  }
+
+  private clearPlaybackVolumeValueTimeout(): void {
+    if (this.playbackVolumeValueHandle === null) {
+      return;
+    }
+
+    clearTimeout(this.playbackVolumeValueHandle);
+    this.playbackVolumeValueHandle = null;
+  }
+
+  private audiblePlaybackVolume(): number {
+    return this.isPlaybackMuted ? 0 : this.playbackVolume;
+  }
+
+  private syncPlaybackVolume(): void {
+    const audibleVolume = this.audiblePlaybackVolume();
+    this.video.volume = audibleVolume;
+    if (this.playbackGain) {
+      this.playbackGain.gain.value = audibleVolume;
+    }
+
+    const percent = Math.round(this.playbackVolume * volumePercentScale);
+    this.playbackVolumeSlider.value = String(percent);
+    this.playbackVolumeSlider.style.setProperty(rangeFillCssProperty, `${String(percent)}%`);
+    this.playbackVolumeValue.textContent = `${String(percent)}%`;
+    this.playbackVolumeControl.classList.toggle("silent", audibleVolume === 0);
+    setTooltipLabel(this.playbackMuteButton, this.isPlaybackMuted ? "Unmute" : "Mute");
+  }
+
+  private createPlaybackGain(context: AudioContext): GainNode {
+    const gain = context.createGain();
+    gain.gain.value = this.audiblePlaybackVolume();
+    gain.connect(context.destination);
+    return gain;
+  }
+
+  private async savePlaybackVolume(): Promise<void> {
+    await getSoftshotApi().updateSettings({
+      playbackMuted: this.isPlaybackMuted,
+      playbackVolume: this.playbackVolume
+    });
   }
 
   private createAudioPreviewElements(): void {
@@ -1253,6 +1340,7 @@ export class VideoEditor {
     this.audioPreviewContext = this.audioTracks.length > 0
       ? new AudioContext({ sampleRate: recordingAudioSampleRate })
       : null;
+    this.playbackGain = this.audioPreviewContext ? this.createPlaybackGain(this.audioPreviewContext) : null;
     const audioReadyPromises = this.audioTracks.map(async (audioTrack): Promise<void> => {
       const audio = new Audio();
       audio.preload = "auto";
@@ -1267,7 +1355,8 @@ export class VideoEditor {
 
   private createAudioMeter(audio: HTMLAudioElement): AudioMeter {
     const context = this.audioPreviewContext;
-    if (!context) {
+    const { playbackGain } = this;
+    if (!context || !playbackGain) {
       throw new Error("Audio preview context is unavailable.");
     }
 
@@ -1278,7 +1367,7 @@ export class VideoEditor {
     gain.gain.value = 0;
     source.connect(analyser);
     analyser.connect(gain);
-    gain.connect(context.destination);
+    gain.connect(playbackGain);
     return {
       analyser,
       data: new Uint8Array(analyser.fftSize),
@@ -1748,6 +1837,8 @@ export class VideoEditor {
       meter.gain.disconnect();
     }
 
+    this.playbackGain?.disconnect();
+    this.playbackGain = null;
     if (this.audioPreviewContext) {
       if (this.audioPreviewContext.state !== "closed") {
         await this.audioPreviewContext.close();
@@ -2463,7 +2554,11 @@ export class VideoEditor {
 
   private async loadEditor(): Promise<void> {
     this.bindEvents();
+    const { playbackMuted, playbackVolume } = await getSoftshotApi().getSettings();
+    this.isPlaybackMuted = playbackMuted;
+    this.playbackVolume = playbackVolume;
     this.loadRecording(this.bootstrap);
+    this.syncPlaybackVolume();
     await Promise.all([
       waitForMediaMetadata(this.video),
       this.audioReady

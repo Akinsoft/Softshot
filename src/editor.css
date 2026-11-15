@@ -261,10 +261,55 @@
     opacity: 1;
   }
 
+  .playback-status {
+    justify-self: end;
+  }
+
+  .playback-volume {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .playback-mute-button {
+    width: 38px;
+  }
+
+  .playback-volume-value {
+    display: none;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  .playback-volume.adjusting .playback-mute-button svg {
+    display: none;
+  }
+
+  .playback-volume.adjusting .playback-volume-value {
+    display: inline;
+  }
+
+  .playback-volume-cross,
+  .playback-volume.silent .playback-volume-wave {
+    display: none;
+  }
+
+  .playback-volume.silent .playback-volume-cross {
+    display: inline;
+  }
+
+  .playback-volume-slider {
+    width: 84px;
+  }
+
+  .playback-volume.silent .playback-volume-slider {
+    --range-color: rgba(180, 188, 198, 0.5);
+  }
+
   .timeline-time {
     display: flex;
     align-items: center;
-    justify-self: end;
     gap: 4px;
     color: var(--text-muted);
     font-size: 12px;
