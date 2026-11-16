@@ -98,7 +98,6 @@ export interface ClipSettings {
 }
 
 export interface ClipsStatus {
-  isShortcutAvailable: boolean;
   message: string | null;
   sourceName: string | null;
   state: ClipsState;

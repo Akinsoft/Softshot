@@ -1,5 +1,6 @@
+import type { KeyboardHook } from "./keyboard-hook";
+import type { KeyboardKeyEvent } from "./keyboard-hook-protocol";
 import { acceleratorKey, acceleratorModifier } from "./keyboard-keys";
-import type { RawKeyboard, RawKeyEvent } from "./raw-keyboard";
 import {
   acceleratorModifierKeys,
   isModifierKeyCode,
@@ -48,11 +49,11 @@ export class ShortcutRecorder {
   private stopListening: (() => void) | null = null;
 
   constructor(
-    private readonly keyboard: RawKeyboard,
+    private readonly keyboard: KeyboardHook,
     private readonly onEvent: (event: ShortcutRecorderEvent) => void
   ) {}
 
-  private handleKey(event: RawKeyEvent): void {
+  private handleKey(event: KeyboardKeyEvent): void {
     const { code, virtualKey } = event;
     if (!event.isKeyDown) {
       if (code !== null) {
@@ -100,7 +101,7 @@ export class ShortcutRecorder {
     }
 
     this.heldKeys.clear();
-    this.stopListening = this.keyboard.subscribe((event): void => {
+    this.stopListening = this.keyboard.record((event): void => {
       this.handleKey(event);
     });
   }

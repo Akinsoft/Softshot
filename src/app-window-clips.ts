@@ -22,11 +22,6 @@ import { getSoftshotApi } from "./softshot-api.js";
 const savedWindowValue = "saved";
 const windowOptionPrefix = "window:";
 
-interface ShortcutHint {
-  after: string;
-  before: string;
-}
-
 export class ClipsPage implements AppWindowPage {
   private readonly control = getRequiredElement("clips-control", HTMLElement);
 
@@ -52,8 +47,6 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly shortcutHintAfter = getRequiredElement("clips-status-hint-after", HTMLSpanElement);
 
-  private readonly shortcutHintBefore = getRequiredElement("clips-status-hint-before", HTMLSpanElement);
-
   private sourceOptions: ClipSourceOptions | null = null;
 
   private readonly sourcePanel = getRequiredElement("clips-control-source", HTMLDivElement);
@@ -62,7 +55,7 @@ export class ClipsPage implements AppWindowPage {
 
   private readonly sourceToggle = getRequiredElement("clips-source-toggle", HTMLButtonElement);
 
-  private status: ClipsStatus = { isShortcutAvailable: true, message: null, sourceName: null, state: "off" };
+  private status: ClipsStatus = { message: null, sourceName: null, state: "off" };
 
   private readonly statusDetail = getRequiredElement("clips-status-detail", HTMLSpanElement);
 
@@ -244,9 +237,7 @@ export class ClipsPage implements AppWindowPage {
     this.statusTitle.textContent = statusTitle(status);
     this.statusDetail.replaceChildren(...(isRecording ? [] : statusDetail(status, clips)));
     this.statusHint.hidden = !isRecording;
-    const hint = shortcutHint(status, clips);
-    this.shortcutHintBefore.textContent = hint.before;
-    this.shortcutHintAfter.textContent = hint.after;
+    this.shortcutHintAfter.textContent = `to save the last ${lastClipDurationLabel(clips.durationSeconds)}.`;
   }
 
   bind(): void {
@@ -317,12 +308,6 @@ function statusTitle(status: ClipsStatus): string {
       throw new Error(`Unexpected clips state: ${String(status.state)}`);
     }
   }
-}
-
-function shortcutHint(status: ClipsStatus, clips: ClipSettings): ShortcutHint {
-  return status.isShortcutAvailable
-    ? { after: `to save the last ${lastClipDurationLabel(clips.durationSeconds)}.`, before: "Press" }
-    : { after: "is used by another app. Click it to pick another.", before: "" };
 }
 
 function statusDetail(status: ClipsStatus, clips: ClipSettings): Array<Node | string> {

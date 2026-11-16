@@ -13,8 +13,6 @@ const lastFunctionVirtualKey = 0x87;
 const functionKeyNumberOffset = firstFunctionVirtualKey - 1;
 const [controlModifier, altModifier, shiftModifier, metaModifier] = acceleratorModifierKeys;
 
-export type ScanCodePrefix = "" | "e0" | "e1";
-
 const characterScanCodes = new Map([
   ["02", "Digit1"],
   ["03", "Digit2"],
@@ -90,7 +88,6 @@ const namedScanCodes = new Map([
   ["42", "F8"],
   ["43", "F9"],
   ["44", "F10"],
-  ["45", "NumLock"],
   ["46", "ScrollLock"],
   ["47", "Numpad7"],
   ["48", "Numpad8"],
@@ -132,9 +129,8 @@ const namedScanCodes = new Map([
   ["e02e", "AudioVolumeDown"],
   ["e030", "AudioVolumeUp"],
   ["e035", "NumpadDivide"],
-  ["e037", "PrintScreen"],
+  ["e036", "ShiftRight"],
   ["e038", "AltRight"],
-  ["e045", "NumLock"],
   ["e047", "Home"],
   ["e048", "ArrowUp"],
   ["e049", "PageUp"],
@@ -147,17 +143,29 @@ const namedScanCodes = new Map([
   ["e053", "Delete"],
   ["e05b", "MetaLeft"],
   ["e05c", "MetaRight"],
-  ["e05d", "ContextMenu"],
-  ["e11d", "Pause"]
+  ["e05d", "ContextMenu"]
+]);
+
+const virtualKeyCodes = new Map([
+  ["13", "Pause"],
+  ["2c", "PrintScreen"],
+  ["90", "NumLock"]
 ]);
 
 const scanCodeKeys = new Map([...characterScanCodes, ...namedScanCodes]);
-const keyCodes: ReadonlySet<string> = new Set(scanCodeKeys.values());
+const keyCodes: ReadonlySet<string> = new Set([...scanCodeKeys.values(), ...virtualKeyCodes.values()]);
+const extendedScanCodePrefix = "e0";
 
 const modifierVirtualKeys = new Map([
   ["10", shiftModifier],
   ["11", controlModifier],
   ["12", altModifier],
+  ["a0", shiftModifier],
+  ["a1", shiftModifier],
+  ["a2", controlModifier],
+  ["a3", controlModifier],
+  ["a4", altModifier],
+  ["a5", altModifier],
   ["5b", metaModifier],
   ["5c", metaModifier]
 ]);
@@ -215,8 +223,9 @@ function isInRange(value: number, first: number, last: number): boolean {
   return value >= first && value <= last;
 }
 
-export function keyCodeFromScanCode(makeCode: number, prefix: ScanCodePrefix): string | null {
-  return scanCodeKeys.get(`${prefix}${hexCode(makeCode)}`) ?? null;
+export function keyCodeFromHookKey(virtualKey: number, scanCode: number, isExtendedKey: boolean): string | null {
+  const prefix = isExtendedKey ? extendedScanCodePrefix : "";
+  return virtualKeyCodes.get(hexCode(virtualKey)) ?? scanCodeKeys.get(`${prefix}${hexCode(scanCode)}`) ?? null;
 }
 
 export function isTriggerKeyCode(key: string): boolean {

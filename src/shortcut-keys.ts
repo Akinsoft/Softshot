@@ -30,3 +30,7 @@ export function isModifierKeyCode(key: string): boolean {
 export function isAcceleratorShortcut(keys: readonly string[]): boolean {
   return keys.slice(0, -1).every((key) => acceleratorModifierKeySet.has(key));
 }
+
+export function shortcutAccelerator(shortcut: string): string | null {
+  return isAcceleratorShortcut(shortcutKeys(shortcut)) ? shortcut : null;
+}

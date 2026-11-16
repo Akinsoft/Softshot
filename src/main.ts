@@ -39,9 +39,9 @@ import { desktopBounds } from "./capture-layout";
 import { ClipsService } from "./clips-service";
 import { EditingSession, type UnsavedEditingWork } from "./editing-session";
 import { remuxVideoEnd, remuxVideoToZeroStart } from "./editor-remux";
-import { GlobalShortcuts, shortcutAccelerator } from "./global-shortcuts";
+import { KeyboardHook } from "./keyboard-hook";
+import { characterKeyLabels } from "./keyboard-layout";
 import { writeFileDropListToClipboard } from "./powershell";
-import { RawKeyboard } from "./raw-keyboard";
 import type {
   AppInfo,
   AppPage,
@@ -76,6 +76,7 @@ import {
   videoFileExtension,
   videoFpsOptions
 } from "./shared";
+import { shortcutAccelerator } from "./shortcut-keys";
 import { ShortcutRecorder, type ShortcutRecorderEvent } from "./shortcut-recorder";
 import { currentWindowsAccount, syncElevatedStartupTask } from "./startup-task";
 import { TaskQueue } from "./task-queue";
@@ -92,8 +93,6 @@ import { hasWebmCluster, webmClusterSignatureLength } from "./webm";
 const appName = "Softshot";
 const appId = "com.akinsoft.softshot";
 const developmentAppId = `${appId}.dev`;
-const captureShortcutRetryDelayMs = 1000;
-const captureShortcutRetryLimit = 12;
 const overlayReadyTimeoutMs = 15_000;
 const captureOnReadyDelayMs = 300;
 const pngSignature = Buffer.from("89504e470d0a1a0a", "hex");
@@ -161,7 +160,6 @@ const appSettingsUpdateKeys = new Set([
   "sidebarCollapsed",
   "systemAudioEnabled"
 ]);
-const shortcutRecordingRearmDelayMs = 250;
 const openableVideoFileExtensions: ReadonlySet<string> = new Set(["mkv", "mov", "mp4", "webm"]);
 
 interface PendingOverlayBootstrap {
@@ -207,11 +205,9 @@ class SoftshotApp {
 
   private isUpdateReady = false;
 
-  private readonly keyboard = new RawKeyboard((error): void => {
-    this.reportBackgroundError("Could not read a key press.", error);
+  private readonly keyboard = new KeyboardHook((error): void => {
+    this.reportBackgroundError("Keyboard shortcuts stopped working.", error);
   });
-
-  private readonly shortcuts = new GlobalShortcuts(this.keyboard);
 
   private readonly shortcutRecorder = new ShortcutRecorder(this.keyboard, (event): void => {
     this.handleShortcutRecorderEvent(event);
@@ -230,8 +226,6 @@ class SoftshotApp {
 
   private readonly captureDisplaysByWebContents = new Map<number, CaptureDisplay[]>();
 
-  private isCaptureShortcutUnavailable = false;
-
   private isQuitting = false;
 
   private liveCaptureOverlayWebContentsId: number | null = null;
@@ -248,15 +242,9 @@ class SoftshotApp {
 
   private preparedOverlay: BrowserWindow | null = null;
 
-  private captureShortcutRetryAttempts = 0;
-
-  private captureShortcutRetryTimeout: ReturnType<typeof setTimeout> | null = null;
-
   private readonly recordingTempFilesById = new Map<string, RecordingTemporaryFile>();
 
   private readonly temporaryFileDeletionTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
-
-  private registeredShortcuts: string[] = [];
 
   private tray: Tray | null = null;
 
@@ -623,7 +611,7 @@ class SoftshotApp {
       },
       takeClipRecording: async (recordingId, ownerWebContentsId) =>
         await this.takeClipRecording(recordingId, ownerWebContentsId)
-    }, this.shortcuts);
+    }, this.keyboard);
   }
 
   private async takeClipRecording(recordingId: string, ownerWebContentsId: number): Promise<string> {
@@ -970,7 +958,8 @@ class SoftshotApp {
       this.registerDisplayMediaRequestHandler();
       this.registerIpcHandlers();
       this.toasts.bind();
-      this.registerCaptureShortcuts();
+      this.keyboard.start();
+      this.bindCaptureShortcut();
       this.tray = this.createTray();
       this.clips.start();
       void this.cleanupExpiredTemporaryRecordings().catch((error: unknown): void => {
@@ -1092,33 +1081,6 @@ class SoftshotApp {
     this.debugLog("forwarding capture request to live overlay");
     overlay.webContents.send("overlay:stop-recording");
     return true;
-  }
-
-  private scheduleCaptureShortcutRetry(): void {
-    if (this.captureShortcutRetryTimeout !== null) {
-      return;
-    }
-
-    if (this.captureShortcutRetryAttempts >= captureShortcutRetryLimit) {
-      void this.showShortcutWarningWithErrorHandling();
-      return;
-    }
-
-    this.captureShortcutRetryAttempts += 1;
-    this.captureShortcutRetryTimeout = setTimeout((): void => {
-      this.captureShortcutRetryTimeout = null;
-      this.retryCaptureShortcut();
-    }, captureShortcutRetryDelayMs);
-  }
-
-  private retryCaptureShortcut(): void {
-    this.debugLog(`retrying ${this.currentCaptureShortcut()} shortcut registration`);
-
-    if (this.registerCurrentCaptureShortcut()) {
-      return;
-    }
-
-    this.scheduleCaptureShortcutRetry();
   }
 
   private setLiveCaptureMouseMode(overlay: BrowserWindow, isPassthrough: boolean): void {
@@ -1404,14 +1366,6 @@ class SoftshotApp {
     return editingSession.data.source.kind === "file" ? "Video saved" : "Recording saved";
   }
 
-  private async openKeyboardSettings(): Promise<void> {
-    try {
-      await shell.openExternal("ms-settings:easeofaccess-keyboard");
-    } catch (error) {
-      await this.showErrorSafely("Could not open Windows keyboard settings.", error);
-    }
-  }
-
   private async openOverlay(): Promise<void> {
     if (this.activeOverlay && !this.activeOverlay.isDestroyed()) {
       this.debugLog("focusing existing overlay");
@@ -1560,6 +1514,10 @@ class SoftshotApp {
       this.handleShortcutRecordingInput(appWindow, event);
     });
 
+    appWindow.on("blur", (): void => {
+      this.cancelShortcutRecording(appWindow);
+    });
+
     appWindow.once("ready-to-show", (): void => {
       if (this.appWindowState?.isMaximized) {
         appWindow.maximize();
@@ -1700,6 +1658,15 @@ class SoftshotApp {
     }
   }
 
+  private cancelShortcutRecording(appWindow: BrowserWindow): void {
+    if (this.shortcutRecordingWebContentsId !== appWindow.webContents.id || this.isShortcutRecordingSaving) {
+      return;
+    }
+
+    this.stopShortcutRecording();
+    this.emitShortcutRecordingEvent(appWindow, { target: this.shortcutRecordingTarget, type: "cancelled" });
+  }
+
   private handleShortcutRecorderEvent(event: ShortcutRecorderEvent): void {
     const { appWindow } = this;
     if (!appWindow || appWindow.isDestroyed() || this.shortcutRecordingWebContentsId !== appWindow.webContents.id) {
@@ -1709,8 +1676,7 @@ class SoftshotApp {
     const target = this.shortcutRecordingTarget;
     switch (event.type) {
       case "cancelled": {
-        this.stopShortcutRecording();
-        this.emitShortcutRecordingEvent(appWindow, { target, type: "cancelled" });
+        this.cancelShortcutRecording(appWindow);
         break;
       }
 
@@ -1743,9 +1709,6 @@ class SoftshotApp {
     this.isShortcutRecordingSaving = true;
     const target = this.shortcutRecordingTarget;
     try {
-      this.shortcutRecorder.stop();
-      await delay(shortcutRecordingRearmDelayMs);
-      this.clips.setShortcutSuspended(false);
       const settings = await this.applySettingsUpdate(
         target === "capture" ? { captureShortcut: shortcut } : { clips: { shortcut } }
       );
@@ -1753,21 +1716,9 @@ class SoftshotApp {
       this.emitShortcutRecordingEvent(appWindow, { settings, target, type: "saved" });
     } catch (error) {
       this.emitShortcutRecordingEvent(appWindow, { message: errorMessage(error), target, type: "error" });
-      if (this.shortcutRecordingWebContentsId !== null) {
-        this.armShortcutRecorder();
-      }
     } finally {
       this.isShortcutRecordingSaving = false;
     }
-  }
-
-  private armShortcutRecorder(): void {
-    this.clearCaptureShortcutRetry();
-    this.unregisterRegisteredCaptureShortcuts();
-    this.clips.setShortcutSuspended(true);
-    this.shortcutRecorder.start();
-    this.isCaptureShortcutUnavailable = false;
-    this.refreshTrayMenu();
   }
 
   private startShortcutRecording(event: Electron.IpcMainInvokeEvent, target: ShortcutTarget): void {
@@ -1778,7 +1729,7 @@ class SoftshotApp {
 
     this.shortcutRecordingWebContentsId = event.sender.id;
     this.shortcutRecordingTarget = target;
-    this.armShortcutRecorder();
+    this.shortcutRecorder.start();
   }
 
   private stopShortcutRecording(): void {
@@ -1788,12 +1739,6 @@ class SoftshotApp {
 
     this.shortcutRecordingWebContentsId = null;
     this.shortcutRecorder.stop();
-    this.captureShortcutRetryAttempts = 0;
-    this.clips.setShortcutSuspended(false);
-
-    if (!this.registerCurrentCaptureShortcut()) {
-      this.scheduleCaptureShortcutRetry();
-    }
   }
 
   private settingsSnapshot(): AppSettings {
@@ -1892,15 +1837,14 @@ class SoftshotApp {
   private async applySettingsUpdateNow(update: unknown): Promise<AppSettings> {
     const previousSettings = this.settingsSnapshot();
     const nextSettings = this.settingsWithUpdate(update);
-    const requested = requestedShortcutSettings(update);
 
     try {
       this.settings = nextSettings;
-      if (requested.captureShortcut) {
-        this.updateRegisteredCaptureShortcut(previousSettings.captureShortcut, nextSettings.captureShortcut);
+      if (nextSettings.captureShortcut !== previousSettings.captureShortcut) {
+        this.bindCaptureShortcut();
       }
 
-      this.clips.applySettings(previousSettings, nextSettings, requested.clipShortcut);
+      this.clips.applySettings(previousSettings, nextSettings);
       if (nextSettings.launchAtStartup !== previousSettings.launchAtStartup) {
         await this.applyLaunchAtStartup(nextSettings.launchAtStartup);
       }
@@ -1921,28 +1865,19 @@ class SoftshotApp {
       }
 
       throw error;
+    } finally {
+      this.refreshTrayMenu();
     }
   }
 
   private async restoreAppliedSettings(failedSettings: AppSettings, previousSettings: AppSettings): Promise<unknown[]> {
     const restoreErrors: unknown[] = [];
     if (failedSettings.captureShortcut !== previousSettings.captureShortcut) {
-      try {
-        if (!this.tryUpdateRegisteredCaptureShortcut(failedSettings.captureShortcut, previousSettings.captureShortcut)) {
-          restoreErrors.push(new Error(`Could not restore ${previousSettings.captureShortcut}.`));
-        }
-      } catch (restoreError) {
-        restoreErrors.push(restoreError);
-      }
+      this.bindCaptureShortcut();
     }
 
     try {
-      this.clips.applySettings(
-        failedSettings,
-        previousSettings,
-        failedSettings.clips.shortcut !== previousSettings.clips.shortcut
-          || failedSettings.clips.enabled !== previousSettings.clips.enabled
-      );
+      this.clips.applySettings(failedSettings, previousSettings);
     } catch (restoreError) {
       restoreErrors.push(restoreError);
     }
@@ -1976,31 +1911,6 @@ class SoftshotApp {
     }
 
     return await this.applySettingsUpdate({ clips: { directory } });
-  }
-
-  private updateRegisteredCaptureShortcut(previousShortcut: string, nextShortcut: string): void {
-    if (this.tryUpdateRegisteredCaptureShortcut(previousShortcut, nextShortcut)) {
-      return;
-    }
-
-    throw new Error(`Could not register ${nextShortcut}.`);
-  }
-
-  private tryUpdateRegisteredCaptureShortcut(previousShortcut: string, nextShortcut: string): boolean {
-    if (previousShortcut === nextShortcut && this.registeredShortcuts.includes(nextShortcut)) {
-      return true;
-    }
-
-    this.clearCaptureShortcutRetry();
-    this.unregisterRegisteredCaptureShortcuts();
-    this.captureShortcutRetryAttempts = 0;
-
-    const isRegistered = this.registerCaptureShortcutValue(nextShortcut);
-    if (!isRegistered) {
-      this.scheduleCaptureShortcutRetry();
-    }
-
-    return isRegistered;
   }
 
   private async editorAudioTracksFromRecordingFiles(audioTrackFiles: RecordingAudioTrackFile[]): Promise<EditorAudioTrack[]> {
@@ -2282,15 +2192,6 @@ class SoftshotApp {
     return { buffer, image };
   }
 
-  private clearCaptureShortcutRetry(): void {
-    if (this.captureShortcutRetryTimeout === null) {
-      return;
-    }
-
-    clearTimeout(this.captureShortcutRetryTimeout);
-    this.captureShortcutRetryTimeout = null;
-  }
-
   private refreshTrayMenu(): void {
     if (!this.tray) {
       return;
@@ -2299,50 +2200,10 @@ class SoftshotApp {
     this.tray.setContextMenu(Menu.buildFromTemplate(this.trayMenuTemplate()));
   }
 
-  private registerCaptureShortcut(shortcut: string): boolean {
-    if (this.registeredShortcuts.includes(shortcut)) {
-      return true;
-    }
-
-    const didRegisterShortcut = this.shortcuts.register(shortcut, (): void => {
+  private bindCaptureShortcut(): void {
+    this.keyboard.bindShortcut("capture", this.currentCaptureShortcut(), (): void => {
       this.capture();
     });
-
-    return didRegisterShortcut;
-  }
-
-  private unregisterRegisteredCaptureShortcuts(): void {
-    for (const shortcut of this.registeredShortcuts) {
-      this.shortcuts.unregister(shortcut);
-    }
-
-    this.registeredShortcuts = [];
-  }
-
-  private registerCaptureShortcutValue(shortcut: string): boolean {
-    if (this.registerCaptureShortcut(shortcut)) {
-      this.clearCaptureShortcutRetry();
-      this.isCaptureShortcutUnavailable = false;
-      this.captureShortcutRetryAttempts = 0;
-      this.registeredShortcuts = [shortcut];
-      this.refreshTrayMenu();
-      return true;
-    }
-
-    this.isCaptureShortcutUnavailable = true;
-    this.registeredShortcuts = [];
-    this.refreshTrayMenu();
-    return false;
-  }
-
-  private registerCurrentCaptureShortcut(): boolean {
-    return this.registerCaptureShortcutValue(this.currentCaptureShortcut());
-  }
-
-  private registerCaptureShortcuts(): void {
-    if (!this.registerCurrentCaptureShortcut()) {
-      this.scheduleCaptureShortcutRetry();
-    }
   }
 
   private registerPermissionRequestHandler(): void {
@@ -2675,7 +2536,7 @@ class SoftshotApp {
 
     ipcMain.handle("app:get-key-labels", (event): ShortcutKeyLabels => {
       this.getSenderAppWindow(event);
-      return this.keyboard.characterKeyLabels();
+      return characterKeyLabels();
     });
 
     ipcMain.handle("clips:choose-directory", async (event): Promise<AppSettings | null> => {
@@ -2712,14 +2573,6 @@ class SoftshotApp {
     }
   }
 
-  private async showShortcutWarningWithErrorHandling(): Promise<void> {
-    try {
-      await this.showShortcutWarningIfNeeded();
-    } catch (error) {
-      await this.showErrorSafely("Could not show the capture shortcut warning.", error);
-    }
-  }
-
   private async openRecordingTempDirectoryWithErrorHandling(): Promise<void> {
     try {
       await this.openRecordingTempDirectory();
@@ -2736,55 +2589,21 @@ class SoftshotApp {
     }
   }
 
-  private async showShortcutWarningIfNeeded(): Promise<void> {
-    if (!this.isCaptureShortcutUnavailable || process.env.SOFTSHOT_SKIP_SHORTCUT_WARNING === "1") {
-      return;
-    }
-
-    const shortcut = this.currentCaptureShortcut();
-    const result = await dialog.showMessageBox({
-      type: "warning",
-      title: appName,
-      message: `${appName} could not register ${shortcut}.`,
-      detail: "Softshot is still running. Use Quick Capture from the tray menu for now.\n\nTo let Softshot use PrintScreen, turn off Windows Settings > Accessibility > Keyboard > Use the Print screen key to open screen capture, close other screenshot apps, then restart Softshot.",
-      buttons: ["Open settings", "OK"],
-      defaultId: 1,
-      cancelId: 1
-    });
-
-    if (result.response === 0) {
-      await this.openKeyboardSettings();
-    }
-  }
-
   private trayMenuTemplate(): Electron.MenuItemConstructorOptions[] {
+    const captureAccelerator = shortcutAccelerator(this.currentCaptureShortcut());
     const template: Electron.MenuItemConstructorOptions[] = [
       {
-        label: "Quick Capture",
-        accelerator: this.registeredShortcuts.find((shortcut) => shortcutAccelerator(shortcut) !== null),
+        ...(captureAccelerator !== null && { accelerator: captureAccelerator }),
         click: (): void => {
           this.capture();
-        }
+        },
+        label: "Quick Capture"
       }
     ];
 
-    if (this.isCaptureShortcutUnavailable) {
-      template.push(
-        {
-          label: `${this.currentCaptureShortcut()} unavailable`,
-          enabled: false
-        },
-        {
-          label: "Open keyboard settings",
-          click: (): void => {
-            void this.openKeyboardSettings();
-          }
-        }
-      );
-    }
-
-    if (this.currentSettings().clips.enabled) {
-      const clipAccelerator = this.clips.registeredShortcutAccelerator();
+    const { clips } = this.currentSettings();
+    if (clips.enabled) {
+      const clipAccelerator = shortcutAccelerator(clips.shortcut);
       template.push({
         ...(clipAccelerator !== null && { accelerator: clipAccelerator }),
         click: (): void => {
@@ -2987,9 +2806,8 @@ class SoftshotApp {
     });
 
     app.on("will-quit", (): void => {
-      this.clearCaptureShortcutRetry();
       this.clips.stop();
-      this.shortcuts.unregisterAll();
+      this.keyboard.stop();
     });
 
     app.on("window-all-closed", (): void => {
@@ -3197,26 +3015,9 @@ function joinedBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
   return bytes;
 }
 
-async function delay(milliseconds: number): Promise<void> {
-  await new Promise<void>((resolve): void => {
-    setTimeout(resolve, milliseconds);
-  });
-}
-
 function trailingBytes(bytes: Uint8Array, maxByteLength: number): Uint8Array {
   const start = Math.max(0, bytes.byteLength - maxByteLength);
   return bytes.slice(start);
-}
-
-function requestedShortcutSettings(update: unknown): { captureShortcut: boolean; clipShortcut: boolean } {
-  const settings = typeof update === "object" && update !== null ? update : {};
-  const clips = "clips" in settings && typeof settings.clips === "object" && settings.clips !== null
-    ? settings.clips
-    : {};
-  return {
-    captureShortcut: "captureShortcut" in settings,
-    clipShortcut: "shortcut" in clips || "enabled" in clips
-  };
 }
 
 function shortcutTargetFromUnknown(value: unknown): ShortcutTarget {

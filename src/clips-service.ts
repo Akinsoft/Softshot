@@ -16,7 +16,7 @@ import {
 } from "./clip-sources";
 import { type ClipCaptureTarget, type ClipVideoEncoder, findClipVideoEncoder } from "./clip-video-capture";
 import { type ClipAudioTrackFile, ClipsLibrary } from "./clips-library";
-import { type GlobalShortcuts, shortcutAccelerator } from "./global-shortcuts";
+import type { KeyboardHook } from "./keyboard-hook";
 import { captureGeometry, type MonitorGeometry, writeFileDropListToClipboard } from "./powershell";
 import type {
   AppSettings,
@@ -73,15 +73,9 @@ export class ClipsService {
 
   private generation = 0;
 
-  private isShortcutSuspended = false;
-
-  private isShortcutUnavailable = false;
-
   private libraryInstance: ClipsLibrary | null = null;
 
   private pollTimeout: ReturnType<typeof setTimeout> | null = null;
-
-  private registeredShortcut: string | null = null;
 
   private retryCount = 0;
 
@@ -93,11 +87,11 @@ export class ClipsService {
 
   private readonly sources = new ClipSourceResolver();
 
-  private status: ClipsStatus = { isShortcutAvailable: true, message: null, sourceName: null, state: "off" };
+  private status: ClipsStatus = { message: null, sourceName: null, state: "off" };
 
   constructor(
     private readonly host: ClipsServiceHost,
-    private readonly shortcuts: GlobalShortcuts
+    private readonly keyboard: KeyboardHook
   ) {}
 
   private get library(): ClipsLibrary {
@@ -106,36 +100,19 @@ export class ClipsService {
   }
 
   private setStatus(state: ClipsState, sourceName: string | null = null, message: string | null = null): void {
-    this.status = { isShortcutAvailable: !this.isShortcutUnavailable, message, sourceName, state };
+    this.status = { message, sourceName, state };
     this.host.statusChanged();
   }
 
-  private refreshShortcutStatus(): void {
-    this.setStatus(this.status.state, this.status.sourceName, this.status.message);
-  }
-
-  private syncShortcut(settings: ClipSettings): boolean {
-    const desiredShortcut = settings.enabled && !this.isShortcutSuspended ? settings.shortcut : null;
-    if (desiredShortcut !== null && desiredShortcut === this.registeredShortcut) {
-      return true;
+  private syncShortcut(settings: ClipSettings): void {
+    if (!settings.enabled) {
+      this.keyboard.unbindShortcut("clips");
+      return;
     }
 
-    if (this.registeredShortcut !== null) {
-      this.shortcuts.unregister(this.registeredShortcut);
-      this.registeredShortcut = null;
-    }
-
-    if (desiredShortcut === null) {
-      this.isShortcutUnavailable = false;
-      return true;
-    }
-
-    const isRegistered = this.shortcuts.register(desiredShortcut, (): void => {
+    this.keyboard.bindShortcut("clips", settings.shortcut, (): void => {
       this.saveClip();
     });
-    this.registeredShortcut = isRegistered ? desiredShortcut : null;
-    this.isShortcutUnavailable = !isRegistered;
-    return isRegistered;
   }
 
   private clearPoll(): void {
@@ -542,13 +519,8 @@ export class ClipsService {
     });
   }
 
-  applySettings(previous: AppSettings, next: AppSettings, isShortcutRequired: boolean): void {
-    const isRegistered = this.syncShortcut(next.clips);
-    this.refreshShortcutStatus();
-    if (!isRegistered && isShortcutRequired) {
-      throw new Error(`Could not register ${next.clips.shortcut}. Another app may be using it.`);
-    }
-
+  applySettings(previous: AppSettings, next: AppSettings): void {
+    this.syncShortcut(next.clips);
     if (haveCaptureSettingsChanged(previous, next)) {
       this.restartCapture();
     }
@@ -582,10 +554,6 @@ export class ClipsService {
     return this.status.state === "recording";
   }
 
-  registeredShortcutAccelerator(): string | null {
-    return this.registeredShortcut === null ? null : shortcutAccelerator(this.registeredShortcut);
-  }
-
   saveClip(): void {
     const { session } = this;
     if (!session || this.status.state !== "recording") {
@@ -601,12 +569,6 @@ export class ClipsService {
         this.notifyClipNotSaved(errorMessage(error));
       }
     });
-  }
-
-  setShortcutSuspended(isSuspended: boolean): void {
-    this.isShortcutSuspended = isSuspended;
-    this.syncShortcut(this.host.settings().clips);
-    this.refreshShortcutStatus();
   }
 
   start(): void {
