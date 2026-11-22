@@ -36,12 +36,13 @@ configure_flags=(
   --enable-amf
   --enable-mediafoundation
   --enable-indev=lavfi
+  --enable-demuxer=mov
   --enable-filter=color,gfxcapture,format,null,scale,fps,trim
-  --enable-decoder=wrapped_avframe
-  --enable-encoder=h264_nvenc,h264_amf,h264_mf
+  --enable-decoder=wrapped_avframe,h264
+  --enable-encoder=h264_nvenc,h264_amf,h264_mf,mjpeg
   --enable-parser=h264
   --enable-bsf=extract_extradata
-  --enable-muxer=mp4,null
+  --enable-muxer=mp4,null,image2
   --enable-protocol=pipe,file
 )
 
@@ -51,6 +52,10 @@ required_components=(
   CONFIG_H264_AMF_ENCODER
   CONFIG_H264_MF_ENCODER
   CONFIG_MP4_MUXER
+  CONFIG_MOV_DEMUXER
+  CONFIG_H264_DECODER
+  CONFIG_MJPEG_ENCODER
+  CONFIG_IMAGE2_MUXER
 )
 
 export DEBIAN_FRONTEND=noninteractive

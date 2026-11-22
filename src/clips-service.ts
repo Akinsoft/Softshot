@@ -315,10 +315,9 @@ export class ClipsService {
   private async saveClipFrom(session: ClipCaptureSession, requestedAtEpochSeconds: number): Promise<void> {
     this.savingCount += 1;
     try {
-      const thumbnailPromise = session.thumbnail();
       const capture = await session.snapshot(requestedAtEpochSeconds);
       try {
-        await this.writeClip(capture, requestedAtEpochSeconds, session.clipName, await thumbnailPromise);
+        await this.writeClip(capture, requestedAtEpochSeconds, session);
       } finally {
         if (capture.audioFilePath !== null) {
           await rm(capture.audioFilePath, { force: true });
@@ -332,12 +331,12 @@ export class ClipsService {
   private async writeClip(
     capture: ClipCaptureSnapshot,
     endEpochSeconds: number,
-    clipName: string,
-    thumbnail: Uint8Array
+    session: ClipCaptureSession
   ): Promise<void> {
     const createdAt = new Date();
     const directory = this.clipsDirectory();
     await mkdir(directory, { recursive: true });
+    const { clipName } = session;
     const filePath = await availableClipFilePath(directory, clipName, createdAt);
     const { durationSeconds } = this.host.settings().clips;
     const clipId = randomUUID();
@@ -353,7 +352,7 @@ export class ClipsService {
         outputFilePath: filePath,
         video: capture.video
       });
-      const probe = await probeVideoFile(filePath);
+      const [probe, thumbnail] = await Promise.all([probeVideoFile(filePath), session.thumbnail(filePath)]);
       await this.library.add({
         createdAt,
         durationSeconds: probe.durationSeconds,

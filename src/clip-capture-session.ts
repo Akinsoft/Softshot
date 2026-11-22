@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
-import { app, BrowserWindow, desktopCapturer } from "electron";
+import { app, BrowserWindow } from "electron";
 
 import { errorMessage } from "./async-errors";
 import type { ResolvedClipSource } from "./clip-sources";
@@ -14,6 +15,7 @@ import {
   type ClipVideoSnapshot
 } from "./clip-video-capture";
 import type { ClipRecorderConfig, ClipSettings } from "./shared";
+import { runWindowsCommand } from "./windows-command";
 
 const recorderPageRelativePath = path.join("src", "clips-recorder.html");
 const recorderWindowSizePx = 320;
@@ -22,7 +24,8 @@ const audioSnapshotTimeoutMs = 10_000;
 const audioSnapshotLeadSeconds = 2;
 const thumbnailWidthPx = 480;
 const thumbnailHeightPx = 270;
-const thumbnailJpegQuality = 82;
+const thumbnailJpegQuality = "3";
+const thumbnailSeekFromEndSeconds = "-1";
 const ffmpegLogContextPattern = /^\[[^\]]*\]\s*/u;
 
 export interface ClipCaptureSessionOptions {
@@ -266,17 +269,34 @@ export class ClipCaptureSession {
     }
   }
 
-  async thumbnail(): Promise<Buffer> {
-    const sources = await desktopCapturer.getSources({
-      fetchWindowIcons: false,
-      thumbnailSize: { height: thumbnailHeightPx, width: thumbnailWidthPx },
-      types: [this.options.source.display ? "screen" : "window"]
-    });
-    const source = sources.find((candidate) => candidate.id === this.options.source.source.id);
-    if (!source || source.thumbnail.isEmpty()) {
-      throw new Error("Could not capture the clip thumbnail.");
+  async thumbnail(videoFilePath: string): Promise<Buffer> {
+    const thumbnailFilePath = path.join(os.tmpdir(), `softshot-clip-thumbnail-${randomUUID()}.jpg`);
+    try {
+      await runWindowsCommand(this.options.ffmpegPath, [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-noaccurate_seek",
+        "-sseof",
+        thumbnailSeekFromEndSeconds,
+        "-i",
+        videoFilePath,
+        "-an",
+        "-vf",
+        `scale=${String(thumbnailWidthPx)}:${String(thumbnailHeightPx)}:force_original_aspect_ratio=decrease:out_range=full`,
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        thumbnailJpegQuality,
+        "-update",
+        "1",
+        "-y",
+        thumbnailFilePath
+      ], "Could not create the clip thumbnail.");
+      return await readFile(thumbnailFilePath);
+    } finally {
+      await rm(thumbnailFilePath, { force: true });
     }
-
-    return source.thumbnail.toJPEG(thumbnailJpegQuality);
   }
 }
