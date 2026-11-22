@@ -56,13 +56,17 @@
       </section>
 
       <div class="nav-footer">
-        <button id="app-update-button" class="nav-item update-button" type="button" data-tooltip="Restart Softshot to install the update" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
+        <button id="app-update-button" class="nav-item update-button" type="button" hidden>
+          <svg class="update-download-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 4v11" />
             <path d="m7 10 5 5 5-5" />
             <path d="M5 20h14" />
           </svg>
-          <span>Update</span>
+          <svg class="update-restart-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+            <path d="M20 4v5h-5" />
+          </svg>
+          <span id="app-update-label">Update</span>
         </button>
         <button class="nav-item" type="button" data-page="settings">
           <svg viewBox="0 0 24 24" aria-hidden="true">

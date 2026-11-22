@@ -1,9 +1,21 @@
 import { type AppWindowContext, type AppWindowPage, runWithErrorToast } from "./app-window-controls.js";
 import { getRequiredElement } from "./overlay-dom.js";
-import type { AppSettings } from "./shared.js";
+import type { AppSettings, AppUpdateStatus } from "./shared.js";
 import { getSoftshotApi } from "./softshot-api.js";
 
 const collapsedClassName = "sidebar-collapsed";
+
+const updateLabels: Record<AppUpdateStatus["state"], string> = {
+  downloading: "Downloading",
+  none: "Update",
+  ready: "Restart"
+};
+
+const updateTooltips: Record<AppUpdateStatus["state"], string> = {
+  downloading: "Downloading the Softshot update",
+  none: "",
+  ready: "Restart Softshot to finish updating"
+};
 
 export class AppSidebar implements AppWindowPage {
   private readonly navItems = [...document.querySelectorAll<HTMLButtonElement>(".nav-item[data-page]")];
@@ -12,9 +24,21 @@ export class AppSidebar implements AppWindowPage {
 
   private readonly updateButton = getRequiredElement("app-update-button", HTMLButtonElement);
 
+  private readonly updateLabel = getRequiredElement("app-update-label", HTMLSpanElement);
+
   private readonly version = getRequiredElement("app-version", HTMLSpanElement);
 
   constructor(private readonly context: AppWindowContext) {}
+
+  private renderUpdate(status: AppUpdateStatus): void {
+    this.updateButton.hidden = status.state === "none";
+    this.updateButton.disabled = status.state === "downloading";
+    this.updateButton.dataset.state = status.state;
+    this.updateButton.dataset.tooltip = updateTooltips[status.state];
+    this.updateLabel.textContent = status.state === "downloading"
+      ? `${updateLabels.downloading} ${String(status.percent)}%`
+      : updateLabels[status.state];
+  }
 
   bind(): void {
     const api = getSoftshotApi();
@@ -24,15 +48,15 @@ export class AppSidebar implements AppWindowPage {
     this.updateButton.addEventListener("click", (): void => {
       void runWithErrorToast(this.context, api.installUpdate());
     });
-    api.onAppUpdateReady((): void => {
-      this.updateButton.hidden = false;
+    api.onAppUpdateStatus((status): void => {
+      this.renderUpdate(status);
     });
   }
 
   async loadAppInfo(): Promise<void> {
-    const { isUpdateReady, version } = await getSoftshotApi().getAppInfo();
+    const { update, version } = await getSoftshotApi().getAppInfo();
     this.version.textContent = `v${version}`;
-    this.updateButton.hidden = !isUpdateReady;
+    this.renderUpdate(update);
   }
 
   render(settings: AppSettings): void {

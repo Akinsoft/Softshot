@@ -32,7 +32,7 @@ import {
   validateMicrophoneDeviceId,
   validatePlaybackVolume
 } from "./app-settings";
-import { installUpdate, startUpdateChecks } from "./app-updater";
+import { AppUpdater } from "./app-updater";
 import { type AppWindowState, isTitleBarOnScreen, loadAppWindowState, saveAppWindowState } from "./app-window-state";
 import { combinedError, errorMessage, rejectedReasons, throwCollectedErrors } from "./async-errors";
 import { desktopBounds } from "./capture-layout";
@@ -142,7 +142,7 @@ type SystemAudioLoopbackDevice = typeof defaultSystemAudioLoopbackDevice | typeo
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
-const appUpdateReadyEventChannel = "app:update-ready";
+const appUpdateStatusEventChannel = "app:update-status";
 const clipsStatusChangedEventChannel = "clips:status-changed";
 const clipsLibraryChangedEventChannel = "clips:library-changed";
 const editorOpenedEventChannel = "editor:opened";
@@ -203,8 +203,6 @@ class SoftshotApp {
 
   private systemAudioLoopbackDevice: SystemAudioLoopbackDevice = defaultSystemAudioLoopbackDevice;
 
-  private isUpdateReady = false;
-
   private readonly keyboard = new KeyboardHook((error): void => {
     this.reportBackgroundError("Keyboard shortcuts stopped working.", error);
   });
@@ -214,6 +212,8 @@ class SoftshotApp {
   });
 
   private readonly clips = this.createClipsService();
+
+  private readonly updater = this.createUpdater();
 
   private readonly toasts = new ToastWindow(
     () => this.preloadScriptPath(),
@@ -966,7 +966,7 @@ class SoftshotApp {
         this.reportBackgroundError("Could not clean up expired temporary recordings.", error);
       });
       this.prepareNextOverlay();
-      this.startUpdater();
+      this.updater.start();
 
       if (process.env.SOFTSHOT_CAPTURE_ON_READY === "1") {
         setTimeout((): void => {
@@ -1061,15 +1061,11 @@ class SoftshotApp {
 
   private installReadyUpdate(event: Electron.IpcMainInvokeEvent): void {
     this.getSenderAppWindow(event);
-    if (!this.isUpdateReady) {
-      throw new Error("No Softshot update is ready to install.");
-    }
-
     if (this.isCaptureWorkActive()) {
       throw new Error("Finish the current capture, editor or clip save first, then update.");
     }
 
-    installUpdate();
+    this.updater.install();
   }
 
   private requestActiveOverlayStop(): boolean {
@@ -1128,21 +1124,24 @@ class SoftshotApp {
     }
   }
 
-  private startUpdater(): void {
-    startUpdateChecks({
+  private createUpdater(): AppUpdater {
+    return new AppUpdater({
       canInstallNow: (): boolean => this.canInstallUpdatesNow(),
       log: (message: string): void => {
         this.debugLog(message);
       },
-      updateReady: (): void => {
-        this.isUpdateReady = true;
-        this.sendToAppWindow(appUpdateReadyEventChannel);
-        this.toasts.show({
-          detail: "It finishes installing when Softshot closes.",
-          onClick: null,
-          title: "Softshot update ready",
-          tone: "info"
-        });
+      statusChanged: (status): void => {
+        this.sendToAppWindow(appUpdateStatusEventChannel, status);
+        if (status.state === "ready") {
+          this.toasts.show({
+            detail: "It installs the next time Softshot restarts.",
+            onClick: (): void => {
+              void this.openAppWindowWithErrorHandling(null);
+            },
+            title: "Softshot update ready",
+            tone: "info"
+          });
+        }
       }
     });
   }
@@ -2523,7 +2522,7 @@ class SoftshotApp {
 
     ipcMain.handle("app:get-info", (event): AppInfo => {
       this.getSenderAppWindow(event);
-      return { isUpdateReady: this.isUpdateReady, version: app.getVersion() };
+      return { update: this.updater.currentStatus(), version: app.getVersion() };
     });
 
     ipcMain.handle("app:install-update", (event): void => {

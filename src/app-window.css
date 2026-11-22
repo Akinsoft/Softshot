@@ -286,9 +286,20 @@ body.sidebar-collapsed {
   color: var(--ui-accent);
 }
 
-.nav-item.update-button:hover {
+.nav-item.update-button:hover:enabled {
   background: rgba(56, 189, 248, 0.12);
   color: var(--ui-accent-hover);
+}
+
+.nav-item.update-button:disabled {
+  background: transparent;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-button[data-state="ready"] .update-download-icon,
+.update-button:not([data-state="ready"]) .update-restart-icon {
+  display: none;
 }
 
 .nav-item[hidden] {

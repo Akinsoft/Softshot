@@ -5,6 +5,7 @@ import type {
   AppPage,
   AppSettings,
   AppSettingsUpdate,
+  AppUpdateStatus,
   AudioSourceKind,
   CapturePipeline,
   ClipAudioSnapshotRequest,
@@ -34,7 +35,7 @@ const stopRecordingRequestChannel = "overlay:stop-recording";
 const shortcutRecordingEventChannel = "app:shortcut-recording-event";
 const settingsChangedEventChannel = "settings:changed";
 const appNavigateEventChannel = "app:navigate";
-const appUpdateReadyEventChannel = "app:update-ready";
+const appUpdateStatusEventChannel = "app:update-status";
 const editorOpenedEventChannel = "editor:opened";
 const clipsStatusChangedEventChannel = "clips:status-changed";
 const clipsLibraryChangedEventChannel = "clips:library-changed";
@@ -126,7 +127,7 @@ const api: SoftshotApi = {
   getSettings: async () => ipcRenderer.invoke("settings:get") as Promise<AppSettings>,
   installUpdate: async () => ipcRenderer.invoke("app:install-update") as Promise<void>,
   onAppNavigate: (handler: (page: AppPage) => void) => subscribe(appNavigateEventChannel, handler),
-  onAppUpdateReady: (handler: () => void) => subscribe(appUpdateReadyEventChannel, handler),
+  onAppUpdateStatus: (handler: (status: AppUpdateStatus) => void) => subscribe(appUpdateStatusEventChannel, handler),
   onShortcutRecordingEvent: (handler: (event: ShortcutRecordingEvent) => void) =>
     subscribe(shortcutRecordingEventChannel, handler),
   onSettingsChanged: (handler: (settings: AppSettings) => void) => subscribe(settingsChangedEventChannel, handler),

@@ -2,64 +2,85 @@ import { app } from "electron";
 import { autoUpdater } from "electron-updater";
 
 import { errorMessage } from "./async-errors";
+import type { AppUpdateStatus } from "./shared";
 
 const updateCheckDelayMs = 2500;
-const updateInstallDelayMs = 1200;
 
-interface UpdateCheckOptions {
+interface AppUpdaterHost {
   canInstallNow(): boolean;
   log(message: string): void;
-  updateReady(): void;
+  statusChanged(status: AppUpdateStatus): void;
 }
 
-export function startUpdateChecks(options: UpdateCheckOptions): void {
-  if (!app.isPackaged || process.env.SOFTSHOT_DISABLE_UPDATES === "1") {
-    return;
+export class AppUpdater {
+  private hasDownloadedThisSession = false;
+
+  private status: AppUpdateStatus = { state: "none" };
+
+  constructor(private readonly host: AppUpdaterHost) {}
+
+  private setStatus(status: AppUpdateStatus): void {
+    this.status = status;
+    this.host.statusChanged(status);
   }
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on("checking-for-update", (): void => {
-    options.log("checking for updates");
-  });
-  autoUpdater.on("update-available", (): void => {
-    options.log("update available");
-  });
-  autoUpdater.on("update-not-available", (): void => {
-    options.log("no update available");
-  });
-  autoUpdater.on("error", (error): void => {
-    options.log(`update check failed: ${errorMessage(error)}`);
-  });
-  autoUpdater.on("update-downloaded", (): void => {
-    installDownloadedUpdate(options);
-  });
-
-  setTimeout((): void => {
-    void autoUpdater.checkForUpdates().catch((error: unknown): void => {
-      options.log(`update check failed: ${errorMessage(error)}`);
-    });
-  }, updateCheckDelayMs);
-}
-
-function installDownloadedUpdate(options: UpdateCheckOptions): void {
-  options.log("update downloaded");
-  if (!options.canInstallNow()) {
-    options.updateReady();
-    return;
+  currentStatus(): AppUpdateStatus {
+    return this.status;
   }
 
-  setTimeout((): void => {
-    if (!options.canInstallNow()) {
-      options.log("update install deferred because Softshot became busy");
-      options.updateReady();
+  start(): void {
+    if (!app.isPackaged || process.env.SOFTSHOT_DISABLE_UPDATES === "1") {
       return;
     }
 
-    installUpdate();
-  }, updateInstallDelayMs);
-}
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on("checking-for-update", (): void => {
+      this.host.log("checking for updates");
+    });
+    autoUpdater.on("update-available", (): void => {
+      this.host.log("update available");
+      this.setStatus({ percent: 0, state: "downloading" });
+    });
+    autoUpdater.on("update-not-available", (): void => {
+      this.host.log("no update available");
+    });
+    autoUpdater.on("error", (error): void => {
+      this.host.log(`update failed: ${errorMessage(error)}`);
+      if (this.status.state === "downloading") {
+        this.setStatus({ state: "none" });
+      }
+    });
+    autoUpdater.on("download-progress", (progress): void => {
+      this.hasDownloadedThisSession = true;
+      const percent = Math.floor(progress.percent);
+      if (this.status.state === "downloading" && this.status.percent !== percent) {
+        this.setStatus({ percent, state: "downloading" });
+      }
+    });
+    autoUpdater.on("update-downloaded", (): void => {
+      this.host.log("update downloaded");
+      if (!this.hasDownloadedThisSession && this.host.canInstallNow()) {
+        this.host.log("installing the update downloaded in an earlier session");
+        autoUpdater.quitAndInstall(true, true);
+        return;
+      }
 
-export function installUpdate(): void {
-  autoUpdater.quitAndInstall(false, true);
+      this.setStatus({ state: "ready" });
+    });
+
+    setTimeout((): void => {
+      void autoUpdater.checkForUpdates().catch((error: unknown): void => {
+        this.host.log(`update check failed: ${errorMessage(error)}`);
+      });
+    }, updateCheckDelayMs);
+  }
+
+  install(): void {
+    if (this.status.state !== "ready") {
+      throw new Error("No Softshot update is ready to install.");
+    }
+
+    autoUpdater.quitAndInstall(true, true);
+  }
 }

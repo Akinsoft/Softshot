@@ -248,8 +248,12 @@ export interface AppSettingsUpdate {
   systemAudioEnabled?: boolean;
 }
 
+export type AppUpdateStatus =
+  | { percent: number; state: "downloading" }
+  | { state: "none" | "ready" };
+
 export interface AppInfo {
-  isUpdateReady: boolean;
+  update: AppUpdateStatus;
   version: string;
 }
 
@@ -265,7 +269,7 @@ type ShortcutRecordingEventHandler = (event: ShortcutRecordingEvent) => void;
 type SettingsChangedEventHandler = (settings: AppSettings) => void;
 type AppNavigateHandler = (page: AppPage) => void;
 type EditorOpenedHandler = () => void;
-type AppUpdateReadyHandler = () => void;
+type AppUpdateStatusHandler = (status: AppUpdateStatus) => void;
 type ClipsStatusChangedHandler = (status: ClipsStatus) => void;
 type ClipsLibraryChangedHandler = () => void;
 
@@ -333,7 +337,7 @@ export interface SoftshotApi {
   getSettings(): Promise<AppSettings>;
   installUpdate(): Promise<void>;
   onAppNavigate(handler: AppNavigateHandler): () => void;
-  onAppUpdateReady(handler: AppUpdateReadyHandler): () => void;
+  onAppUpdateStatus(handler: AppUpdateStatusHandler): () => void;
   onShortcutRecordingEvent(handler: ShortcutRecordingEventHandler): () => void;
   onSettingsChanged(handler: SettingsChangedEventHandler): () => void;
   updateSettings(settings: AppSettingsUpdate): Promise<AppSettings>;
